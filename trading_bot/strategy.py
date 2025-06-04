@@ -68,6 +68,9 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
     leverage = 10
     quantity = 10 / entry_price
 
+    risk = abs(entry_price - stop_loss)
+    reward = abs(take_profit - entry_price)
+    risk_reward = reward / risk if risk else 0.0
     signal = {
         "symbol": symbol,
         "side": decision,
@@ -77,18 +80,18 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         "stop_loss": stop_loss,
         "take_profit": take_profit,
         "prob_success": prob_success,
+        "risk_reward": risk_reward,
         "open_timestamp": pd.Timestamp.now(),
     }
 
-    if modelo_historico:
-        risk = abs(entry_price - stop_loss)
-        reward = abs(take_profit - entry_price)
-        if risk > 0:
-            risk_reward = reward / risk
-            side_ind = 1 if decision == "BUY" else 0
-            X_new = pd.DataFrame([[risk_reward, prob_success, side_ind]], columns=["risk_reward", "orig_prob", "side"])
-            pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
-            signal["prob_success"] = (prob_success + pred_hist) / 2
+    if modelo_historico and risk > 0:
+        side_ind = 1 if decision == "BUY" else 0
+        X_new = pd.DataFrame(
+            [[risk_reward, prob_success, side_ind]],
+            columns=["risk_reward", "orig_prob", "side"],
+        )
+        pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
+        signal["prob_success"] = (prob_success + pred_hist) / 2
 
     logger.info("[%s] %s entry %.4f TP %.4f SL %.4f", symbol, decision, entry_price, take_profit, stop_loss)
     return signal

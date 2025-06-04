@@ -13,6 +13,7 @@ also available.
 - Symbol filtering and leverage setup
 - Order execution through multiple exchanges using `ccxt`
 - Advanced order types (market, limit and stop)
+- Trade selection prefers the highest-probability signal with risk/reward >= 2:1
 - Web dashboard at `http://localhost:8000` for real time monitoring
 - Telegram/Discord notifications when trades are opened
 - Modular architecture to ease future improvements

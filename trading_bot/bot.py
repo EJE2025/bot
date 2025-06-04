@@ -43,17 +43,24 @@ def run():
             # open new trades when we have capacity
             if len(operations) < config.MAX_OPEN_TRADES:
                 symbols = data.get_common_top_symbols(execution.exchange, 15)
+                candidates = []
                 for symbol in symbols:
-                    if len(operations) >= config.MAX_OPEN_TRADES:
-                        break
                     if any(op["symbol"] == symbol for op in operations):
                         continue
                     raw = symbol.replace("_", "")
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if not sig:
+                    if not sig or sig.get("risk_reward", 0) < 2.0:
                         continue
+                    candidates.append(sig)
+
+                candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
+                for sig in candidates:
+                    if len(operations) >= config.MAX_OPEN_TRADES:
+                        break
+                    symbol = sig["symbol"]
+                    raw = symbol.replace("_", "")
                     try:
                         execution.setup_leverage(raw, sig["leverage"])
                         order = execution.open_position(
