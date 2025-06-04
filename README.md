@@ -1,0 +1,40 @@
+# Trading Bot
+
+This repository contains a minimal crypto trading bot that retrieves market data from MEXC and executes orders on Bitget.
+It now provides optional integration with additional exchanges and a small web
+dashboard for monitoring open positions. Telegram and Discord notifications are
+also available.
+
+## Features
+
+- Basic technical indicators (RSI, MACD, ATR)
+- Risk management parameters
+- Stop-loss and take-profit enforcement with daily risk limit
+- Symbol filtering and leverage setup
+- Order execution through multiple exchanges using `ccxt`
+- Advanced order types (market, limit and stop)
+- Web dashboard at `http://localhost:8000` for real time monitoring
+- Telegram/Discord notifications when trades are opened
+- Modular architecture to ease future improvements
+- Order book analysis for liquidity zones and heat map-based scoring
+- Persistent trade history stored to `trade_history.csv`
+- Simple backtesting engine via `python -m trading_bot.backtest`
+- Optional machine learning models optimized with `trading_bot.optimizer`
+- Train new ML models from CSVs using `python -m trading_bot.train_model`
+
+## Usage
+
+Install dependencies and run the bot:
+
+```bash
+pip install -r requirements.txt
+python -m trading_bot.bot
+python -m trading_bot.train_model mydata.csv --target result
+```
+
+API credentials are taken from environment variables as defined in `trading_bot/config.py`.
+Additional variables enable notifications:
+
+- `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
+- `DISCORD_WEBHOOK`
+
