@@ -17,57 +17,67 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 logger = logging.getLogger(__name__)
 
 
+
 def run():
-    operations = []
+    """Main loop for the trading bot."""
+    operations: list[dict] = []
     Thread(
         target=webapp.start_dashboard,
         args=(operations, config.WEBAPP_HOST, config.WEBAPP_PORT),
         daemon=True,
     ).start()
+
     model = optimizer.load_model(config.MODEL_PATH)
-    symbols = data.get_common_top_symbols(execution.exchange, 15)
-    active_signals = {}
-
-    for symbol in symbols:
-        sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-        if sig:
-            active_signals[symbol] = sig
-
-    for symbol, sig in list(active_signals.items()):
-        if len(operations) >= config.MAX_OPEN_TRADES:
-            logger.info("Max open trades reached")
-            break
-        try:
-            raw = symbol.replace("_", "")
-            if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
-                logger.info("[%s] Skipped due blacklist", symbol)
-                del active_signals[symbol]
-                continue
-            execution.setup_leverage(raw, sig["leverage"])
-            order = execution.open_position(symbol, sig["side"], sig["quantity"], sig["entry_price"], order_type="limit")
-            sig["order_id"] = order.get("id") if isinstance(order, dict) else None
-            operations.append(sig)
-            notify.send_telegram(f"Opened {symbol} {sig['side']} @ {sig['entry_price']}")
-            notify.send_discord(f"Opened {symbol} {sig['side']} @ {sig['entry_price']}")
-            logger.info("Opened trade: %s", order)
-        except execution.OrderSubmitError:
-            pass
-        except Exception as exc:
-            logger.error("Error processing %s: %s", symbol, exc)
-        finally:
-            if symbol in active_signals:
-                del active_signals[symbol]
-
-    logger.info("Starting monitoring loop...")
     successful = 0
     unsuccessful = 0
     daily_profit = 0.0
+
+    logger.info("Starting trading loop...")
 
     while True:
         try:
             if daily_profit < config.DAILY_RISK_LIMIT:
                 logger.error("Daily limit reached %.2f", daily_profit)
                 break
+
+            # open new trades when we have capacity
+            if len(operations) < config.MAX_OPEN_TRADES:
+                symbols = data.get_common_top_symbols(execution.exchange, 15)
+                for symbol in symbols:
+                    if len(operations) >= config.MAX_OPEN_TRADES:
+                        break
+                    if any(op["symbol"] == symbol for op in operations):
+                        continue
+                    raw = symbol.replace("_", "")
+                    if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
+                        continue
+                    sig = strategy.decidir_entrada(symbol, modelo_historico=model)
+                    if not sig:
+                        continue
+                    try:
+                        execution.setup_leverage(raw, sig["leverage"])
+                        order = execution.open_position(
+                            symbol,
+                            sig["side"],
+                            sig["quantity"],
+                            sig["entry_price"],
+                            order_type="limit",
+                        )
+                        sig["order_id"] = order.get("id") if isinstance(order, dict) else None
+                        operations.append(sig)
+                        notify.send_telegram(
+                            f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
+                        )
+                        notify.send_discord(
+                            f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
+                        )
+                        logger.info("Opened trade: %s", order)
+                    except execution.OrderSubmitError:
+                        logger.error("Order submission failed for %s", symbol)
+                    except Exception as exc:
+                        logger.error("Error processing %s: %s", symbol, exc)
+
+            # monitor existing operations
             for op in list(operations):
                 price = data.get_current_price_ticker(op["symbol"])
                 if not price:
@@ -99,6 +109,7 @@ def run():
                         unsuccessful += 1
                     notify.send_telegram(f"Closed {op['symbol']} PnL {profit:.2f}")
                     notify.send_discord(f"Closed {op['symbol']} PnL {profit:.2f}")
+
             time.sleep(60)
         except KeyboardInterrupt:
             break
