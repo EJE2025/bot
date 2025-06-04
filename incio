@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+import requests
+import time
+import hmac
+import hashlib
+import os
+import json
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from scipy.signal import argrelextrema
+import logging
+import ccxt
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+
+# Cargar variables de entorno
+load_dotenv()
+BITGET_API_KEY     = os.getenv("BITGET_API_KEY") or ""
+BITGET_API_SECRET  = os.getenv("BITGET_API_SECRET") or ""
+BITGET_PASSPHRASE  = os.getenv("BITGET_PASSPHRASE") or ""
+
+# Inicializar cliente CCXT
+exchange = ccxt.bitget({
+    "apiKey": BITGET_API_KEY,
+    "secret": BITGET_API_SECRET,
+    "password": BITGET_PASSPHRASE,
+    "options": {"defaultType": "swap"}
+})
+
+exchange.load_markets({"type": "swap"})
+BITGET_MARKETS = set(exchange.markets.keys())
+
+BASE_URL_MEXC = "https://contract.mexc.com/api/v1"
+BASE_URL_BITGET = "https://api.bitget.com"
+
+BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
+UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
+MIN_TRADE_AMOUNT_HIGH = 2
+
+# Parámetros globales
+TEST_MODE = False
+MAX_OPEN_TRADES = 10
+DAILY_RISK_LIMIT = -50.0
+daily_profit = 0.0
+
+GREEN = "\033[92m"
+RED   = "\033[91m"
+BLUE  = "\033[94m"
+RESET = "\033[0m"
+
+def convert_symbol_bitget(symbol):
+    symbol = symbol.upper()
+    base_quote = symbol.replace("_", "")
+    return f"{base_quote}_UMCBL"
+
+def get_market_data(symbol, interval="Min15", limit=500, retries=3):
+    for attempt in range(retries):
+        try:
+            logging.info(f"Obteniendo datos para {symbol} (MEXC) intervalo {interval} intento {attempt+1}")
+            url = f"{BASE_URL_MEXC}/contract/kline"
+            params = {"symbol": symbol, "interval": interval, "limit": limit}
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            if not data.get("success"):
+                logging.error(f"Error MEXC para {symbol}: {data.get('message', 'Sin mensaje')}")
+                return {}
+            return data.get("data", {})
+        except requests.RequestException as e:
+            logging.error(f"Error red MEXC {symbol}: {e}")
+            time.sleep(2 ** attempt)
+        except Exception as e:
+            logging.error(f"Error inesperado MEXC {symbol}: {e}")
+            break
+    return {}
+
+def calculate_atr(highs, lows, closes, period=14):
+    try:
+        tr = [max(h - l, abs(h - c), abs(l - c)) for h, l, c in zip(highs, lows, closes)]
+        return np.mean(tr[-period:])
+    except Exception as e:
+        logging.error(f"Error ATR: {e}")
+        return None
+
+def ema(prices, period):
+    prices = np.array(prices)
+    k = 2 / (period + 1)
+    ema_values = [prices[0]]
+    for price in prices[1:]:
+        ema_values.append(price * k + ema_values[-1] * (1 - k))
+    return np.array(ema_values)
+
+def compute_rsi(prices, period=14):
+    prices = np.array(prices)
+    if len(prices) <= period:
+        return np.array([])
+    deltas = np.diff(prices)
+    seed = deltas[:period]
+    up = seed[seed >= 0].sum() / period
+    down = -seed[seed < 0].sum() / period
+    rs = up / down if down != 0 else 0
+    rsi = np.zeros_like(prices)
+    rsi[:period] = 100. - 100. / (1. + rs)
+    for i in range(period, len(prices)):
+        delta = deltas[i - 1]
+        upval = max(delta, 0)
+        downval = max(-delta, 0)
+        up = (up * (period - 1) + upval) / period
+        down = (down * (period - 1) + downval) / period
+        rs = up / down if down != 0 else 0
+        rsi[i] = 100. - 100. / (1. + rs)
+    return rsi
+
+def compute_macd(prices, fast=12, slow=26, signal=9):
+    ema_fast = ema(prices, fast)
+    ema_slow = ema(prices, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = ema(macd_line, signal)
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+def calculate_support_resistance(prices, window=20):
+    if len(prices) < window:
+        return None, None
+    window_prices = prices[-window:]
+    return min(window_prices), max(window_prices)
+
+def sentiment_score(symbol):
+    # Placeholder: cambiar por análisis real si disponible
+    return np.random.uniform(-0.5, 0.5)
+
+def decidir_entrada(symbol, modelo_historico=None):
+    data = get_market_data(symbol, interval="Min15", limit=1000)
+    if not data or not isinstance(data, dict) or "close" not in data or len(data["close"]) < 50:
+        logging.error(f"[{symbol}] Datos insuficientes, omitiendo")
+        return None
+
+    closes = [float(x) for x in data["close"]]
+    highs  = [float(x) for x in data["high"]]
+    lows   = [float(x) for x in data["low"]]
+    vols   = [float(x) for x in data["vol"]]
+
+    entry_price = closes[-1]
+    support, resistance = calculate_support_resistance(closes)
+    rsi_val = compute_rsi(closes, 100)[-1]
+    macd_val = compute_macd(closes)[0][-1]
+    atr_val = calculate_atr(highs, lows, closes)
+    senti = sentiment_score(symbol)
+    avg_vol = np.mean(vols[-10:])
+    volume_factor = min(1, avg_vol / 1000)
+
+    score_long = max(0, 45 - rsi_val) + max(0, macd_val) + max(0, senti * 10)
+    score_short = max(0, rsi_val - 55) + max(0, -macd_val) + max(0, -senti * 10)
+
+    if support and (entry_price - support)/entry_price < 0.02:
+        score_long += 5
+    if resistance and (resistance - entry_price)/entry_price < 0.02:
+        score_short += 5
+
+    decision = "BUY" if score_long >= score_short else "SELL"
+    stop_loss = entry_price * (0.992 if decision == "BUY" else 1.008)
+
+    trend_strength = abs(macd_val) + abs(rsi_val - 50)
+    tp_factor = 3.0 if trend_strength > 20 else 2.0
+    take_profit = (entry_price + atr_val * tp_factor) if decision == "BUY" else (entry_price - atr_val * tp_factor)
+
+    prob_success = min(max(score_long if decision == "BUY" else score_short, 0) / 5.0, 0.85) * volume_factor
+
+    leverage = 10
+    quantity = 10 / entry_price
+
+    signal = {
+        "symbol": symbol,
+        "side": decision,
+        "entry_price": entry_price,
+        "quantity": quantity,
+        "leverage": leverage,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "prob_success": prob_success,
+        "open_timestamp": pd.Timestamp.now(),
+        "reversal_counter": 0
+    }
+
+    if modelo_historico:
+        risk = abs(entry_price - stop_loss)
+        reward = abs(take_profit - entry_price)
+        if risk > 0:
+            risk_reward = reward / risk
+            side_ind = 1 if decision == "BUY" else 0
+            X_new = pd.DataFrame([[risk_reward, prob_success, side_ind]], columns=["risk_reward", "orig_prob", "side"])
+            pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
+            signal["prob_success"] = (prob_success + pred_hist) / 2
+            logging.info(BLUE + f"[{symbol}] Probabilidad ajustada modelo histórico: {signal['prob_success']*100:.1f}%" + RESET)
+
+    logging.info(GREEN + f"----- [{symbol}] DECISIÓN: {decision} -----" + RESET)
+    logging.info(f"Entrada: {entry_price:.4f}, SL: {stop_loss:.4f}, TP: {take_profit:.4f}")
+    return signal
+
+def cargar_operaciones_excel(archivo="operaciones.xlsx"):
+    if os.path.exists(archivo):
+        try:
+            df = pd.read_excel(archivo)
+            registros = df.to_dict(orient="records")
+            logging.info(GREEN + f"Operaciones cargadas desde {archivo}" + RESET)
+            return registros
+        except Exception as e:
+            logging.error(RED + f"Error cargando operaciones: {e}" + RESET)
+    return []
+
+def guardar_operaciones_excel(registros, archivo="operaciones.xlsx"):
+    try:
+        with pd.ExcelWriter(archivo, engine="openpyxl", mode="w") as writer:
+            df = pd.DataFrame(registros)
+            df.to_excel(writer, index=False)
+        logging.info(GREEN + f"Operaciones guardadas en {archivo}" + RESET)
+    except Exception as e:
+        logging.error(RED + f"Error guardando operaciones: {e}" + RESET)
+
+class OrderSubmitError(Exception):
+    pass
+
+def setup_leverage(symbol_raw, leverage, side):
+    base_quote = symbol_raw.replace("_", "")
+    bitget_sym = f"{base_quote}_UMCBL"
+    if bitget_sym not in exchange.markets:
+        logging.warning(f"Skip leverage: {bitget_sym} no disponible")
+        return
+    try:
+        market_id = exchange.market(bitget_sym)["id"]
+        exchange.set_leverage(leverage, market_id)
+        logging.info(f"Apalancamiento fijado a {leverage}x en {bitget_sym}")
+    except Exception as e:
+        logging.error(f"Error fijando apalancamiento en {bitget_sym}: {e}")
+
+def open_position(symbol, side, amount, price):
+    bitget_sym = symbol.replace("_", "/") + ":USDT"
+    if bitget_sym not in exchange.markets:
+        raise OrderSubmitError(f"Market {bitget_sym} no disponible")
+    for i in range(3):
+        try:
+            return exchange.create_order(
+                symbol=bitget_sym,
+                type='limit',
+                side='buy' if side == "BUY" else 'sell',
+                amount=amount,
+                price=price,
+                params={'timeInForce': 'GTC', 'holdSide': 'long' if side == "BUY" else 'short'}
+            )
+        except Exception:
+            time.sleep(2 ** i)
+    raise Exception(f"Failed to open position {symbol}")
+
+def close_position(symbol, side, amount):
+    bitget_sym = symbol.replace("_", "/") + ":USDT"
+    if bitget_sym not in exchange.markets:
+        raise OrderSubmitError(f"Market {bitget_sym} no disponible")
+    for i in range(3):
+        try:
+            return exchange.create_order(
+                symbol=bitget_sym,
+                type='market',
+                side='buy' if side == "close_short" else 'sell',
+                amount=amount,
+                params={'reduceOnly': True}
+            )
+        except Exception:
+            time.sleep(2 ** i)
+    raise Exception(f"Failed to close position {symbol}")
+
+def get_common_top_symbols(n=15):
+    url = f"{BASE_URL_MEXC}/contract/detail"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        logging.error(f"Error fetching MEXC contracts: {e}")
+        return []
+    data = resp.json().get("data", [])
+    mexc_list = []
+    for item in data:
+        if item.get("quoteCoin", "").upper() != "USDT":
+            continue
+        raw_sym = item.get("symbol", "")
+        vol = item.get("volume24h") or item.get("turnover24h") or 0
+        try:
+            vol = float(vol)
+        except:
+            vol = 0.0
+        mexc_list.append((raw_sym, vol))
+    mexc_list.sort(key=lambda x: x[1], reverse=True)
+    mexc_symbols_sorted = [sym for sym, _ in mexc_list]
+    bitget_keys = set(exchange.markets.keys())
+
+    def to_bitget_symbol(mexc_sym):
+        return mexc_sym.replace("_", "/") + ":USDT"
+
+    common = [sym for sym in mexc_symbols_sorted if to_bitget_symbol(sym) in bitget_keys][:n]
+    logging.info(f"Top {len(common)} símbolos comunes MEXC⇆Bitget: {common}")
+    return common
+
+def get_current_price_ticker(symbol):
+    try:
+        bitget_sym = convert_symbol_bitget(symbol)
+        endpoint = "/api/mix/v1/market/ticker"
+        params = {"symbol": bitget_sym.replace("_UMCBL", ""), "productType": "USDT-FUTURES"}
+        url = BASE_URL_BITGET + endpoint
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("code") == "00000" and "data" in data:
+            return float(data["data"]["last"])
+    except Exception as e:
+        logging.error(f"Error obteniendo precio ticker para {symbol}: {e}")
+    return None
+
+# Bucle principal
+if __name__ == "__main__":
+    operaciones_registradas = cargar_operaciones_excel()
+    modelo_historico = None
+    symbols = get_common_top_symbols(15)
+    logging.info("\n--- ANÁLISIS COMPLETO INICIAL ---")
+    active_signals = {}
+    for symbol in symbols:
+        sig = decidir_entrada(symbol, modelo_historico)
+        if sig:
+            active_signals[symbol] = sig
+            logging.info(GREEN + f"Señal obtenida para {symbol}" + RESET)
+        else:
+            logging.error(RED + f"Sin señal para {symbol}" + RESET)
+        time.sleep(1)
+    logging.info("\n--- Señales Iniciales ---")
+    for symbol, sig in active_signals.items():
+        side_str = "LONG" if sig["side"] == "BUY" else "SHORT"
+        logging.info(GREEN + f"{sig['symbol']} - {side_str} a {sig['entry_price']:.4f}" + RESET)
+        logging.info(f"    TP: {sig['take_profit']:.4f} | SL: {sig['stop_loss']:.4f} | Beneficio potencial: {sig['profit_potential']:.2f} USDT")
+        logging.info(f"    Probabilidad: {sig['prob_success']*100:.1f}%")
+    logging.info("\n--- Fin del análisis completo ---\n")
+
+    logging.info("\n--- ENVÍO DE ÓRDENES DE ENTRADA ---")
+    for symbol, sig in list(active_signals.items()):
+        try:
+            api_symbol = convert_symbol_bitget(symbol)
+            raw = symbol.replace("_", "")
+            if raw in BLACKLIST_SYMBOLS or raw in UNSUPPORTED_SYMBOLS:
+                logging.info(f"[{symbol}] Operación simulada: símbolo en lista negra o no soportado")
+                del active_signals[symbol]
+                continue
+
+            url = f"{BASE_URL_BITGET}/api/v2/mix/market/contracts"
+            params = {"productType": "USDT-FUTURES"}
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") == "00000":
+                markets = [m for m in data["data"] if m.get("symbolStatus") == "normal"]
+                if not any(m["symbol"] == api_symbol.replace("_UMCBL", "") for m in markets):
+                    logging.warning(f"[{symbol}] Mercado no disponible o no normal, omitiendo...")
+                    del active_signals[symbol]
+                    continue
+            else:
+                logging.error(f"Error obteniendo estado de mercado: {data.get('msg')}")
+                continue
+
+            setup_leverage(raw, sig['leverage'], sig['side'])
+            order = open_position(api_symbol, sig['side'], sig['quantity'], sig['entry_price'])
+            logging.info(f"Trade abierto: {order}")
+
+        except OrderSubmitError:
+            pass
+        except Exception as e:
+            logging.error(f"Error procesando mercado {symbol}: {e}")
+        finally:
+            if symbol in active_signals:
+                del active_signals[symbol]
+
+    successful_count = 0
+    unsuccessful_count = 0
+    tp_counter = 0
+    sl_counter = 0
+    daily_profit = 0.0
+
+    logging.info("\n--- INICIO DEL MONITOREO (Tiempo Real con Ticker) ---")
+    while True:
+        try:
+            if daily_profit < DAILY_RISK_LIMIT:
+                logging.error(RED + f"Límite diario alcanzado (Pérdida: {daily_profit:.2f} USDT). Deteniendo operaciones." + RESET)
+                break
+
+            modelo_aprendizaje, _ = actualizar_y_entrenar_modelo(symbols, interval="Min15", limit=10000)
+            modelo_historico, _ = actualizar_modelo_historico(operaciones_registradas)
+
+            tp_coins = []
+            sl_coins = []
+            exit_coins = []
+
+            for symbol in symbols:
+                try:
+                    current_price = get_current_price_ticker(symbol)
+                    if current_price is None or current_price == 0:
+                        continue
+
+                    if symbol in active_signals:
+                        sig = active_signals[symbol]
+
+                        # Aquí podrías actualizar señal si quieres
+
+                        if sig["side"] == "BUY":
+                            if current_price >= sig["take_profit"]:
+                                logging.info(GREEN + f"[{symbol}] TP alcanzado" + RESET)
+                                close = close_position(api_symbol, "close_long", sig['quantity'])
+                                if close:
+                                    successful_count += 1
+                                    tp_counter += 1
+                                    tp_coins.append(symbol)
+                                    registro = registrar_operacion_with_current_price(sig, current_price)
+                                    daily_profit += registro["rentabilidad"]
+                                    operaciones_registradas.append(registro)
+                                del active_signals[symbol]
+                                continue
+                            elif current_price <= sig["stop_loss"]:
+                                logging.error(RED + f"[{symbol}] SL alcanzado" + RESET)
+                                close = close_position(api_symbol, "close_long", sig['quantity'])
+                                if close:
+                                    unsuccessful_count += 1
+                                    sl_counter += 1
+                                    sl_coins.append(symbol)
+                                    registro = registrar_operacion_with_current_price(sig, current_price)
+                                    daily_profit += registro["rentabilidad"]
+                                    operaciones_registradas.append(registro)
+                                del active_signals[symbol]
+                                continue
+                        elif sig["side"] == "SELL":
+                            if current_price <= sig["take_profit"]:
+                                logging.info(GREEN + f"[{symbol}] TP alcanzado" + RESET)
+                                close = close_position(api_symbol, "close_short", sig['quantity'])
+                                if close:
+                                    successful_count += 1
+                                    tp_counter += 1
+                                    tp_coins.append(symbol)
+                                    registro = registrar_operacion_with_current_price(sig, current_price)
+                                    daily_profit += registro["rentabilidad"]
+                                    operaciones_registradas.append(registro)
+                                del active_signals[symbol]
+                                continue
+                            elif current_price >= sig["stop_loss"]:
+                                logging.error(RED + f"[{symbol}] SL alcanzado" + RESET)
+                                close = close_position(api_symbol, "close_short", sig['quantity'])
+                                if close:
+                                    unsuccessful_count += 1
+                                    sl_counter += 1
+                                    sl_coins.append(symbol)
+                                    registro = registrar_operacion_with_current_price(sig, current_price)
+                                    daily_profit += registro["rentabilidad"]
+                                    operaciones_registradas.append(registro)
+                                del active_signals[symbol]
+                                continue
+                    if symbol not in active_signals and len(active_signals) < MAX_OPEN_TRADES:
+                        candidate = decidir_entrada(symbol, modelo_historico)
+                        if candidate:
+                            active_signals[symbol] = candidate
+                            logging.info(GREEN + f"[{symbol}] Nueva entrada detectada." + RESET)
+
+                except Exception as e:
+                    logging.error(RED + f"Error en procesamiento {symbol}: {e}" + RESET)
+                    time.sleep(1)
+
+            logging.info(BLUE + f"TP: {tp_coins}, SL: {sl_coins}, EXIT: {exit_coins}" + RESET)
+            logging.info(BLUE + f"Resumen: TP: {tp_counter}, SL: {sl_counter}, Exitosas: {successful_count}, No exitosas: {unsuccessful_count}" + RESET)
+
+            guardar_operaciones_excel(operaciones_registradas)
+
+            logging.info("Esperando 60 segundos para siguiente ciclo...\n")
+            time.sleep(60)
+
+        except Exception as e:
+            logging.error(RED + f"Error ciclo principal: {e}" + RESET)
+            time.sleep(10)
