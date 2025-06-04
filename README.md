@@ -52,4 +52,6 @@ defined in `trading_bot/config.py`:
 - `DAILY_RISK_LIMIT` (default `-50`)
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
+- `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
+- `WEBAPP_PORT` dashboard port (default `8000`)
 

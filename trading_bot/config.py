@@ -34,3 +34,7 @@ MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
 
 # ATR multiple for stop loss calculation
 STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))
+
+# Web dashboard configuration
+WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
+WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))

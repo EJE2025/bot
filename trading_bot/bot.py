@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 def run():
     operations = []
-    Thread(target=webapp.start_dashboard, args=(operations,), daemon=True).start()
+    Thread(
+        target=webapp.start_dashboard,
+        args=(operations, config.WEBAPP_HOST, config.WEBAPP_PORT),
+        daemon=True,
+    ).start()
     model = optimizer.load_model(config.MODEL_PATH)
     symbols = data.get_common_top_symbols(execution.exchange, 15)
     active_signals = {}

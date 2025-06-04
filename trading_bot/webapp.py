@@ -24,7 +24,8 @@ def api_trades():
     return jsonify(_trades)
 
 
-def start_dashboard(trades, host="0.0.0.0", port=8000):
+def start_dashboard(trades, host: str, port: int):
+    """Run the Flask dashboard with the provided trade list and host/port."""
     global _trades
     _trades = trades
     app.run(host=host, port=port)
