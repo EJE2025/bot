@@ -7,7 +7,7 @@ also available.
 
 ## Features
 
-- Basic technical indicators (RSI, MACD, ATR)
+- Advanced technical indicators (RSI, MACD, ATR)
 - Risk management parameters
 - Stop-loss and take-profit enforcement with daily risk limit
 - Symbol filtering and leverage setup
