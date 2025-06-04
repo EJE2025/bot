@@ -15,6 +15,7 @@ also available.
 - Advanced order types (market, limit and stop)
 - Trade selection prefers the highest-probability signal with risk/reward >= 2:1
 - Web dashboard at `http://localhost:8000` for real time monitoring
+- Liquidity heatmap at `http://localhost:8001` via FastAPI
 - Telegram/Discord notifications when trades are opened
 - Modular architecture to ease future improvements
 - Order book analysis for liquidity zones and heat map-based scoring
@@ -32,6 +33,7 @@ Install dependencies and run the bot:
 pip install -r requirements.txt
 python -m trading_bot.bot
 python -m trading_bot.train_model mydata.csv --target result
+uvicorn trading_bot.dashboard:app --reload
 ```
 
 `get_market_data` fetches up to 500 candles by default using MEXC’s

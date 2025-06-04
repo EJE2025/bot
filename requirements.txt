@@ -5,3 +5,6 @@ pandas
 numpy
 scikit-learn
 flask
+fastapi
+uvicorn
+websockets

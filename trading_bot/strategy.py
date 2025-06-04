@@ -1,6 +1,8 @@
 import logging
 import numpy as np
 import pandas as pd
+import time
+import liquidity_ws
 from .indicators import compute_rsi, compute_macd, calculate_atr, calculate_support_resistance
 from . import config, data
 
@@ -95,3 +97,23 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
 
     logger.info("[%s] %s entry %.4f TP %.4f SL %.4f", symbol, decision, entry_price, take_profit, stop_loss)
     return signal
+
+
+# Liquidity monitoring helper
+SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+liquidity_ws.start(SYMBOLS)
+
+def print_liquidity():
+    """Example function showing how to query liquidity data."""
+    while True:
+        book = liquidity_ws.get_liquidity()
+        for sym, data in book.items():
+            top_bid = next(iter(sorted(data["bids"].items(), reverse=True)), None)
+            top_ask = next(iter(sorted(data["asks"].items())), None)
+            if top_bid and top_ask:
+                print(f"{sym}: bid {top_bid[0]} ({top_bid[1]}), ask {top_ask[0]} ({top_ask[1]})")
+        time.sleep(5)
+
+if __name__ == "__main__":
+    print_liquidity()
+
