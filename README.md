@@ -17,6 +17,7 @@ also available.
 - Telegram/Discord notifications when trades are opened
 - Modular architecture to ease future improvements
 - Order book analysis for liquidity zones and heat map-based scoring
+- Public MEXC endpoints for ticker, order book and kline data
 - Persistent trade history stored to `trade_history.csv`
 - Simple backtesting engine via `python -m trading_bot.backtest`
 - Optional machine learning models optimized with `trading_bot.optimizer`
@@ -31,6 +32,10 @@ pip install -r requirements.txt
 python -m trading_bot.bot
 python -m trading_bot.train_model mydata.csv --target result
 ```
+
+`get_market_data` fetches up to 500 candles by default using MEXC’s
+`/api/v1/contract/kline` endpoint. You can adjust the `limit` parameter (1‑1000)
+to load shorter or longer histories for backtesting.
 
 ### Environment variables
 

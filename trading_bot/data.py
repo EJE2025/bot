@@ -22,6 +22,22 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
         return {}
 
 
+def get_ticker(symbol: str) -> Dict:
+    """Return last price and bid/ask data for a MEXC futures symbol."""
+    url = f"{config.BASE_URL_MEXC}/contract/ticker"
+    params = {"symbol": symbol}
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("success"):
+            return data.get("data", {})
+        logger.error("Ticker error for %s: %s", symbol, data.get("message"))
+    except Exception as exc:
+        logger.error("Ticker network error for %s: %s", symbol, exc)
+    return {}
+
+
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
     url = f"{config.BASE_URL_MEXC}/contract/detail"
     try:
