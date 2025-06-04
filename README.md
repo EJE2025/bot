@@ -56,3 +56,5 @@ defined in `trading_bot/config.py`:
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
 
+
+Copy `.env.example` to `.env` and fill in your API keys to get started.
