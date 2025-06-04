@@ -28,3 +28,9 @@ BASE_URL_BITGET = "https://api.bitget.com"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+
+# Path to ML model used by the strategy
+MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
+
+# ATR multiple for stop loss calculation
+STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))

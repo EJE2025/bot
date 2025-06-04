@@ -55,9 +55,10 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
 
 
 def get_current_price_ticker(symbol: str) -> float:
+    """Return the latest traded price from Bitget for the given symbol."""
     bitget_sym = symbol.replace("_", "") + "_UMCBL"
     endpoint = "/api/mix/v1/market/ticker"
-    params = {"symbol": bitget_sym.replace("_UMCBL", ""), "productType": "USDT-FUTURES"}
+    params = {"symbol": bitget_sym, "productType": "USDT-FUTURES"}
     url = config.BASE_URL_BITGET + endpoint
     try:
         resp = requests.get(url, params=params, timeout=10)

@@ -2,7 +2,16 @@ import logging
 import time
 from threading import Thread
 import pandas as pd
-from . import config, data, execution, strategy, webapp, notify, history
+from . import (
+    config,
+    data,
+    execution,
+    strategy,
+    webapp,
+    notify,
+    history,
+    optimizer,
+)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -11,11 +20,12 @@ logger = logging.getLogger(__name__)
 def run():
     operations = []
     Thread(target=webapp.start_dashboard, args=(operations,), daemon=True).start()
+    model = optimizer.load_model(config.MODEL_PATH)
     symbols = data.get_common_top_symbols(execution.exchange, 15)
     active_signals = {}
 
     for symbol in symbols:
-        sig = strategy.decidir_entrada(symbol)
+        sig = strategy.decidir_entrada(symbol, modelo_historico=model)
         if sig:
             active_signals[symbol] = sig
 

@@ -28,7 +28,7 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
     support, resistance = calculate_support_resistance(closes)
     rsi_val = compute_rsi(closes, 100)[-1]
     macd_val = compute_macd(closes)[0][-1]
-    atr_val = calculate_atr(highs, lows, closes)
+    atr_val = calculate_atr(highs, lows, closes) or 0
     senti = sentiment_score(symbol)
     avg_vol = np.mean(vols[-10:])
     volume_factor = min(1, avg_vol / 1000)
@@ -53,7 +53,12 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         score_short += 5
 
     decision = "BUY" if score_long >= score_short else "SELL"
-    stop_loss = entry_price * (0.992 if decision == "BUY" else 1.008)
+    atr_mult = config.STOP_ATR_MULT
+    stop_loss = (
+        entry_price - atr_mult * atr_val
+        if decision == "BUY"
+        else entry_price + atr_mult * atr_val
+    )
     trend_strength = abs(macd_val) + abs(rsi_val - 50)
     tp_factor = 3.0 if trend_strength > 20 else 2.0
     take_profit = (entry_price + atr_val * tp_factor) if decision == "BUY" else (

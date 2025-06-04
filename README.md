@@ -32,9 +32,19 @@ python -m trading_bot.bot
 python -m trading_bot.train_model mydata.csv --target result
 ```
 
-API credentials are taken from environment variables as defined in `trading_bot/config.py`.
-Additional variables enable notifications:
+### Environment variables
 
+API credentials and behavior are controlled via environment variables as
+defined in `trading_bot/config.py`:
+
+- `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
+- `BINANCE_API_KEY`, `BINANCE_API_SECRET`
+- `MEXC_API_KEY`, `MEXC_API_SECRET`
+- `DEFAULT_EXCHANGE` (default `bitget`)
 - `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
 - `DISCORD_WEBHOOK`
+- `MAX_OPEN_TRADES` (default 10)
+- `DAILY_RISK_LIMIT` (default `-50`)
+- `MODEL_PATH` path to saved ML model (default `model.pkl`)
+- `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 

@@ -20,6 +20,10 @@ def run_backtest(symbols: List[str], interval: str = "Min15", limit: int = 500):
 
         profit_total = 0.0
         trades = 0
+        wins = 0
+        equity = 0.0
+        peak = 0.0
+        dd = 0.0
         for i in range(150, len(closes) - 10):
             window = {
                 "close": closes[:i],
@@ -59,7 +63,22 @@ def run_backtest(symbols: List[str], interval: str = "Min15", limit: int = 500):
                 profit = entry - exit_price
             profit_total += profit
             trades += 1
-        results.append({"symbol": sym, "trades": trades, "profit": profit_total})
+            if profit > 0:
+                wins += 1
+            equity += profit
+            if equity > peak:
+                peak = equity
+            dd = max(dd, peak - equity)
+        win_rate = wins / trades if trades else 0
+        results.append(
+            {
+                "symbol": sym,
+                "trades": trades,
+                "profit": profit_total,
+                "win_rate": win_rate,
+                "max_drawdown": dd,
+            }
+        )
     return pd.DataFrame(results)
 
 
