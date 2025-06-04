@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-import liquidity_ws
+from . import liquidity_ws
 
 app = FastAPI()
 

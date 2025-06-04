@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 import time
-import liquidity_ws
+from . import liquidity_ws
 from .indicators import compute_rsi, compute_macd, calculate_atr, calculate_support_resistance
 from . import config, data
 
