@@ -1,54 +1,51 @@
-# Trading Bot
+# Bot de Trading
 
-This repository contains a minimal crypto trading bot that retrieves market data from MEXC and executes orders on Bitget.
-It now provides optional integration with additional exchanges and a small web
-dashboard for monitoring open positions. Telegram and Discord notifications are
-also available.
+Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde MEXC y ejecuta órdenes en Bitget.
+Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
-## Features
+## Funcionalidades
 
-- Advanced technical indicators (RSI, MACD, ATR)
-- Risk management parameters
-- Stop-loss and take-profit enforcement with daily risk limit
-- Symbol filtering and leverage setup
-- Order execution through multiple exchanges using `ccxt`
-- Advanced order types (market, limit and stop)
-- Trade selection prefers the highest-probability signal with risk/reward >= 2:1
-- Web dashboard at `http://localhost:8000` for real time monitoring
-- Liquidity heatmap at `http://localhost:8001` via FastAPI
-- Telegram/Discord notifications when trades are opened
-- Modular architecture to ease future improvements
-- Order book analysis for liquidity zones and heat map-based scoring
-- Public MEXC endpoints for ticker, order book and kline data
-- Real-time order book streaming via `wss://contract.mexc.com/edge`
-- WebSocket listeners are started explicitly with `strategy.start_liquidity()`
-  so importing the strategy does not trigger network connections
-- Persistent trade history stored to `trade_history.csv`
-- Optional machine learning models optimized with `trading_bot.optimizer`
-- Train new ML models from CSVs using `python -m trading_bot.train_model`
-- A mock exchange allows offline testing if Bitget is unreachable
+- Indicadores técnicos avanzados (RSI, MACD, ATR)
+- Parámetros de gestión de riesgo
+- Stop-loss y take-profit con límite diario de pérdidas
+- Filtrado de símbolos y ajuste de apalancamiento
+- Ejecución de órdenes en varios exchanges mediante `ccxt`
+- Tipos de orden avanzados (market, limit, stop)
+- Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
+- Panel web en `http://localhost:8000` para monitoreo en tiempo real
+- Mapa de calor de liquidez en `http://localhost:8001` vía FastAPI
+- Notificaciones por Telegram y Discord al abrir operaciones
+- Arquitectura modular para facilitar mejoras
+- Análisis del libro de órdenes para zonas de liquidez y puntuación por heatmap
+- Endpoints públicos de MEXC para ticker, libro de órdenes y velas
+- Flujo en tiempo real del order book por `wss://contract.mexc.com/edge`
+- Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos
+- Historial persistente de operaciones en `trade_history.csv`
+- Modelos de machine learning optimizados con `trading_bot.optimizer`
+- Entrenamiento de modelos con `python -m trading_bot.train_model`
+- Exchange simulado para pruebas sin conexión a Bitget
 
-## Usage
+## Uso
 
-Install dependencies and run the bot:
+Instala las dependencias y pon en marcha el bot:
 
 ```bash
 pip install -r requirements.txt
 python -m trading_bot.bot
-python -m trading_bot.train_model mydata.csv --target result
+python -m trading_bot.train_model miarchivo.csv --target result
 uvicorn trading_bot.dashboard:app --reload
 ```
 
-`get_market_data` fetches up to 500 candles by default using MEXC’s
-`/api/v1/contract/kline` endpoint. You can adjust the `limit` parameter (1‑1000)
-to load shorter or longer histories.
-Downloaded candles are saved under `cache/` so repeated analyses can run
-offline if the API becomes unavailable.
+`get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
+`/api/v1/contract/kline` de MEXC. Puedes ajustar el parámetro `limit` (1‑1000)
+para cargar más o menos historial. Las velas descargadas se guardan en
+`cache/` para poder realizar análisis en modo offline si la API no está
+disponible.
 
-### Environment variables
+### Variables de entorno
 
-API credentials and behavior are controlled via environment variables as
-defined in `trading_bot/config.py`:
+Las credenciales de API y el comportamiento del bot se controlan mediante las
+variables definidas en `trading_bot/config.py`:
 
 - `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
 - `BINANCE_API_KEY`, `BINANCE_API_SECRET`
@@ -65,4 +62,4 @@ defined in `trading_bot/config.py`:
 - `WEBAPP_PORT` dashboard port (default `8000`)
 
 
-Copy `.env.example` to `.env` and fill in your API keys to get started.
+Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
