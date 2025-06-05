@@ -24,6 +24,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Modelos de machine learning optimizados con `trading_bot.optimizer`
 - Entrenamiento de modelos con `python -m trading_bot.train_model`
 - Exchange simulado para pruebas sin conexión a Bitget
+- Motor de backtesting con `python -m trading_bot.backtest`
 
 ## Uso
 
@@ -32,6 +33,7 @@ Instala las dependencias y pon en marcha el bot:
 ```bash
 pip install -r requirements.txt
 python -m trading_bot.bot
+python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
 uvicorn trading_bot.dashboard:app --reload
 ```
