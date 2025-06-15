@@ -8,3 +8,4 @@ flask
 fastapi
 uvicorn
 websockets
+unicorn-mexc-websocket-api
