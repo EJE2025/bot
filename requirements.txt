@@ -1,0 +1,11 @@
+ccxt
+requests
+python-dotenv
+pandas
+numpy
+scikit-learn
+flask
+fastapi
+uvicorn
+websockets
+unicorn-mexc-websocket-api
