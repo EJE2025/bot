@@ -41,9 +41,12 @@ async def _mexc_listener(symbols):
             sym = data.get("symbol") or data.get("channel", "").split("_")[0]
             if not sym:
                 continue
+            d = data.get("data")
+            if not isinstance(d, dict):
+                continue
             book = _liquidity[sym]
-            book["bids"] = {float(p): float(v) for p, v in data["data"].get("bids", [])}
-            book["asks"] = {float(p): float(v) for p, v in data["data"].get("asks", [])}
+            book["bids"] = {float(p): float(v) for p, v in d.get("bids", [])}
+            book["asks"] = {float(p): float(v) for p, v in d.get("asks", [])}
 
 async def _bitget_listener(symbols):
     subs = [
@@ -61,6 +64,8 @@ async def _bitget_listener(symbols):
             if "data" not in data:
                 continue
             for item in data["data"]:
+                if not isinstance(item, dict):
+                    continue
                 sym = item.get("symbol") or item.get("instId")
                 if not sym:
                     continue
