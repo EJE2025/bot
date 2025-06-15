@@ -1,3 +1,5 @@
+"""Order book streaming helpers for liquidity heatmap."""
+
 import asyncio
 import json
 import logging
@@ -5,6 +7,7 @@ import threading
 from collections import defaultdict
 
 import websockets
+from unicorn_mexc_websocket_api.manager import MexcWebsocketApiManager
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +15,6 @@ logger = logging.getLogger(__name__)
 DEPTH = 20
 
 # Public websocket URLs
-# Updated to the official MEXC edge endpoint as per API docs
-MEXC_WS_URL = "wss://contract.mexc.com/edge"
 BITGET_WS_URL = "wss://ws.bitget.com/mix/v1/stream"
 
 # Symbol format mapping
@@ -26,31 +27,29 @@ _liquidity = defaultdict(lambda: {"bids": {}, "asks": {}})
 # Internal flag and loop
 _loop = None
 _thread = None
+_mexc_manager = None
 
-async def _mexc_listener(symbols):
-    async with websockets.connect(MEXC_WS_URL, ping_interval=None) as ws:
-        for sym in symbols:
-            msg = {
-                "method": "depth.subscribe",
-                "params": [MEXC_SYMBOL(sym), DEPTH, "0"],
-                "id": sym,
-            }
-            await ws.send(json.dumps(msg))
-        async for message in ws:
-            data = json.loads(message)
-            if "data" not in data:
-                continue
-            sym = data.get("symbol") or data.get("channel", "").split("_")[0]
-            if not sym:
-                continue
-            d = data.get("data")
-            if not isinstance(d, dict):
-                logger.warning("Unexpected MEXC payload: %s", data)
-                _liquidity.pop(sym, None)
-                continue
-            book = _liquidity[sym]
-            book["bids"] = {float(p): float(v) for p, v in d.get("bids", [])}
-            book["asks"] = {float(p): float(v) for p, v in d.get("asks", [])}
+
+def _mexc_callback(message):
+    """Process depth updates from MEXC."""
+    data = message.get("data")
+    if not isinstance(data, dict):
+        return
+    sym = message.get("symbol") or data.get("symbol")
+    if not sym:
+        return
+    book = _liquidity[sym]
+    book["bids"] = {float(p): float(v) for p, v in data.get("bids", [])}
+    book["asks"] = {float(p): float(v) for p, v in data.get("asks", [])}
+
+
+def _mexc_listener(symbols):
+    global _mexc_manager
+    if _mexc_manager is not None:
+        return
+    _mexc_manager = MexcWebsocketApiManager()
+    subs = [MEXC_SYMBOL(s) for s in symbols]
+    _mexc_manager.subscribe_depth_stream(subs, depth=DEPTH, callback=_mexc_callback)
 
 async def _bitget_listener(symbols):
     subs = [
@@ -79,7 +78,7 @@ async def _bitget_listener(symbols):
                 book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
 
 async def _run(symbols):
-    await asyncio.gather(_mexc_listener(symbols), _bitget_listener(symbols))
+    await _bitget_listener(symbols)
 
 
 def start(symbols):
@@ -87,6 +86,7 @@ def start(symbols):
     global _loop, _thread
     if _loop:
         return
+    _mexc_listener(symbols)
     _loop = asyncio.new_event_loop()
     def runner():
         asyncio.set_event_loop(_loop)
@@ -100,3 +100,7 @@ def get_liquidity(symbol=None):
     if symbol:
         return _liquidity.get(symbol.upper())
     return dict(_liquidity)
+
+
+# Example usage:
+# start(["BTC/USDT", "ETH/USDT"])
