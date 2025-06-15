@@ -6,6 +6,8 @@ from collections import defaultdict
 
 import websockets
 
+logger = logging.getLogger(__name__)
+
 # Order book depth to request
 DEPTH = 20
 
@@ -43,6 +45,8 @@ async def _mexc_listener(symbols):
                 continue
             d = data.get("data")
             if not isinstance(d, dict):
+                logger.warning("Unexpected MEXC payload: %s", data)
+                _liquidity.pop(sym, None)
                 continue
             book = _liquidity[sym]
             book["bids"] = {float(p): float(v) for p, v in d.get("bids", [])}
@@ -65,6 +69,7 @@ async def _bitget_listener(symbols):
                 continue
             for item in data["data"]:
                 if not isinstance(item, dict):
+                    logger.warning("Unexpected Bitget payload: %s", data)
                     continue
                 sym = item.get("symbol") or item.get("instId")
                 if not sym:
