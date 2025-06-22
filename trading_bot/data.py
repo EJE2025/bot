@@ -15,26 +15,44 @@ def _cache_path(symbol: str, interval: str, limit: int) -> str:
     return os.path.join(CACHE_DIR, name)
 
 
+def _to_binance_interval(interval: str) -> str:
+    if interval.startswith("Min"):
+        mins = interval[3:]
+        return f"{mins}m"
+    return interval
+
+
 def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict:
-    url = f"{config.BASE_URL_MEXC}/contract/kline"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    symbol_raw = symbol.replace("_", "")
+    url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
+    params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
+
     for attempt in range(3):
         try:
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-            if not data.get("success"):
-                logger.error("MEXC error for %s: %s", symbol, data.get("message"))
+
+            if not isinstance(data, list):
                 raise RuntimeError("API error")
+            parsed = {
+                "close": [x[4] for x in data],
+                "high": [x[2] for x in data],
+                "low": [x[3] for x in data],
+                "vol": [x[5] for x in data],
+            }
             os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(_cache_path(symbol, interval, limit), "w", encoding="utf-8") as fh:
-                json.dump(data.get("data", {}), fh)
-            return data.get("data", {})
+            with open(_cache_path(symbol_raw, interval, limit), "w", encoding="utf-8") as fh:
+                json.dump(parsed, fh)
+            return parsed
+
         except Exception as exc:
             logger.warning("Network error fetching %s (attempt %d): %s", symbol, attempt + 1, exc)
             time.sleep(2 ** attempt)
     # fallback to cache
-    path = _cache_path(symbol, interval, limit)
+
+    path = _cache_path(symbol_raw, interval, limit)
+
     if os.path.exists(path):
         logger.info("Using cached data for %s", symbol)
         with open(path, "r", encoding="utf-8") as fh:
@@ -43,49 +61,45 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
 
 
 def get_ticker(symbol: str) -> Dict:
-    """Return last price and bid/ask data for a MEXC futures symbol."""
-    url = f"{config.BASE_URL_MEXC}/contract/ticker"
-    params = {"symbol": symbol}
+
+    """Return last price and bid/ask data for a Binance futures symbol."""
+    url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/bookTicker"
+    params = {"symbol": symbol.replace("_", "")}
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("success"):
-            return data.get("data", {})
-        logger.error("Ticker error for %s: %s", symbol, data.get("message"))
+
+        return data
+
     except Exception as exc:
         logger.error("Ticker network error for %s: %s", symbol, exc)
     return {}
 
 
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
-    url = f"{config.BASE_URL_MEXC}/contract/detail"
+
+    url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/24hr"
+
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except Exception as exc:
-        logger.error("Error fetching MEXC contracts: %s", exc)
-        return []
-    data = resp.json().get("data", [])
-    mexc_list = []
-    for item in data:
-        if item.get("quoteCoin", "").upper() != "USDT":
-            continue
-        raw_sym = item.get("symbol", "")
-        vol = item.get("volume24h") or item.get("turnover24h") or 0
-        try:
-            vol = float(vol)
-        except Exception:
-            vol = 0.0
-        mexc_list.append((raw_sym, vol))
-    mexc_list.sort(key=lambda x: x[1], reverse=True)
-    mexc_symbols_sorted = [sym for sym, _ in mexc_list]
 
-    def to_bitget_symbol(mexc_sym: str) -> str:
-        return mexc_sym.replace("_", "/") + ":USDT"
+        logger.error("Error fetching Binance tickers: %s", exc)
+        return []
+    data = resp.json()
+    filtered = [d for d in data if d.get("symbol", "").endswith("USDT") and not d.get("symbol", "").endswith("BUSD")]
+    sorted_by_vol = sorted(filtered, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
+    symbols = [item["symbol"] for item in sorted_by_vol[:n]]
+
+    def to_bitget_symbol(sym: str) -> str:
+        return sym.replace("USDT", "/USDT") + ":USDT"
 
     bitget_keys = set(exchange.markets.keys())
-    common = [sym for sym in mexc_symbols_sorted if to_bitget_symbol(sym) in bitget_keys][:n]
+    common = [s[:-4] + "_" + s[-4:] for s in symbols if to_bitget_symbol(s) in bitget_keys]
+
     logger.info("Top %d common symbols: %s", len(common), common)
     return common
 
@@ -108,17 +122,18 @@ def get_current_price_ticker(symbol: str) -> float:
 
 
 def get_order_book(symbol: str, limit: int = 50) -> Dict:
-    """Fetch order book data from MEXC for a given symbol."""
-    url = f"{config.BASE_URL_MEXC}/contract/depth"
-    params = {"symbol": symbol, "limit": limit}
+
+    """Fetch order book data from Binance for a given symbol."""
+    url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
+    params = {"symbol": symbol.replace("_", ""), "limit": limit}
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        if not data.get("success"):
-            logger.error("Order book error for %s: %s", symbol, data.get("message"))
-            return {}
-        return data.get("data", {})
+
+        return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
+
     except Exception as exc:
         logger.error("Order book network error for %s: %s", symbol, exc)
         return {}

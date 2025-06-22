@@ -1,6 +1,7 @@
 # Bot de Trading
 
-Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde MEXC y ejecuta órdenes en Bitget.
+Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde Binance y ejecuta órdenes en Bitget.
+
 Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
 ## Funcionalidades
@@ -17,8 +18,10 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Notificaciones por Telegram y Discord al abrir operaciones
 - Arquitectura modular para facilitar mejoras
 - Análisis del libro de órdenes para zonas de liquidez y puntuación por heatmap
-- Endpoints públicos de MEXC para ticker, libro de órdenes y velas
-- Flujo en tiempo real del order book por `wss://contract.mexc.com/edge`
+
+- Endpoints públicos de Binance para ticker, libro de órdenes y velas
+- Flujo en tiempo real del order book por `wss://fstream.binance.com`
+
 - Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos
 - Historial persistente de operaciones en `trade_history.csv`
 - Modelos de machine learning optimizados con `trading_bot.optimizer`
@@ -39,7 +42,9 @@ uvicorn trading_bot.dashboard:app --reload
 ```
 
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
-`/api/v1/contract/kline` de MEXC. Puedes ajustar el parámetro `limit` (1‑1000)
+
+`/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
+
 para cargar más o menos historial. Las velas descargadas se guardan en
 `cache/` para poder realizar análisis en modo offline si la API no está
 disponible.
@@ -51,7 +56,8 @@ variables definidas en `trading_bot/config.py`:
 
 - `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
 - `BINANCE_API_KEY`, `BINANCE_API_SECRET`
-- `MEXC_API_KEY`, `MEXC_API_SECRET`
+
+
 - `DEFAULT_EXCHANGE` (default `bitget`)
 - `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
 - `DISCORD_WEBHOOK`
