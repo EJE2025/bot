@@ -1,0 +1,10 @@
+ccxt
+requests
+python-dotenv
+pandas
+numpy
+scikit-learn
+flask
+fastapi
+uvicorn
+websockets
