@@ -26,11 +26,13 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     symbol_raw = symbol.replace("_", "")
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
     params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
+
     for attempt in range(3):
         try:
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
+
             if not isinstance(data, list):
                 raise RuntimeError("API error")
             parsed = {
@@ -43,11 +45,14 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
             with open(_cache_path(symbol_raw, interval, limit), "w", encoding="utf-8") as fh:
                 json.dump(parsed, fh)
             return parsed
+
         except Exception as exc:
             logger.warning("Network error fetching %s (attempt %d): %s", symbol, attempt + 1, exc)
             time.sleep(2 ** attempt)
     # fallback to cache
+
     path = _cache_path(symbol_raw, interval, limit)
+
     if os.path.exists(path):
         logger.info("Using cached data for %s", symbol)
         with open(path, "r", encoding="utf-8") as fh:
@@ -56,25 +61,32 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
 
 
 def get_ticker(symbol: str) -> Dict:
+
     """Return last price and bid/ask data for a Binance futures symbol."""
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/bookTicker"
     params = {"symbol": symbol.replace("_", "")}
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+
         return data
+
     except Exception as exc:
         logger.error("Ticker network error for %s: %s", symbol, exc)
     return {}
 
 
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
+
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/24hr"
+
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
     except Exception as exc:
+
         logger.error("Error fetching Binance tickers: %s", exc)
         return []
     data = resp.json()
@@ -87,6 +99,7 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
 
     bitget_keys = set(exchange.markets.keys())
     common = [s[:-4] + "_" + s[-4:] for s in symbols if to_bitget_symbol(s) in bitget_keys]
+
     logger.info("Top %d common symbols: %s", len(common), common)
     return common
 
@@ -109,14 +122,18 @@ def get_current_price_ticker(symbol: str) -> float:
 
 
 def get_order_book(symbol: str, limit: int = 50) -> Dict:
+
     """Fetch order book data from Binance for a given symbol."""
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
     params = {"symbol": symbol.replace("_", ""), "limit": limit}
+
     try:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+
         return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
+
     except Exception as exc:
         logger.error("Order book network error for %s: %s", symbol, exc)
         return {}

@@ -1,11 +1,14 @@
 
+
 from __future__ import annotations
+
 
 import asyncio
 import json
 import logging
 import threading
 from collections import defaultdict
+
 from typing import Iterable
 
 import websockets
@@ -18,6 +21,7 @@ DEPTH = 20
 
 # Public websocket URLs
 BITGET_WS_URL = "wss://ws.bitget.com/mix/v1/stream"
+
 BINANCE_WS_BASE = "wss://fstream.binance.com/stream?streams="
 
 # Symbol format mapping
@@ -76,6 +80,7 @@ async def _bitget_listener(symbols):
                 sym = item.get("symbol") or item.get("instId")
                 if not sym:
                     continue
+
                 with _lock:
                     book = _liquidity[sym]
                     book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
@@ -96,12 +101,14 @@ def start(symbols):
         asyncio.set_event_loop(_loop)
         _loop.run_until_complete(_run(symbols))
 
+
     _thread = threading.Thread(target=runner, daemon=True)
     _thread.start()
 
 
 def get_liquidity(symbol=None):
     """Get current liquidity map. If symbol provided, return its book."""
+
     with _lock:
         if symbol:
             return _liquidity.get(symbol.upper())
@@ -111,3 +118,4 @@ def get_liquidity(symbol=None):
 # Example usage to start streaming the top 15 symbols:
 # top_symbols = ["BTC_USDT", "ETH_USDT", ...]  # output from data.get_common_top_symbols()
 # start(top_symbols)
+
