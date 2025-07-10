@@ -12,27 +12,25 @@ from . import (
     history,
     optimizer,
 )
+from trading_bot.trade_manager import (
+    add_trade, close_trade, find_trade, all_open_trades, load_trades, save_trades, count_open_trades
+)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-
-
 def run():
-    """Main loop for the trading bot."""
-    operations: list[dict] = []
+    load_trades()  # Carga operaciones abiertas al arrancar
+
     Thread(
         target=webapp.start_dashboard,
-        args=(operations, config.WEBAPP_HOST, config.WEBAPP_PORT),
+        args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
         daemon=True,
     ).start()
 
-    # start optional liquidity websockets
     strategy.start_liquidity()
 
     model = optimizer.load_model(config.MODEL_PATH)
-    successful = 0
-    unsuccessful = 0
     daily_profit = 0.0
 
     logger.info("Starting trading loop...")
@@ -43,12 +41,12 @@ def run():
                 logger.error("Daily limit reached %.2f", daily_profit)
                 break
 
-            # open new trades when we have capacity
-            if len(operations) < config.MAX_OPEN_TRADES:
+            # ABRIR NUEVAS OPERACIONES (solo si hay hueco)
+            if count_open_trades() < config.MAX_OPEN_TRADES:
                 symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
                 for symbol in symbols:
-                    if any(op["symbol"] == symbol for op in operations):
+                    if find_trade(symbol=symbol):
                         continue
                     raw = symbol.replace("_", "")
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
@@ -60,7 +58,7 @@ def run():
 
                 candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
                 for sig in candidates:
-                    if len(operations) >= config.MAX_OPEN_TRADES:
+                    if count_open_trades() >= config.MAX_OPEN_TRADES:
                         break
                     symbol = sig["symbol"]
                     raw = symbol.replace("_", "")
@@ -74,7 +72,7 @@ def run():
                             order_type="limit",
                         )
                         sig["order_id"] = order.get("id") if isinstance(order, dict) else None
-                        operations.append(sig)
+                        add_trade(sig)
                         notify.send_telegram(
                             f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
                         )
@@ -87,8 +85,8 @@ def run():
                     except Exception as exc:
                         logger.error("Error processing %s: %s", symbol, exc)
 
-            # monitor existing operations
-            for op in list(operations):
+            # MONITOREAR OPERACIONES ABIERTAS
+            for op in list(all_open_trades()):
                 price = data.get_current_price_ticker(op["symbol"])
                 if not price:
                     continue
@@ -112,21 +110,17 @@ def run():
                     op["profit"] = profit
                     history.append_trade(op)
                     daily_profit += profit
-                    operations.remove(op)
-                    if profit >= 0:
-                        successful += 1
-                    else:
-                        unsuccessful += 1
+                    close_trade(trade_id=op.get("trade_id"), reason="TP" if profit >= 0 else "SL")
                     notify.send_telegram(f"Closed {op['symbol']} PnL {profit:.2f}")
                     notify.send_discord(f"Closed {op['symbol']} PnL {profit:.2f}")
 
+            save_trades()  # Guarda el estado periódicamente
             time.sleep(60)
         except KeyboardInterrupt:
             break
         except Exception as exc:
             logger.error("Loop error: %s", exc)
             time.sleep(10)
-
 
 if __name__ == "__main__":
     run()
