@@ -8,8 +8,10 @@ def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": config.TELEGRAM_CHAT_ID, "text": message}, timeout=10)
-    except Exception:
-        pass
+
+    except Exception as exc:
+        print(f"[notify] Telegram msg failed: {exc}")
+
 
 
 def send_discord(message: str):
@@ -17,6 +19,8 @@ def send_discord(message: str):
         return
     try:
         requests.post(config.DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-    except Exception:
-        pass
+
+    except Exception as exc:
+        print(f"[notify] Discord msg failed: {exc}")
+
 

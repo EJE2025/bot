@@ -9,6 +9,7 @@ import logging
 import threading
 from collections import defaultdict
 
+
 from typing import Iterable
 
 import websockets
@@ -43,20 +44,27 @@ _lock = threading.Lock()
 async def _binance_listener(symbols: Iterable[str]):
     streams = "/".join([f"{BINANCE_SYMBOL(sym).lower()}@depth{DEPTH}@100ms" for sym in symbols])
     url = BINANCE_WS_BASE + streams
-    async with websockets.connect(url, ping_interval=None) as ws:
-        async for message in ws:
-            data = json.loads(message)
-            content = data.get("data")
-            if not content or "bids" not in content:
-                continue
-            sym_raw = content.get("s")
-            if not sym_raw:
-                continue
-            sym = sym_raw[:-4] + "_" + sym_raw[-4:]
-            with _lock:
-                book = _liquidity[sym]
-                book["bids"] = {float(p): float(q) for p, q in content.get("bids", [])}
-                book["asks"] = {float(p): float(q) for p, q in content.get("asks", [])}
+
+    while True:
+        try:
+            async with websockets.connect(url, ping_interval=None) as ws:
+                async for message in ws:
+                    data = json.loads(message)
+                    content = data.get("data")
+                    if not content or "bids" not in content:
+                        continue
+                    sym_raw = content.get("s")
+                    if not sym_raw:
+                        continue
+                    sym = sym_raw[:-4] + "_" + sym_raw[-4:]
+                    with _lock:
+                        book = _liquidity[sym]
+                        book["bids"] = {float(p): float(q) for p, q in content.get("bids", [])}
+                        book["asks"] = {float(p): float(q) for p, q in content.get("asks", [])}
+        except Exception as exc:
+            logger.error("Binance WS error: %s", exc)
+            await asyncio.sleep(5)
+
 
 async def _bitget_listener(symbols):
     subs = [
@@ -66,25 +74,36 @@ async def _bitget_listener(symbols):
         }
         for sym in symbols
     ]
-    async with websockets.connect(BITGET_WS_URL, ping_interval=None) as ws:
-        for sub in subs:
-            await ws.send(json.dumps(sub))
-        async for message in ws:
-            data = json.loads(message)
-            if "data" not in data:
-                continue
-            for item in data["data"]:
-                if not isinstance(item, dict):
-                    logger.warning("Unexpected Bitget payload: %s", data)
-                    continue
-                sym = item.get("symbol") or item.get("instId")
-                if not sym:
-                    continue
 
-                with _lock:
-                    book = _liquidity[sym]
-                    book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
-                    book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
+    while True:
+        try:
+            async with websockets.connect(BITGET_WS_URL, ping_interval=None) as ws:
+                for sub in subs:
+                    await ws.send(json.dumps(sub))
+                async for message in ws:
+                    data = json.loads(message)
+                    if "data" not in data:
+                        continue
+                    for item in data["data"]:
+                        if not isinstance(item, dict):
+                            logger.warning("Unexpected Bitget payload: %s", data)
+                            continue
+                        sym = item.get("symbol") or item.get("instId")
+                        if not sym:
+                            continue
+                        if sym.endswith("_UMCBL"):
+                            core = sym[:-6]
+                            sym_fmt = core[:-4] + "_" + core[-4:]
+                        else:
+                            sym_fmt = sym
+                        with _lock:
+                            book = _liquidity[sym_fmt]
+                            book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
+                            book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
+        except Exception as exc:
+            logger.error("Bitget WS error: %s", exc)
+            await asyncio.sleep(5)
+
 
 async def _run(symbols):
     await asyncio.gather(_binance_listener(symbols), _bitget_listener(symbols))

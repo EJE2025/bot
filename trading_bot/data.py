@@ -27,11 +27,13 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
     params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
 
+
     for attempt in range(3):
         try:
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
             data = resp.json()
+
 
             if not isinstance(data, list):
                 raise RuntimeError("API error")

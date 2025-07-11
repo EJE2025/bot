@@ -2,6 +2,7 @@
 
 Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde Binance y ejecuta órdenes en Bitget.
 
+
 Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
 ## Funcionalidades
@@ -14,16 +15,17 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
 - Panel web en `http://localhost:8000` para monitoreo en tiempo real
-- Mapa de calor de liquidez en `http://localhost:8001` vía FastAPI
-- Notificaciones por Telegram y Discord al abrir operaciones
-- Arquitectura modular para facilitar mejoras
-- Análisis del libro de órdenes para zonas de liquidez y puntuación por heatmap
 
+- Notificaciones por Telegram y Discord al abrir y cerrar operaciones
+- Arquitectura modular para facilitar mejoras
+- Análisis del libro de órdenes para zonas de liquidez
+- Reconciliación automática con posiciones de Bitget al iniciar
+- Verificación de balance y llenado de órdenes con registro de slippage
+- Historial persistente de operaciones en `trade_history.csv` y archivos JSON
 - Endpoints públicos de Binance para ticker, libro de órdenes y velas
 - Flujo en tiempo real del order book por `wss://fstream.binance.com`
-
 - Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos
-- Historial persistente de operaciones en `trade_history.csv`
+
 - Modelos de machine learning optimizados con `trading_bot.optimizer`
 - Entrenamiento de modelos con `python -m trading_bot.train_model`
 - Exchange simulado para pruebas sin conexión a Bitget
@@ -38,11 +40,10 @@ pip install -r requirements.txt
 python -m trading_bot.bot
 python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
-uvicorn trading_bot.dashboard:app --reload
+
 ```
 
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
-
 `/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
 
 para cargar más o menos historial. Las velas descargadas se guardan en
@@ -57,7 +58,6 @@ variables definidas en `trading_bot/config.py`:
 - `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
 - `BINANCE_API_KEY`, `BINANCE_API_SECRET`
 
-
 - `DEFAULT_EXCHANGE` (default `bitget`)
 - `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
 - `DISCORD_WEBHOOK`
@@ -68,6 +68,5 @@ variables definidas en `trading_bot/config.py`:
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
-
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
