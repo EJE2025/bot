@@ -34,7 +34,9 @@ def get_exchange(name: str):
         return _EXCHANGE_CACHE[name]
 
     if config.TEST_MODE:
+
         logger.warning("TEST_MODE enabled - using MockExchange")
+
         ex = MockExchange()
     elif name == "bitget":
         ex = ccxt.bitget({
@@ -62,6 +64,8 @@ def get_exchange(name: str):
         logger.error("Failed to connect to %s: %s", name, exc)
         ex = MockExchange()
         ex.load_markets()
+
         logger.error("Using MockExchange due to connection failure")
+
     _EXCHANGE_CACHE[name] = ex
     return ex

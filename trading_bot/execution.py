@@ -16,6 +16,7 @@ class OrderSubmitError(Exception):
     pass
 
 
+
 def fetch_positions():
     """Return a list of current Bitget positions."""
     if exchange is None:
@@ -61,6 +62,7 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = 15) -> bool:
     return False
 
 
+
 def setup_leverage(symbol_raw: str, leverage: int) -> None:
     if exchange is None:
         logger.error("Exchange not initialized")
@@ -84,10 +86,12 @@ def open_position(symbol: str, side: str, amount: float, price: float,
     bitget_sym = symbol.replace("_", "/") + ":USDT"
     if bitget_sym not in exchange.markets:
         raise OrderSubmitError(f"Market {bitget_sym} not available")
+
     bal = fetch_balance()
     cost = amount * price / exchange.markets[bitget_sym].get("contractSize", 1)
     if bal < cost:
         raise OrderSubmitError("Insufficient balance")
+
     for attempt in range(3):
         try:
             params = {"timeInForce": "GTC", "holdSide": "long" if side == "BUY" else "short"}
@@ -101,7 +105,9 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 ord_type = "limit"
             else:
                 ord_type = "limit"
+
             order = exchange.create_order(
+
                 symbol=bitget_sym,
                 type=ord_type,
                 side="buy" if side == "BUY" else "sell",
@@ -109,7 +115,9 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 price=ord_price,
                 params=params,
             )
+
             return order
+
         except Exception:
             time.sleep(2 ** attempt)
     raise OrderSubmitError(f"Failed to open position {symbol}")
