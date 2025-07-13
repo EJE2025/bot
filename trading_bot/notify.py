@@ -13,7 +13,6 @@ def send_telegram(message: str):
         print(f"[notify] Telegram msg failed: {exc}")
 
 
-
 def send_discord(message: str):
     if not config.DISCORD_WEBHOOK:
         return
@@ -22,5 +21,4 @@ def send_discord(message: str):
 
     except Exception as exc:
         print(f"[notify] Discord msg failed: {exc}")
-
 

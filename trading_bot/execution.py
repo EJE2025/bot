@@ -16,7 +16,6 @@ class OrderSubmitError(Exception):
     pass
 
 
-
 def fetch_positions():
     """Return a list of current Bitget positions."""
     if exchange is None:

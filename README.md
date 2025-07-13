@@ -2,7 +2,6 @@
 
 Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde Binance y ejecuta órdenes en Bitget.
 
-
 Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
 ## Funcionalidades
@@ -15,7 +14,6 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
 - Panel web en `http://localhost:8000` para monitoreo en tiempo real
-
 - Notificaciones por Telegram y Discord al abrir y cerrar operaciones
 - Arquitectura modular para facilitar mejoras
 - Análisis del libro de órdenes para zonas de liquidez
@@ -25,7 +23,6 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Endpoints públicos de Binance para ticker, libro de órdenes y velas
 - Flujo en tiempo real del order book por `wss://fstream.binance.com`
 - Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos
-
 - Modelos de machine learning optimizados con `trading_bot.optimizer`
 - Entrenamiento de modelos con `python -m trading_bot.train_model`
 - Exchange simulado para pruebas sin conexión a Bitget
@@ -41,8 +38,6 @@ python -m trading_bot.bot
 python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
 
-```
-
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
 `/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
 
@@ -57,7 +52,6 @@ variables definidas en `trading_bot/config.py`:
 
 - `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
 - `BINANCE_API_KEY`, `BINANCE_API_SECRET`
-
 - `DEFAULT_EXCHANGE` (default `bitget`)
 - `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
 - `DISCORD_WEBHOOK`

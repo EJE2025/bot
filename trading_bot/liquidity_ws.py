@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-
 import asyncio
 import json
 import logging
 import threading
 from collections import defaultdict
-
 
 from typing import Iterable
 
@@ -65,7 +63,6 @@ async def _binance_listener(symbols: Iterable[str]):
             logger.error("Binance WS error: %s", exc)
             await asyncio.sleep(5)
 
-
 async def _bitget_listener(symbols):
     subs = [
         {
@@ -103,7 +100,6 @@ async def _bitget_listener(symbols):
         except Exception as exc:
             logger.error("Bitget WS error: %s", exc)
             await asyncio.sleep(5)
-
 
 async def _run(symbols):
     await asyncio.gather(_binance_listener(symbols), _bitget_listener(symbols))

@@ -27,7 +27,6 @@ BASE_URL_BITGET = "https://api.bitget.com"
 
 BASE_URL_BINANCE = "https://fapi.binance.com"
 
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")

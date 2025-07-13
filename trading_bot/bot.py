@@ -2,9 +2,7 @@ import logging
 import time
 from threading import Thread
 
-
 import pandas as pd
-
 
 from . import (
     config,
@@ -52,7 +50,6 @@ def run():
         }
         add_trade(trade)
 
-
     Thread(
         target=webapp.start_dashboard,
         args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
@@ -66,13 +63,18 @@ def run():
 
     trading_active = True
 
-
     logger.info("Starting trading loop...")
 
     while True:
         try:
 
-            if daily_profit <= config.DAILY_RISK_LIMIT and trading_active:
+            # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
+            # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
+            # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
+            # el valor negativo correspondiente.
+            loss_limit = -abs(config.DAILY_RISK_LIMIT)
+            if daily_profit <= loss_limit and trading_active:
+
                 trading_active = False
                 logger.error("Daily loss limit reached %.2f", daily_profit)
 
@@ -182,5 +184,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
-
