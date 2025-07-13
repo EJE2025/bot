@@ -80,7 +80,10 @@ PAGE = """
             </table>
         </div>
         <div class="text-center mt-4 text-muted small">
+
             &copy; 2025 Trading Bot Dashboard · Powered by Flask & Bootstrap
+
+
         </div>
     </div>
     <script>
@@ -132,3 +135,4 @@ def api_trades():
 def start_dashboard(host: str, port: int):
     """Run the Flask dashboard in real-time with trades from trade_manager."""
     app.run(host=host, port=port)
+

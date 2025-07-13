@@ -14,6 +14,7 @@ from . import (
     history,
     optimizer,
 )
+
 from .trade_manager import (
     add_trade,
     close_trade,
@@ -22,6 +23,7 @@ from .trade_manager import (
     load_trades,
     save_trades,
     count_open_trades,
+
 )
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 def run():
     load_trades()  # Carga operaciones abiertas al arrancar
+
 
     # Reconcile with actual exchange positions
     for pos in execution.fetch_positions():
@@ -57,24 +60,28 @@ def run():
 
     model = optimizer.load_model(config.MODEL_PATH)
     daily_profit = 0.0
+
     trading_active = True
 
     logger.info("Starting trading loop...")
 
     while True:
         try:
+
             # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
             # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
             # el valor negativo correspondiente.
             loss_limit = -abs(config.DAILY_RISK_LIMIT)
             if daily_profit <= loss_limit and trading_active:
+
                 trading_active = False
                 logger.error("Daily loss limit reached %.2f", daily_profit)
 
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
             if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
+
                 symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
                 for symbol in symbols:
@@ -103,6 +110,7 @@ def run():
                             sig["entry_price"],
                             order_type="limit",
                         )
+
                         if not isinstance(order, dict):
                             logger.warning("Order response unexpected for %s: %s", symbol, order)
                             continue
@@ -118,6 +126,7 @@ def run():
                         sig["entry_price"] = avg_price
                         sig["order_id"] = order_id
                         sig["status"] = "active"
+
                         add_trade(sig)
                         notify.send_telegram(
                             f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
@@ -161,9 +170,11 @@ def run():
                     notify.send_discord(f"Closed {op['symbol']} PnL {profit:.2f}")
 
             save_trades()  # Guarda el estado periódicamente
+
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
                 break
+
             time.sleep(60)
         except KeyboardInterrupt:
             break

@@ -24,6 +24,7 @@ UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
 
 BASE_URL_MEXC = "https://contract.mexc.com/api/v1"
 BASE_URL_BITGET = "https://api.bitget.com"
+
 BASE_URL_BINANCE = "https://fapi.binance.com"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")

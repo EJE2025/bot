@@ -1,6 +1,7 @@
 # Bot de Trading
 
 Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde Binance y ejecuta órdenes en Bitget.
+
 Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
 ## Funcionalidades
@@ -36,10 +37,10 @@ pip install -r requirements.txt
 python -m trading_bot.bot
 python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
-```
 
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
 `/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
+
 para cargar más o menos historial. Las velas descargadas se guardan en
 `cache/` para poder realizar análisis en modo offline si la API no está
 disponible.
@@ -61,6 +62,5 @@ variables definidas en `trading_bot/config.py`:
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
-
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
