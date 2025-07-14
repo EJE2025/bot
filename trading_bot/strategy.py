@@ -2,16 +2,51 @@ import logging
 import numpy as np
 import pandas as pd
 import time
+import requests
 from . import liquidity_ws
-from .indicators import compute_rsi, compute_macd, calculate_atr, calculate_support_resistance
-from . import config, data
+from .indicators import (
+    compute_rsi,
+    compute_macd,
+    calculate_atr,
+    calculate_support_resistance,
+)
+from . import config, data, execution
+
 
 logger = logging.getLogger(__name__)
 
 
-def sentiment_score(symbol: str) -> float:
-    # Placeholder for sentiment analysis
-    return np.random.uniform(-0.5, 0.5)
+
+def sentiment_score(symbol: str, period: str = "5m") -> float:
+    """Market sentiment based on long/short ratio from Bitget.
+
+    Returns a deterministic value normalized to [-0.5, 0.5].
+    """
+    url = "https://api.bitget.com/api/v2/mix/market/position-long-short"
+    params = {"symbol": symbol, "period": period}
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        if data.get("code") == "00000" and data.get("data"):
+            long_ratio = float(data["data"][0]["longPositionRatio"])
+            short_ratio = float(data["data"][0]["shortPositionRatio"])
+            return (long_ratio - short_ratio) / 2.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def calcular_tamano_posicion(balance_usdt: float, entry_price: float, atr_value: float,
+                             atr_multiplier: float, risk_per_trade_usd: float) -> float:
+    """Size position so max loss equals risk_per_trade_usd."""
+    distancia_stop = atr_value * atr_multiplier
+    if distancia_stop <= 0 or entry_price <= 0:
+        return 0.0
+
+    qty = risk_per_trade_usd / (distancia_stop * entry_price)
+    max_qty = balance_usdt / entry_price
+    return max(0.0, min(qty, max_qty))
+
 
 
 def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None):
@@ -28,9 +63,24 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
 
     entry_price = closes[-1]
     support, resistance = calculate_support_resistance(closes)
-    rsi_val = compute_rsi(closes, 100)[-1]
-    macd_val = compute_macd(closes)[0][-1]
-    atr_val = calculate_atr(highs, lows, closes) or 0
+
+    rsi_arr = compute_rsi(closes, config.RSI_PERIOD)
+    if rsi_arr.size == 0 or np.isnan(rsi_arr[-1]):
+        logger.error("[%s] invalid RSI", symbol)
+        return None
+    rsi_val = rsi_arr[-1]
+
+    macd_line, _, _ = compute_macd(closes)
+    if macd_line.size == 0 or np.isnan(macd_line[-1]):
+        logger.error("[%s] invalid MACD", symbol)
+        return None
+    macd_val = macd_line[-1]
+
+    atr_val = calculate_atr(highs, lows, closes)
+    if atr_val is None or np.isnan(atr_val):
+        logger.error("[%s] invalid ATR", symbol)
+        return None
+
     senti = sentiment_score(symbol)
     avg_vol = np.mean(vols[-10:])
     volume_factor = min(1, avg_vol / 1000)
@@ -67,10 +117,24 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         entry_price - atr_val * tp_factor)
 
     prob_success = min(max(score_long if decision == "BUY" else score_short, 0) / 5.0, 0.85) * volume_factor
-    leverage = 10
-    quantity = 10 / entry_price
+
+    leverage = config.DEFAULT_LEVERAGE
+    balance = execution.fetch_balance()
+    if config.RISK_PER_TRADE < 1:
+        risk_usd = balance * config.RISK_PER_TRADE
+    else:
+        risk_usd = config.RISK_PER_TRADE
+    quantity = calcular_tamano_posicion(
+        balance,
+        entry_price,
+        atr_val,
+        atr_mult,
+        risk_usd,
+    )
 
     risk = abs(entry_price - stop_loss)
+
+
     reward = abs(take_profit - entry_price)
     risk_reward = reward / risk if risk else 0.0
     signal = {

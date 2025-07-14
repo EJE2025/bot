@@ -28,6 +28,19 @@ def fetch_positions():
         return []
 
 
+
+def fetch_open_orders():
+    """Return a list of open orders on the exchange."""
+    if exchange is None:
+        return []
+    try:
+        orders = exchange.fetch_open_orders()
+        return orders
+    except Exception as exc:
+        logger.error("Failed fetching open orders: %s", exc)
+        return []
+
+
 def fetch_balance():
     """Return available USDT balance if possible."""
     if exchange is None:
@@ -41,7 +54,9 @@ def fetch_balance():
         return 0.0
 
 
-def check_order_filled(order_id: str, symbol: str, timeout: int = 15) -> bool:
+
+def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_FILL_TIMEOUT) -> bool:
+
     """Poll order status until filled or timeout."""
     if exchange is None:
         return False
@@ -54,13 +69,13 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = 15) -> bool:
             if status in ("closed", "filled"):
                 return True
             if status in ("canceled", "rejected"):
+                logger.warning("Order %s %s", order_id, status)
                 return False
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Fetch order %s error: %s", order_id, exc)
         time.sleep(2)
+    logger.warning("Order %s not filled after %ds", order_id, timeout)
     return False
-
-
 
 def setup_leverage(symbol_raw: str, leverage: int) -> None:
     if exchange is None:
@@ -85,12 +100,10 @@ def open_position(symbol: str, side: str, amount: float, price: float,
     bitget_sym = symbol.replace("_", "/") + ":USDT"
     if bitget_sym not in exchange.markets:
         raise OrderSubmitError(f"Market {bitget_sym} not available")
-
     bal = fetch_balance()
     cost = amount * price / exchange.markets[bitget_sym].get("contractSize", 1)
     if bal < cost:
         raise OrderSubmitError("Insufficient balance")
-
     for attempt in range(3):
         try:
             params = {"timeInForce": "GTC", "holdSide": "long" if side == "BUY" else "short"}
@@ -104,7 +117,6 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 ord_type = "limit"
             else:
                 ord_type = "limit"
-
             order = exchange.create_order(
 
                 symbol=bitget_sym,

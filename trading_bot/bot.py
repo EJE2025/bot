@@ -14,7 +14,6 @@ from . import (
     history,
     optimizer,
 )
-
 from .trade_manager import (
     add_trade,
     close_trade,
@@ -30,25 +29,52 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 logger = logging.getLogger(__name__)
 
 def run():
-    load_trades()  # Carga operaciones abiertas al arrancar
 
+    load_trades()  # Restaurar operaciones guardadas
 
-    # Reconcile with actual exchange positions
-    for pos in execution.fetch_positions():
+    # Sincronizar con posiciones reales en el exchange
+    positions = execution.fetch_positions()
+    active_symbols = set()
+    for pos in positions:
         symbol = pos.get("symbol", "").replace("/", "_").replace(":USDT", "")
-        if find_trade(symbol=symbol):
+        qty = float(pos.get("contracts", 0))
+        if qty == 0:
             continue
-        trade = {
-            "symbol": symbol,
-            "side": "BUY" if pos.get("side") == "long" else "SELL",
-            "quantity": float(pos.get("contracts", 0)),
-            "entry_price": float(pos.get("entryPrice", 0)),
-            "stop_loss": float(pos.get("stopLossPrice", 0)) or float(pos.get("entryPrice", 0)) * 0.98,
-            "take_profit": float(pos.get("takeProfitPrice", 0)) or float(pos.get("entryPrice", 0)) * 1.02,
-            "leverage": int(pos.get("leverage", 1)),
-            "status": "active",
-        }
-        add_trade(trade)
+        active_symbols.add(symbol)
+        trade = find_trade(symbol=symbol)
+        if trade:
+            trade.update(
+                quantity=qty,
+                entry_price=float(pos.get("entryPrice", trade.get("entry_price", 0))),
+                leverage=int(pos.get("leverage", trade.get("leverage", 1))),
+                status="active",
+            )
+        else:
+            trade = {
+                "symbol": symbol,
+                "side": "BUY" if pos.get("side") == "long" else "SELL",
+                "quantity": qty,
+                "entry_price": float(pos.get("entryPrice", 0)),
+                "stop_loss": float(pos.get("stopLossPrice", 0)) or float(pos.get("entryPrice", 0)) * 0.98,
+                "take_profit": float(pos.get("takeProfitPrice", 0)) or float(pos.get("entryPrice", 0)) * 1.02,
+                "leverage": int(pos.get("leverage", 1)),
+                "status": "active",
+            }
+            add_trade(trade)
+
+    # Eliminar operaciones locales que no existan en el exchange
+    for tr in list(all_open_trades()):
+        if tr["symbol"] not in active_symbols:
+            close_trade(trade_id=tr.get("trade_id"), reason="sync")
+
+    # Cancelar órdenes abiertas pendientes no registradas
+    for order in execution.fetch_open_orders():
+        sym = order.get("symbol", "").replace("/", "_").replace(":USDT", "")
+        if sym not in active_symbols:
+            execution.cancel_order(order.get("id"), sym)
+
+    # Launch the dashboard using trade_manager as the single source of trades
+    # (no operations list is passed).
 
     Thread(
         target=webapp.start_dashboard,
@@ -60,14 +86,12 @@ def run():
 
     model = optimizer.load_model(config.MODEL_PATH)
     daily_profit = 0.0
-
     trading_active = True
 
     logger.info("Starting trading loop...")
 
     while True:
         try:
-
             # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
             # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
@@ -81,7 +105,6 @@ def run():
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
             if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
-
                 symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
                 for symbol in symbols:
@@ -91,7 +114,9 @@ def run():
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if not sig or sig.get("risk_reward", 0) < 2.0:
+
+                    if not sig or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                      
                         continue
                     candidates.append(sig)
 
@@ -174,9 +199,10 @@ def run():
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
                 break
-
             time.sleep(60)
         except KeyboardInterrupt:
+            save_trades()
+
             break
         except Exception as exc:
             logger.error("Loop error: %s", exc)

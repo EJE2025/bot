@@ -87,8 +87,52 @@ def calculate_atr(highs: list[float], lows: list[float], closes: list[float], pe
         return None
 
 
-def calculate_support_resistance(prices, window=20):
+def calculate_support_resistance(prices, window: int = 50, tolerance: float = 0.02):
+    """Return simple support and resistance levels.
+
+    The function looks for local minima and maxima within the last ``window``
+    candles. Nearby levels are clustered together so that small outliers do not
+    produce unrealistic extremes. ``tolerance`` defines the maximum relative
+    distance between levels to consider them part of the same cluster.
+    """
+
+    prices = np.asarray(prices, dtype=float)
     if len(prices) < window:
         return None, None
+
+    try:
+        from scipy.signal import argrelextrema
+    except Exception as exc:  # pragma: no cover - scipy optional
+        logger.error("scipy required for support/resistance: %s", exc)
+        window_prices = prices[-window:]
+        return float(np.min(window_prices)), float(np.max(window_prices))
+
     window_prices = prices[-window:]
-    return min(window_prices), max(window_prices)
+
+    minima_idx = argrelextrema(window_prices, np.less_equal, order=2)[0]
+    maxima_idx = argrelextrema(window_prices, np.greater_equal, order=2)[0]
+
+    supports = window_prices[minima_idx] if minima_idx.size else window_prices[[np.argmin(window_prices)]]
+    resistances = window_prices[maxima_idx] if maxima_idx.size else window_prices[[np.argmax(window_prices)]]
+
+    def cluster(levels):
+        levels = np.sort(levels)
+        clusters = []
+        current = [levels[0]]
+        for lvl in levels[1:]:
+            if abs(lvl - current[-1]) / current[-1] <= tolerance:
+                current.append(lvl)
+            else:
+                clusters.append(np.mean(current))
+                current = [lvl]
+        clusters.append(np.mean(current))
+        return clusters
+
+    support_levels = cluster(supports)
+    resistance_levels = cluster(resistances)
+
+    support = min(support_levels) if support_levels else float(np.min(window_prices))
+    resistance = max(resistance_levels) if resistance_levels else float(np.max(window_prices))
+
+    return float(support), float(resistance)
+
