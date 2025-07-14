@@ -28,6 +28,7 @@ def fetch_positions():
         return []
 
 
+
 def fetch_open_orders():
     """Return a list of open orders on the exchange."""
     if exchange is None:
@@ -53,7 +54,9 @@ def fetch_balance():
         return 0.0
 
 
+
 def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_FILL_TIMEOUT) -> bool:
+
     """Poll order status until filled or timeout."""
     if exchange is None:
         return False
@@ -73,7 +76,6 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_F
         time.sleep(2)
     logger.warning("Order %s not filled after %ds", order_id, timeout)
     return False
-
 
 def setup_leverage(symbol_raw: str, leverage: int) -> None:
     if exchange is None:
@@ -116,6 +118,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
             else:
                 ord_type = "limit"
             order = exchange.create_order(
+
                 symbol=bitget_sym,
                 type=ord_type,
                 side="buy" if side == "BUY" else "sell",
@@ -123,7 +126,9 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 price=ord_price,
                 params=params,
             )
+
             return order
+
         except Exception:
             time.sleep(2 ** attempt)
     raise OrderSubmitError(f"Failed to open position {symbol}")

@@ -135,3 +135,4 @@ def calculate_support_resistance(prices, window: int = 50, tolerance: float = 0.
     resistance = max(resistance_levels) if resistance_levels else float(np.max(window_prices))
 
     return float(support), float(resistance)
+

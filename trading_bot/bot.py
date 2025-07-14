@@ -22,12 +22,14 @@ from .trade_manager import (
     load_trades,
     save_trades,
     count_open_trades,
+
 )
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 def run():
+
     load_trades()  # Restaurar operaciones guardadas
 
     # Sincronizar con posiciones reales en el exchange
@@ -73,6 +75,7 @@ def run():
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
+
     Thread(
         target=webapp.start_dashboard,
         args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
@@ -95,6 +98,7 @@ def run():
             # el valor negativo correspondiente.
             loss_limit = -abs(config.DAILY_RISK_LIMIT)
             if daily_profit <= loss_limit and trading_active:
+
                 trading_active = False
                 logger.error("Daily loss limit reached %.2f", daily_profit)
 
@@ -110,7 +114,9 @@ def run():
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
+
                     if not sig or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                      
                         continue
                     candidates.append(sig)
 
@@ -129,6 +135,7 @@ def run():
                             sig["entry_price"],
                             order_type="limit",
                         )
+
                         if not isinstance(order, dict):
                             logger.warning("Order response unexpected for %s: %s", symbol, order)
                             continue
@@ -144,6 +151,7 @@ def run():
                         sig["entry_price"] = avg_price
                         sig["order_id"] = order_id
                         sig["status"] = "active"
+
                         add_trade(sig)
                         notify.send_telegram(
                             f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
@@ -187,12 +195,14 @@ def run():
                     notify.send_discord(f"Closed {op['symbol']} PnL {profit:.2f}")
 
             save_trades()  # Guarda el estado periódicamente
+
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
                 break
             time.sleep(60)
         except KeyboardInterrupt:
             save_trades()
+
             break
         except Exception as exc:
             logger.error("Loop error: %s", exc)
