@@ -8,16 +8,37 @@ _EXCHANGE_CACHE = {}
 
 
 class MockExchange:
-    """Fallback exchange used when real connectivity fails."""
+    """Fallback exchange used when real connectivity fails or TEST_MODE."""
 
-    markets: dict = {}
+    def __init__(self):
+        # populate a few common markets so validations pass
+        self.markets = {
+            "BTC/USDT:USDT": {"id": "BTCUSDT_UMCBL", "contractSize": 1},
+            "ETH/USDT:USDT": {"id": "ETHUSDT_UMCBL", "contractSize": 1},
+        }
+        self.orders: dict[str, dict] = {}
 
     def load_markets(self):
-        self.markets = {}
+        return self.markets
 
-    def create_order(self, *args, **kwargs):
-        logger.info("Mock order created %s %s", args, kwargs)
-        return {"id": "MOCK"}
+    def fetch_balance(self):
+        # return a large dummy balance for tests
+        return {"USDT": {"free": 1_000_000}}
+
+    def create_order(self, symbol, type_, side, amount, price=None, params=None):
+        order_id = f"MOCK_{len(self.orders)+1}"
+        order = {
+            "id": order_id,
+            "symbol": symbol,
+            "type": type_,
+            "side": side,
+            "amount": amount,
+            "price": price,
+            "status": "closed",
+        }
+        self.orders[order_id] = order
+        logger.info("Mock order %s", order)
+        return order
 
     def cancel_order(self, *args, **kwargs):
         logger.info("Mock cancel %s %s", args, kwargs)
@@ -36,7 +57,6 @@ def get_exchange(name: str):
     if config.TEST_MODE:
 
         logger.warning("TEST_MODE enabled - using MockExchange")
-
         ex = MockExchange()
     elif name == "bitget":
         ex = ccxt.bitget({
@@ -64,8 +84,6 @@ def get_exchange(name: str):
         logger.error("Failed to connect to %s: %s", name, exc)
         ex = MockExchange()
         ex.load_markets()
-
         logger.error("Using MockExchange due to connection failure")
-
     _EXCHANGE_CACHE[name] = ex
     return ex

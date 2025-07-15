@@ -1,11 +1,9 @@
 # Bot de Trading
 
 Este repositorio contiene un bot de trading de criptomonedas que obtiene datos de mercado desde Binance y ejecuta órdenes en Bitget.
-
 Además soporta la conexión con otros exchanges opcionalmente y dispone de un pequeño panel web para monitorear las operaciones en tiempo real. También pueden enviarse avisos por Telegram y Discord.
 
 ## Funcionalidades
-
 
 - Indicadores técnicos avanzados (RSI, MACD, ATR) con soportes y resistencias
   detectados mediante extremos locales (requiere `scipy`)
@@ -14,6 +12,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 
 - Stop-loss y take-profit con límite diario de pérdidas
 - Filtrado de símbolos y ajuste de apalancamiento
+- Verificación del apalancamiento aplicado en Bitget tras la configuración
 - Ejecución de órdenes en varios exchanges mediante `ccxt`
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
@@ -24,6 +23,8 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar
+
+- Cancelación automática de órdenes límite que exceden cierta antigüedad
 - Verificación de balance y llenado de órdenes con registro de slippage
 - Historial persistente de operaciones en `trade_history.csv` y archivos JSON
 - Endpoints públicos de Binance para ticker, libro de órdenes y velas
@@ -46,7 +47,6 @@ python -m trading_bot.train_model miarchivo.csv --target result
 
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
 `/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
-
 para cargar más o menos historial. Las velas descargadas se guardan en
 `cache/` para poder realizar análisis en modo offline si la API no está
 disponible.
@@ -71,9 +71,10 @@ variables definidas en `trading_bot/config.py`:
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
 - `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
+
+- `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
+- `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
-
-
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar.

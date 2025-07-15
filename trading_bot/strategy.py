@@ -16,6 +16,23 @@ from . import config, data, execution
 logger = logging.getLogger(__name__)
 
 
+def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: float,
+                       stop_loss: float, prob_success: float, modelo_historico) -> None:
+    """Log detailed signal information and model status."""
+    if modelo_historico is None:
+        logger.warning("Modelo histórico no cargado, prob_success sin ajuste")
+    else:
+        logger.info("Modelo histórico cargado correctamente")
+
+    logger.info(
+        "[%s] %s entry %.4f TP %.4f SL %.4f | Probabilidad de éxito: %.2f%%",
+        symbol,
+        side,
+        entry_price,
+        take_profit,
+        stop_loss,
+        prob_success * 100,
+    )
 
 def sentiment_score(symbol: str, period: str = "5m") -> float:
     """Market sentiment based on long/short ratio from Bitget.
@@ -48,7 +65,6 @@ def calcular_tamano_posicion(balance_usdt: float, entry_price: float, atr_value:
     return max(0.0, min(qty, max_qty))
 
 
-
 def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None):
     if info is None:
         info = data.get_market_data(symbol, interval="Min15", limit=1000)
@@ -63,7 +79,6 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
 
     entry_price = closes[-1]
     support, resistance = calculate_support_resistance(closes)
-
     rsi_arr = compute_rsi(closes, config.RSI_PERIOD)
     if rsi_arr.size == 0 or np.isnan(rsi_arr[-1]):
         logger.error("[%s] invalid RSI", symbol)
@@ -117,7 +132,6 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         entry_price - atr_val * tp_factor)
 
     prob_success = min(max(score_long if decision == "BUY" else score_short, 0) / 5.0, 0.85) * volume_factor
-
     leverage = config.DEFAULT_LEVERAGE
     balance = execution.fetch_balance()
     if config.RISK_PER_TRADE < 1:
@@ -133,7 +147,6 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
     )
 
     risk = abs(entry_price - stop_loss)
-
 
     reward = abs(take_profit - entry_price)
     risk_reward = reward / risk if risk else 0.0
@@ -159,7 +172,16 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
         signal["prob_success"] = (prob_success + pred_hist) / 2
 
-    logger.info("[%s] %s entry %.4f TP %.4f SL %.4f", symbol, decision, entry_price, take_profit, stop_loss)
+
+    log_signal_details(
+        symbol,
+        decision,
+        entry_price,
+        take_profit,
+        stop_loss,
+        signal["prob_success"],
+        modelo_historico,
+    )
     return signal
 
 

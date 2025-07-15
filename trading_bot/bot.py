@@ -22,14 +22,12 @@ from .trade_manager import (
     load_trades,
     save_trades,
     count_open_trades,
-
 )
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 def run():
-
     load_trades()  # Restaurar operaciones guardadas
 
     # Sincronizar con posiciones reales en el exchange
@@ -73,9 +71,11 @@ def run():
         if sym not in active_symbols:
             execution.cancel_order(order.get("id"), sym)
 
+    # Remove any stale pending orders
+    execution.cleanup_old_orders()
+
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
-
     Thread(
         target=webapp.start_dashboard,
         args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
@@ -92,13 +92,14 @@ def run():
 
     while True:
         try:
+
+            execution.cleanup_old_orders()
             # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
             # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
             # el valor negativo correspondiente.
             loss_limit = -abs(config.DAILY_RISK_LIMIT)
             if daily_profit <= loss_limit and trading_active:
-
                 trading_active = False
                 logger.error("Daily loss limit reached %.2f", daily_profit)
 
@@ -114,9 +115,7 @@ def run():
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-
                     if not sig or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
-                      
                         continue
                     candidates.append(sig)
 
@@ -127,7 +126,7 @@ def run():
                     symbol = sig["symbol"]
                     raw = symbol.replace("_", "")
                     try:
-                        execution.setup_leverage(raw, sig["leverage"])
+                        execution.setup_leverage(execution.exchange, raw, sig["leverage"])
                         order = execution.open_position(
                             symbol,
                             sig["side"],
@@ -135,7 +134,6 @@ def run():
                             sig["entry_price"],
                             order_type="limit",
                         )
-
                         if not isinstance(order, dict):
                             logger.warning("Order response unexpected for %s: %s", symbol, order)
                             continue
@@ -151,7 +149,6 @@ def run():
                         sig["entry_price"] = avg_price
                         sig["order_id"] = order_id
                         sig["status"] = "active"
-
                         add_trade(sig)
                         notify.send_telegram(
                             f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
@@ -181,18 +178,45 @@ def run():
 
                 if close:
                     try:
-                        execution.close_position(op["symbol"], side_close, op["quantity"])
+
+                        order = execution.close_position(op["symbol"], side_close, op["quantity"])
+                        if not isinstance(order, dict):
+                            logger.warning("Close response unexpected for %s: %s", op["symbol"], order)
+                            continue
+                        order_id = order.get("id")
+                        if not execution.check_order_filled(order_id, op["symbol"]):
+                            logger.warning("Close order not filled for %s", op["symbol"])
+                            execution.cancel_order(order_id, op["symbol"])
+                            continue
+                        exec_price = float(order.get("average") or price)
                     except execution.OrderSubmitError:
                         logger.error("Failed closing %s", op["symbol"])
                         continue
+                    expected = op["take_profit"] if (
+                        (op["side"] == "BUY" and price >= op["take_profit"]) or
+                        (op["side"] == "SELL" and price <= op["take_profit"])
+                    ) else op["stop_loss"]
+                    slippage = exec_price - expected
+                    logger.info(
+                        "Closed %s at %.4f (target %.4f) slippage %.4f",
+                        op["symbol"], exec_price, expected, slippage
+                    )
+                    if abs(slippage) > config.MAX_SLIPPAGE:
+                        logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
                     op["close_timestamp"] = pd.Timestamp.now()
-                    op["exit_price"] = price
+                    op["exit_price"] = exec_price
+                    
                     op["profit"] = profit
                     history.append_trade(op)
                     daily_profit += profit
                     close_trade(trade_id=op.get("trade_id"), reason="TP" if profit >= 0 else "SL")
-                    notify.send_telegram(f"Closed {op['symbol']} PnL {profit:.2f}")
-                    notify.send_discord(f"Closed {op['symbol']} PnL {profit:.2f}")
+
+                    notify.send_telegram(
+                        f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
+                    )
+                    notify.send_discord(
+                        f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
+                    )
 
             save_trades()  # Guarda el estado periódicamente
 
@@ -201,6 +225,11 @@ def run():
                 break
             time.sleep(60)
         except KeyboardInterrupt:
+
+            # On manual interrupt, cancel any pending orders and persist trades
+            for order in execution.fetch_open_orders():
+                sym = order.get("symbol", "").replace("/", "_").replace(":USDT", "")
+                execution.cancel_order(order.get("id"), sym)
             save_trades()
 
             break

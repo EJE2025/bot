@@ -24,7 +24,6 @@ UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
 
 BASE_URL_MEXC = "https://contract.mexc.com/api/v1"
 BASE_URL_BITGET = "https://api.bitget.com"
-
 BASE_URL_BINANCE = "https://fapi.binance.com"
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -44,10 +43,16 @@ DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 ORDER_FILL_TIMEOUT = int(os.getenv("ORDER_FILL_TIMEOUT", "15"))
 
 
+# Seconds after which pending limit orders are cancelled automatically
+ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "60"))
+
 # Web dashboard configuration
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))
 
+
+# Maximum acceptable slippage when closing a position
+MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
 
 # Percent of available balance risked on each trade (e.g. 0.01 = 1%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
