@@ -47,7 +47,9 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
             logger.warning("Network error fetching %s (attempt %d): %s", symbol, attempt + 1, exc)
             time.sleep(2 ** attempt)
     # fallback to cache
+
     path = _cache_path(symbol_raw, interval, limit)
+
     if os.path.exists(path):
         logger.info("Using cached data for %s", symbol)
         with open(path, "r", encoding="utf-8") as fh:
@@ -63,6 +65,7 @@ def get_ticker(symbol: str) -> Dict:
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+
         return data
     except Exception as exc:
         logger.error("Ticker network error for %s: %s", symbol, exc)
@@ -70,6 +73,7 @@ def get_ticker(symbol: str) -> Dict:
 
 
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
+
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/24hr"
     try:
         resp = requests.get(url, timeout=10)
@@ -109,6 +113,7 @@ def get_current_price_ticker(symbol: str) -> float:
 
 
 def get_order_book(symbol: str, limit: int = 50) -> Dict:
+
     """Fetch order book data from Binance for a given symbol."""
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
     params = {"symbol": symbol.replace("_", ""), "limit": limit}

@@ -12,6 +12,7 @@ from .indicators import (
 )
 from . import config, data, execution
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +33,6 @@ def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: 
         stop_loss,
         prob_success * 100,
     )
-
 
 def sentiment_score(symbol: str, period: str = "5m") -> float:
     """Market sentiment based on long/short ratio from Bitget.
@@ -171,6 +171,7 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         )
         pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
         signal["prob_success"] = (prob_success + pred_hist) / 2
+
 
     log_signal_details(
         symbol,

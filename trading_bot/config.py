@@ -42,6 +42,7 @@ DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 # Seconds to wait for a limit order to be filled before canceling
 ORDER_FILL_TIMEOUT = int(os.getenv("ORDER_FILL_TIMEOUT", "15"))
 
+
 # Seconds after which pending limit orders are cancelled automatically
 ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "60"))
 
@@ -49,8 +50,10 @@ ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "60"))
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))
 
+
 # Maximum acceptable slippage when closing a position
 MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
 
 # Percent of available balance risked on each trade (e.g. 0.01 = 1%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
+

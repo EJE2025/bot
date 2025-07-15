@@ -3,6 +3,8 @@ import time
 from . import config
 from .exchanges import get_exchange, MockExchange
 
+
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -46,6 +48,7 @@ def fetch_balance():
         return 0.0
     if config.TEST_MODE or isinstance(exchange, MockExchange):
         return 1_000_000.0
+
     try:
         bal = exchange.fetch_balance()
         usdt = bal.get("USDT", {})
@@ -55,7 +58,9 @@ def fetch_balance():
         return 0.0
 
 
+
 def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_FILL_TIMEOUT) -> bool:
+
     """Poll order status until filled or timeout."""
     if exchange is None:
         return False
@@ -75,6 +80,7 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_F
         time.sleep(2)
     logger.warning("Order %s not filled after %ds", order_id, timeout)
     return False
+
 
 
 def setup_leverage(exchange, symbol_raw: str, leverage: int = 10) -> bool:
@@ -120,6 +126,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
+
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
         if bitget_sym not in exchange.markets:
             raise OrderSubmitError(f"Market {bitget_sym} not available")
@@ -148,6 +155,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 price=ord_price,
                 params=params,
             )
+
             return order
         except Exception as exc:
             if attempt < 2:
@@ -155,6 +163,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 time.sleep(2 ** attempt)
             else:
                 raise OrderSubmitError(f"Failed to open position {symbol}") from exc
+
     raise OrderSubmitError(f"Failed to open position {symbol}")
 
 
@@ -162,6 +171,7 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
+
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
         if bitget_sym not in exchange.markets:
             raise OrderSubmitError(f"Market {bitget_sym} not available")
@@ -180,12 +190,14 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
                 price=ord_price,
                 params=params,
             )
+
         except Exception as exc:
             if attempt < 2:
                 logger.warning("Retry close %s attempt %d error: %s", symbol, attempt + 1, exc)
                 time.sleep(2 ** attempt)
             else:
                 raise OrderSubmitError(f"Failed to close position {symbol}") from exc
+
     raise OrderSubmitError(f"Failed to close position {symbol}")
 
 
@@ -198,6 +210,7 @@ def cancel_order(order_id: str, symbol: str):
         exchange.cancel_order(order_id, bitget_sym)
     except Exception as exc:
         logger.error("Error canceling %s: %s", order_id, exc)
+
 
 
 def cleanup_old_orders(max_age: int = config.ORDER_MAX_AGE):

@@ -92,6 +92,7 @@ def run():
 
     while True:
         try:
+
             execution.cleanup_old_orders()
             # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
@@ -177,6 +178,7 @@ def run():
 
                 if close:
                     try:
+
                         order = execution.close_position(op["symbol"], side_close, op["quantity"])
                         if not isinstance(order, dict):
                             logger.warning("Close response unexpected for %s: %s", op["symbol"], order)
@@ -203,10 +205,12 @@ def run():
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
                     op["close_timestamp"] = pd.Timestamp.now()
                     op["exit_price"] = exec_price
+                    
                     op["profit"] = profit
                     history.append_trade(op)
                     daily_profit += profit
                     close_trade(trade_id=op.get("trade_id"), reason="TP" if profit >= 0 else "SL")
+
                     notify.send_telegram(
                         f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
                     )
@@ -215,16 +219,19 @@ def run():
                     )
 
             save_trades()  # Guarda el estado periódicamente
+
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
                 break
             time.sleep(60)
         except KeyboardInterrupt:
+
             # On manual interrupt, cancel any pending orders and persist trades
             for order in execution.fetch_open_orders():
                 sym = order.get("symbol", "").replace("/", "_").replace(":USDT", "")
                 execution.cancel_order(order.get("id"), sym)
             save_trades()
+
             break
         except Exception as exc:
             logger.error("Loop error: %s", exc)
