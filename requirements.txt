@@ -1,0 +1,9 @@
+ccxt
+requests
+python-dotenv
+pandas
+numpy
+scikit-learn
+flask
+websockets
+scipy
