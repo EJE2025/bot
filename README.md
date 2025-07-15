@@ -16,10 +16,20 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Ejecución de órdenes en varios exchanges mediante `ccxt`
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
-- Panel web en `http://localhost:8000` para monitoreo en tiempo real
+- Panel web en `http://localhost:8000` para monitoreo en tiempo real. Los datos
+  de operaciones y liquidez se consultan pulsando los botones **Mostrar
+  Trades** y **Mostrar Liquidez**, que llaman a los endpoints `/api/trades` y
+  `/api/liquidity` respectivamente
+- Las operaciones abiertas se registran en `trade_manager` y el dashboard las
+  obtiene directamente desde ahí. Cada operación muestra en la tabla su PnL no
+  realizado calculado con el precio actual
 - Notificaciones por Telegram y Discord al abrir y cerrar operaciones
 - Arquitectura modular para facilitar mejoras
 - Análisis del libro de órdenes para zonas de liquidez
+- Los símbolos en el dashboard de liquidez muestran la fuente, p.ej.
+  `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
+- La lista de símbolos para liquidez se obtiene dinámicamente de Bitget según su
+  volumen en futuros USDT
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar
