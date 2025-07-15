@@ -236,6 +236,7 @@ def run():
                     )
                     if abs(slippage) > config.MAX_SLIPPAGE:
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
+
                     close_existing_trade(
                         op,
                         exec_price,
