@@ -1,6 +1,7 @@
 import logging
 import time
 from threading import Thread
+from datetime import datetime
 
 import pandas as pd
 
@@ -203,13 +204,25 @@ def run():
                     )
                     if abs(slippage) > config.MAX_SLIPPAGE:
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-                    op["close_timestamp"] = pd.Timestamp.now()
+                    close_ts = datetime.utcnow().isoformat()
+                    update_trade(
+                        trade_id=op.get("trade_id"),
+                        exit_price=exec_price,
+                        profit=profit,
+                        close_time=close_ts,
+                    )
+                    op["close_time"] = close_ts
                     op["exit_price"] = exec_price
-                    
+
                     op["profit"] = profit
                     history.append_trade(op)
                     daily_profit += profit
-                    close_trade(trade_id=op.get("trade_id"), reason="TP" if profit >= 0 else "SL")
+                    close_trade(
+                        trade_id=op.get("trade_id"),
+                        reason="TP" if profit >= 0 else "SL",
+                        exit_price=exec_price,
+                        profit=profit,
+                    )
 
                     notify.send_telegram(
                         f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
@@ -222,6 +235,7 @@ def run():
 
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
+                save_trades()
                 break
             time.sleep(60)
         except KeyboardInterrupt:
