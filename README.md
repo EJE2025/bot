@@ -78,3 +78,8 @@ variables definidas en `trading_bot/config.py`:
 - `WEBAPP_PORT` dashboard port (default `8000`)
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
+
+## Licencia
+
+Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más informacion.
+
