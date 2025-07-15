@@ -72,6 +72,9 @@ variables definidas en `trading_bot/config.py`:
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
 - `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
 
+- `ENABLE_TRADE_HISTORY_LOG` activa el registro detallado de cambios en memoria (default `0`)
+- `MAX_TRADE_HISTORY_SIZE` número máximo de eventos en memoria antes de descartar los más antiguos (default `1000`)
+
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)

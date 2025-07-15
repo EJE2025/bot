@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import time
@@ -160,7 +161,7 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         "take_profit": take_profit,
         "prob_success": prob_success,
         "risk_reward": risk_reward,
-        "open_timestamp": pd.Timestamp.now(),
+        "open_time": datetime.utcnow().isoformat(),
     }
 
     if modelo_historico and risk > 0:

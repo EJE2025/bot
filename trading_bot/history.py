@@ -12,8 +12,8 @@ FIELDS = [
     "take_profit",
     "stop_loss",
     "profit",
-    "open_timestamp",
-    "close_timestamp",
+    "open_time",
+    "close_time",
 ]
 
 def append_trade(row: dict):
