@@ -33,14 +33,21 @@ _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
 _lock = threading.Lock()
 
+# Reconnection delay in seconds
+RECONNECT_DELAY = 5
+
 
 
 async def _binance_listener(symbols: Iterable[str]):
-    streams = "/".join([f"{BINANCE_SYMBOL(sym).lower()}@depth{DEPTH}@100ms" for sym in symbols])
+    streams = "/".join(
+        [f"{BINANCE_SYMBOL(sym).lower()}@depth{DEPTH}@100ms" for sym in symbols]
+    )
     url = BINANCE_WS_BASE + streams
     while True:
         try:
+            logger.info("Connecting to Binance WS: %s", url)
             async with websockets.connect(url, ping_interval=None) as ws:
+                logger.info("Binance WS connected")
                 async for message in ws:
                     data = json.loads(message)
                     content = data.get("data")
@@ -52,11 +59,22 @@ async def _binance_listener(symbols: Iterable[str]):
                     sym = sym_raw[:-4] + "_" + sym_raw[-4:]
                     with _lock:
                         book = _liquidity[sym]
-                        book["bids"] = {float(p): float(q) for p, q in content.get("bids", [])}
-                        book["asks"] = {float(p): float(q) for p, q in content.get("asks", [])}
+                        book["bids"] = {
+                            float(p): float(q) for p, q in content.get("bids", [])
+                        }
+                        book["asks"] = {
+                            float(p): float(q) for p, q in content.get("asks", [])
+                        }
+        except (websockets.ConnectionClosed, asyncio.TimeoutError) as exc:
+            logger.warning(
+                "Binance WS disconnected: %s. Reconnecting in %ss...",
+                exc,
+                RECONNECT_DELAY,
+            )
+            await asyncio.sleep(RECONNECT_DELAY)
         except Exception as exc:
-            logger.error("Binance WS error: %s", exc)
-            await asyncio.sleep(5)
+            logger.error("Unexpected error in Binance listener: %s", exc, exc_info=True)
+            await asyncio.sleep(RECONNECT_DELAY)
 
 async def _bitget_listener(symbols):
     subs = [
@@ -68,7 +86,9 @@ async def _bitget_listener(symbols):
     ]
     while True:
         try:
+            logger.info("Connecting to Bitget WS: %s", BITGET_WS_URL)
             async with websockets.connect(BITGET_WS_URL, ping_interval=None) as ws:
+                logger.info("Bitget WS connected")
                 for sub in subs:
                     await ws.send(json.dumps(sub))
                 async for message in ws:
@@ -89,29 +109,71 @@ async def _bitget_listener(symbols):
                             sym_fmt = sym
                         with _lock:
                             book = _liquidity[sym_fmt]
-                            book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
-                            book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
+                            book["bids"] = {
+                                float(b[0]): float(b[1]) for b in item.get("bids", [])
+                            }
+                            book["asks"] = {
+                                float(a[0]): float(a[1]) for a in item.get("asks", [])
+                            }
+        except (websockets.ConnectionClosed, asyncio.TimeoutError) as exc:
+            logger.warning(
+                "Bitget WS disconnected: %s. Reconnecting in %ss...",
+                exc,
+                RECONNECT_DELAY,
+            )
+            await asyncio.sleep(RECONNECT_DELAY)
         except Exception as exc:
-            logger.error("Bitget WS error: %s", exc)
-            await asyncio.sleep(5)
+            logger.error("Unexpected error in Bitget listener: %s", exc, exc_info=True)
+            await asyncio.sleep(RECONNECT_DELAY)
 
 async def _run(symbols):
-    await asyncio.gather(_binance_listener(symbols), _bitget_listener(symbols))
+    try:
+        await asyncio.gather(
+            _binance_listener(symbols),
+            _bitget_listener(symbols),
+        )
+    except Exception as exc:
+        logger.error("Critical error in liquidity_ws _run: %s", exc, exc_info=True)
+        global _loop
+        _loop = None
+
+
+def _start_loop(loop: asyncio.AbstractEventLoop, symbols: Iterable[str]):
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_run(symbols))
+    except Exception as exc:
+        logger.error("Error in liquidity_ws event loop: %s", exc, exc_info=True)
+    finally:
+        loop.close()
+        global _loop
+        _loop = None
+        logger.info("Liquidity WS event loop closed")
 
 
 def start(symbols):
     """Start or update websocket listeners in a background thread."""
     global _loop, _thread
-    if _loop:
+    if _thread and not _thread.is_alive():
+        logger.info("Liquidity WS thread dead, resetting loop")
+        _loop = None
+        _thread = None
+    if _loop is not None:
+        logger.info("Liquidity WS already running")
         return
     _loop = asyncio.new_event_loop()
-
-    def runner():
-        asyncio.set_event_loop(_loop)
-        _loop.run_until_complete(_run(symbols))
-
-    _thread = threading.Thread(target=runner, daemon=True)
+    _thread = threading.Thread(target=_start_loop, args=(_loop, symbols), daemon=True)
     _thread.start()
+    logger.info("Liquidity WS thread started")
+
+
+def stop():
+    """Stop the websocket listeners and event loop."""
+    global _loop
+    if _loop is not None:
+        logger.info("Stopping Liquidity WS...")
+        _loop.call_soon_threadsafe(_loop.stop)
+        _loop = None
 
 
 def get_liquidity(symbol=None):
@@ -125,3 +187,4 @@ def get_liquidity(symbol=None):
 # Example usage to start streaming the top 15 symbols:
 # top_symbols = ["BTC_USDT", "ETH_USDT", ...]  # output from data.get_common_top_symbols()
 # start(top_symbols)
+
