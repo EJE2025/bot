@@ -1,6 +1,7 @@
 import logging
 import time
 from threading import Thread
+from datetime import datetime
 
 import pandas as pd
 
@@ -18,6 +19,7 @@ from .trade_manager import (
     add_trade,
     close_trade,
     find_trade,
+    update_trade,
     all_open_trades,
     load_trades,
     save_trades,
@@ -26,6 +28,60 @@ from .trade_manager import (
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def open_new_trade(signal: dict):
+    """Open a position on the exchange and register it via trade_manager."""
+    symbol = signal["symbol"]
+    raw = symbol.replace("_", "")
+    try:
+        execution.setup_leverage(execution.exchange, raw, signal["leverage"])
+        order = execution.open_position(
+            symbol,
+            signal["side"],
+            signal["quantity"],
+            signal["entry_price"],
+            order_type="limit",
+        )
+        if not isinstance(order, dict):
+            logger.warning("Order response unexpected for %s: %s", symbol, order)
+            return None
+        order_id = order.get("id")
+        if not execution.check_order_filled(order_id, symbol):
+            logger.warning("Order not filled for %s", symbol)
+            execution.cancel_order(order_id, symbol)
+            return None
+        avg_price = float(order.get("average") or signal["entry_price"])
+        slippage = abs(avg_price - signal["entry_price"]) / signal["entry_price"]
+        if slippage > 0.01:
+            logger.warning("High slippage %.2f%% on %s", slippage * 100, symbol)
+        trade = {
+            "symbol": symbol,
+            "side": signal["side"],
+            "quantity": signal["quantity"],
+            "entry_price": avg_price,
+            "take_profit": signal.get("take_profit"),
+            "stop_loss": signal.get("stop_loss"),
+            "leverage": signal.get("leverage", config.DEFAULT_LEVERAGE),
+            "order_id": order_id,
+            "status": "active",
+            "open_time": signal.get("open_time", datetime.utcnow().isoformat()),
+        }
+        add_trade(trade)
+        return trade
+    except execution.OrderSubmitError:
+        logger.error("Order submission failed for %s", symbol)
+    except Exception as exc:
+        logger.error("Error processing %s: %s", symbol, exc)
+    return None
+
+
+def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: str) -> None:
+    """Update the trade with final info and mark it closed."""
+    close_ts = datetime.utcnow().isoformat()
+    update_trade(trade.get("trade_id"), exit_price=exit_price, profit=profit, close_time=close_ts)
+    history.append_trade({**trade, "exit_price": exit_price, "profit": profit, "close_time": close_ts})
+    close_trade(trade_id=trade.get("trade_id"), reason=reason, exit_price=exit_price, profit=profit)
 
 def run():
     load_trades()  # Restaurar operaciones guardadas
@@ -126,39 +182,16 @@ def run():
                     symbol = sig["symbol"]
                     raw = symbol.replace("_", "")
                     try:
-                        execution.setup_leverage(execution.exchange, raw, sig["leverage"])
-                        order = execution.open_position(
-                            symbol,
-                            sig["side"],
-                            sig["quantity"],
-                            sig["entry_price"],
-                            order_type="limit",
-                        )
-                        if not isinstance(order, dict):
-                            logger.warning("Order response unexpected for %s: %s", symbol, order)
+                        trade = open_new_trade(sig)
+                        if not trade:
                             continue
-                        order_id = order.get("id")
-                        if not execution.check_order_filled(order_id, symbol):
-                            logger.warning("Order not filled for %s", symbol)
-                            execution.cancel_order(order_id, symbol)
-                            continue
-                        avg_price = float(order.get("average") or sig["entry_price"])
-                        slippage = abs(avg_price - sig["entry_price"]) / sig["entry_price"]
-                        if slippage > 0.01:
-                            logger.warning("High slippage %.2f%% on %s", slippage*100, symbol)
-                        sig["entry_price"] = avg_price
-                        sig["order_id"] = order_id
-                        sig["status"] = "active"
-                        add_trade(sig)
                         notify.send_telegram(
-                            f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
+                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
                         )
                         notify.send_discord(
-                            f"Opened {symbol} {sig['side']} @ {sig['entry_price']}"
+                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
                         )
-                        logger.info("Opened trade: %s", order)
-                    except execution.OrderSubmitError:
-                        logger.error("Order submission failed for %s", symbol)
+                        logger.info("Opened trade: %s", trade)
                     except Exception as exc:
                         logger.error("Error processing %s: %s", symbol, exc)
 
@@ -203,13 +236,13 @@ def run():
                     )
                     if abs(slippage) > config.MAX_SLIPPAGE:
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-                    op["close_timestamp"] = pd.Timestamp.now()
-                    op["exit_price"] = exec_price
-                    
-                    op["profit"] = profit
-                    history.append_trade(op)
+                    close_existing_trade(
+                        op,
+                        exec_price,
+                        profit,
+                        "TP" if profit >= 0 else "SL",
+                    )
                     daily_profit += profit
-                    close_trade(trade_id=op.get("trade_id"), reason="TP" if profit >= 0 else "SL")
 
                     notify.send_telegram(
                         f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
@@ -222,6 +255,7 @@ def run():
 
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")
+                save_trades()
                 break
             time.sleep(60)
         except KeyboardInterrupt:
