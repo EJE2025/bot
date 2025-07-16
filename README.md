@@ -41,7 +41,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Historial persistente de operaciones en `trade_history.csv` y archivos JSON
 - Endpoints públicos de Binance para ticker, libro de órdenes y velas
 - Flujo en tiempo real del order book por `wss://fstream.binance.com`
-- Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos
+- Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos. Sin pasar símbolos se conectará automáticamente a los 15 pares de mayor volumen
 - Modelos de machine learning optimizados con `trading_bot.optimizer`
 - Entrenamiento de modelos con `python -m trading_bot.train_model`
 - Exchange simulado para pruebas sin conexión a Bitget
