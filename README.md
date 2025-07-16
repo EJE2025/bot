@@ -90,7 +90,8 @@ variables definidas en `trading_bot/config.py`:
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
 
-Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
+Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
+cargará automáticamente ese archivo al iniciarse.
 
 ## Licencia
 

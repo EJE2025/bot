@@ -1,3 +1,13 @@
+import os
+from dotenv import load_dotenv
+
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path)
+if not os.getenv("BITGET_API_KEY"):
+    print("\u26a0\ufe0f  No se carg\xf3 la API KEY. Revisa si el archivo .env existe y est\xe1 bien ubicado.")
+else:
+    print("\u2705 Archivo .env cargado correctamente.")
+
 import logging
 import time
 from threading import Thread
@@ -236,7 +246,6 @@ def run():
                     )
                     if abs(slippage) > config.MAX_SLIPPAGE:
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-
                     close_existing_trade(
                         op,
                         exec_price,
