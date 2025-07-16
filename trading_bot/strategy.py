@@ -192,7 +192,10 @@ SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 
 def start_liquidity(symbols=None):
     """Start the liquidity websocket listeners when running the bot."""
-    liquidity_ws.start(symbols or SYMBOLS)
+    if symbols is None:
+        liquidity_ws.start()
+    else:
+        liquidity_ws.start(symbols)
 
 def print_liquidity():
     """Example function showing how to query liquidity data."""
