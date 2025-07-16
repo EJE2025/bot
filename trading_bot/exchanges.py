@@ -3,6 +3,7 @@ import logging
 import random
 import time
 import requests
+
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ class MockExchange:
     """Simple deterministic mock of a futures exchange for tests."""
 
     def __init__(self):
+
         # Generate a set of markets with fixed random volume for the session
         bases = [
             "BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "DOT", "AVAX",
@@ -105,6 +107,7 @@ class MockExchange:
     def set_leverage(self, leverage: int, market_id: str):
         self.leverage[market_id] = leverage
         return {"info": f"Leverage set to {leverage}x for {market_id}"}
+
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         order = {
