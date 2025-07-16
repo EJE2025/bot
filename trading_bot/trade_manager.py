@@ -4,6 +4,10 @@ import threading
 import json
 import os
 from datetime import datetime
+import logging
+from . import config
+
+logger = logging.getLogger(__name__)
 
 open_trades = []
 closed_trades = []
@@ -17,15 +21,15 @@ def add_trade(trade):
     """Añade una nueva operación a la lista de abiertas."""
     with LOCK:
         if "trade_id" not in trade:
-            trade["trade_id"] = f"{trade['symbol']}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-        trade.setdefault("open_time", datetime.now().isoformat())
+            trade["trade_id"] = f"{trade['symbol']}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+        trade.setdefault("open_time", datetime.utcnow().isoformat())
         trade.setdefault("status", "pending")
         open_trades.append(trade)
         log_history("open", trade)
 
 
 def find_trade(symbol=None, trade_id=None):
-    """Busca una operación abierta por símbolo o ID."""
+    """Devuelve la primera operación abierta que coincida con el símbolo o el ID."""
     with LOCK:
         for trade in open_trades:
             if (symbol and trade.get("symbol") == symbol) or (trade_id and trade.get("trade_id") == trade_id):
@@ -44,8 +48,13 @@ def update_trade(trade_id, **kwargs):
     return False
 
 
-def close_trade(trade_id=None, symbol=None, reason="closed"):
-    """Cierra una operación y la mueve a cerradas, añadiendo motivo."""
+def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, profit=None):
+    """Cierra una operación y la mueve a cerradas, añadiendo motivo.
+
+    Parámetros adicionales permiten registrar precio de salida y beneficio
+    para que el historial en JSON tenga la misma información que el CSV de
+    `history`.
+    """
     with LOCK:
         idx = None
         for i, trade in enumerate(open_trades):
@@ -54,8 +63,12 @@ def close_trade(trade_id=None, symbol=None, reason="closed"):
                 break
         if idx is not None:
             trade = open_trades.pop(idx)
-            trade["close_time"] = datetime.now().isoformat()
+            trade["close_time"] = datetime.utcnow().isoformat()
             trade["close_reason"] = reason
+            if exit_price is not None:
+                trade["exit_price"] = exit_price
+            if profit is not None:
+                trade["profit"] = profit
             trade["status"] = "closed"
             closed_trades.append(trade)
             log_history("close", trade)
@@ -74,20 +87,35 @@ def all_closed_trades():
 
 # --- Persistence ---
 
-def _atomic_write(path: str, data) -> None:
+def atomic_write(path: str, data) -> None:
+    """Write JSON data atomically to ``path``."""
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.error("Error saving file %s: %s", path, exc)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def save_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
+    """Persist open and closed trades to disk separately."""
+    with LOCK:
+        open_data = list(open_trades)
+        closed_data = list(closed_trades)
+
     try:
-        with LOCK:
-            _atomic_write(open_path, open_trades)
-            _atomic_write(closed_path, closed_trades)
-    except Exception as e:
-        print(f"[trade_manager] Error guardando trades: {e}")
+        atomic_write(open_path, open_data)
+    except Exception:
+        logger.error("Failed to save open trades")
+
+    try:
+        atomic_write(closed_path, closed_data)
+    except Exception:
+        logger.error("Failed to save closed trades")
 
 
 def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
@@ -109,29 +137,39 @@ def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
                     t.setdefault("status", "closed")
                 closed_trades.extend(data)
     except Exception as e:
-        print(f"[trade_manager] Error cargando trades: {e}")
+        logger.error("Error cargando trades: %s", e)
 
 # --- Optional: Auditing/history ---
 
 def log_history(event_type, trade):
-    # Guarda una copia del cambio (puedes desactivar si no quieres logs grandes)
+    """Store a snapshot of the trade change if history logging is enabled."""
+    if not config.ENABLE_TRADE_HISTORY_LOG:
+        return
     entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "event": event_type,
-        "trade_snapshot": trade.copy()
+        "trade_snapshot": trade.copy(),
     }
-    trade_history.append(entry)
+    with LOCK:
+        trade_history.append(entry)
+        if len(trade_history) > config.MAX_TRADE_HISTORY_SIZE:
+            trade_history.pop(0)
 
 
 def get_history():
     return list(trade_history)
 
-# --- Utilities ---
-
-def get_trades_by_symbol(symbol):
+def export_trade_history(filepath: str):
+    """Export and clear the in-memory trade history."""
     with LOCK:
-        return [t for t in open_trades if t.get("symbol") == symbol]
+        data = list(trade_history)
+        trade_history.clear()
+    try:
+        atomic_write(filepath, data)
+    except Exception:
+        logger.error("Failed to export trade history")
 
+# --- Utilities ---
 
 def count_open_trades():
     with LOCK:

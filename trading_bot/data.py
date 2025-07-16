@@ -73,26 +73,35 @@ def get_ticker(symbol: str) -> Dict:
 
 
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
-
-    url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/24hr"
+    """Return the most liquid symbols according to ``exchange.fetch_markets``."""
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
+        markets = exchange.fetch_markets()
     except Exception as exc:
-        logger.error("Error fetching Binance tickers: %s", exc)
-        return []
-    data = resp.json()
-    filtered = [d for d in data if d.get("symbol", "").endswith("USDT") and not d.get("symbol", "").endswith("BUSD")]
-    sorted_by_vol = sorted(filtered, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-    symbols = [item["symbol"] for item in sorted_by_vol[:n]]
+        logger.error("Error fetching markets: %s", exc)
+        markets = getattr(exchange, "markets", {})
 
-    def to_bitget_symbol(sym: str) -> str:
-        return sym.replace("USDT", "/USDT") + ":USDT"
+    if isinstance(markets, list):
+        market_dict = {m.get("symbol"): m for m in markets if isinstance(m, dict)}
+    else:
+        market_dict = markets or {}
 
-    bitget_keys = set(exchange.markets.keys())
-    common = [s[:-4] + "_" + s[-4:] for s in symbols if to_bitget_symbol(s) in bitget_keys]
-    logger.info("Top %d common symbols: %s", len(common), common)
-    return common
+    # Keep only USDT pairs
+    filtered = [
+        m for m in market_dict.values()
+        if m.get("symbol", "").upper().endswith("USDT")
+    ]
+    sorted_by_vol = sorted(
+        filtered,
+        key=lambda m: float(m.get("volume") or 0),
+        reverse=True,
+    )
+
+    def normalize(sym: str) -> str:
+        return sym.replace("/", "_").replace(":USDT", "")
+
+    top = [normalize(m["symbol"]) for m in sorted_by_vol[:n]]
+    logger.info("Top %d symbols by volume: %s", len(top), top)
+    return top
 
 
 def get_current_price_ticker(symbol: str) -> float:

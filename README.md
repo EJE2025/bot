@@ -16,10 +16,22 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Ejecución de órdenes en varios exchanges mediante `ccxt`
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
-- Panel web en `http://localhost:8000` para monitoreo en tiempo real
+- Panel web en `http://localhost:8000` para monitoreo en tiempo real. Los datos
+  de operaciones y liquidez se consultan pulsando los botones **Mostrar
+  Trades** y **Mostrar Liquidez**, que llaman a los endpoints `/api/trades` y
+  `/api/liquidity` respectivamente
+- Las operaciones abiertas se registran en `trade_manager` y el dashboard las
+  obtiene directamente desde ahí. Cada operación muestra en la tabla su PnL no
+  realizado calculado con el precio actual
 - Notificaciones por Telegram y Discord al abrir y cerrar operaciones
 - Arquitectura modular para facilitar mejoras
 - Análisis del libro de órdenes para zonas de liquidez
+- Los símbolos en el dashboard de liquidez muestran la fuente, p.ej.
+  `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
+ - La lista de símbolos que analiza el bot se obtiene de forma dinámica según el
+  volumen de futuros USDT del exchange. En `TEST_MODE` se usa `MockExchange`,
+  que genera 25 pares con volúmenes aleatorios fijos y devuelve los 15 más
+  líquidos.
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar
@@ -72,12 +84,16 @@ variables definidas en `trading_bot/config.py`:
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
 - `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
 
+- `ENABLE_TRADE_HISTORY_LOG` activa el registro detallado de cambios en memoria (default `0`)
+- `MAX_TRADE_HISTORY_SIZE` número máximo de eventos en memoria antes de descartar los más antiguos (default `1000`)
+
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
 
-Copia `.env.example` a `.env` y rellena tus claves API para comenzar.
+Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
+cargará automáticamente ese archivo al iniciarse.
 
 ## Licencia
 

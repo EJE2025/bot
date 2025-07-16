@@ -1,11 +1,12 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(env_path)
 
 BITGET_API_KEY = os.getenv("BITGET_API_KEY", "")
 BITGET_API_SECRET = os.getenv("BITGET_API_SECRET", "")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE", "")
+BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE", os.getenv("BITGET_API_PASSPHRASE", ""))
 
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
@@ -56,4 +57,8 @@ MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
 
 # Percent of available balance risked on each trade (e.g. 0.01 = 1%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
+
+# Optional in-memory trade history auditing
+ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
+MAX_TRADE_HISTORY_SIZE = int(os.getenv("MAX_TRADE_HISTORY_SIZE", "1000"))
 
