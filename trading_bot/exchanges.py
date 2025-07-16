@@ -25,12 +25,13 @@ class MockExchange:
         # return a large dummy balance for tests
         return {"USDT": {"free": 1_000_000}}
 
-    def create_order(self, symbol, type_, side, amount, price=None, params=None):
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
+        order_type = type
         order_id = f"MOCK_{len(self.orders)+1}"
         order = {
             "id": order_id,
             "symbol": symbol,
-            "type": type_,
+            "type": order_type,
             "side": side,
             "amount": amount,
             "price": price,
