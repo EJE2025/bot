@@ -28,8 +28,10 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Análisis del libro de órdenes para zonas de liquidez
 - Los símbolos en el dashboard de liquidez muestran la fuente, p.ej.
   `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
-- La lista de símbolos para liquidez se obtiene dinámicamente de Bitget según su
-  volumen en futuros USDT
+ - La lista de símbolos que analiza el bot se obtiene de forma dinámica según el
+  volumen de futuros USDT del exchange. En `TEST_MODE` se usa `MockExchange`,
+  que genera 25 pares con volúmenes aleatorios fijos y devuelve los 15 más
+  líquidos.
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar

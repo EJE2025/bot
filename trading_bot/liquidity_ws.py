@@ -6,8 +6,7 @@ import logging
 import threading
 from collections import defaultdict
 from typing import Iterable
-
-import requests
+from . import exchanges, config, data
 
 import websockets
 
@@ -22,31 +21,13 @@ DEFAULT_TOP_15_SYMBOLS = [
 ]
 
 
-def get_top_15_symbols() -> list[str]:
-    """Return the 15 highest volume USDT futures symbols from Bitget."""
-    url = "https://api.bitget.com/api/mix/v1/market/tickers"
-    params = {"productType": "umcbl"}
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != "00000" or "data" not in data:
-            logger.warning("Error fetching symbols from Bitget API: %s", data)
-            return DEFAULT_TOP_15_SYMBOLS
-        tickers = [
-            t for t in data["data"]
-            if t.get("symbol", "").endswith("USDT_UMCBL")
-        ]
-        tickers.sort(
-            key=lambda x: float(x.get("usdtVolume") or x.get("quoteVolume", 0)),
-            reverse=True,
-        )
-        symbols = [t["symbol"].replace("_UMCBL", "") for t in tickers[:15]]
-        logger.info("Top 15 symbols fetched dynamically: %s", symbols)
-        return symbols
-    except Exception as exc:
-        logger.error("Exception fetching top symbols: %s", exc)
+def get_top_15_symbols() -> list[str]:re
+    """Return the 15 highest volume USDT futures symbols."""
+    ex = exchanges.get_exchange(config.DEFAULT_EXCHANGE)
+    symbols = data.get_common_top_symbols(ex, 15)
+    if not symbols:
         return DEFAULT_TOP_15_SYMBOLS
+    return [s.replace("_", "") for s in symbols]
 
 # Order book depth to request and stream interval
 DEPTH = 10

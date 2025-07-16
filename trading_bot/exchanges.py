@@ -1,6 +1,9 @@
 import ccxt
 import logging
+import random
 import time
+import requests
+
 from . import config
 
 logger = logging.getLogger(__name__)
@@ -12,11 +15,22 @@ class MockExchange:
     """Simple deterministic mock of a futures exchange for tests."""
 
     def __init__(self):
-        # Minimal market information so the bot validations succeed
-        self.markets = {
-            "BTC/USDT:USDT": {"id": "BTCUSDT_UMCBL", "contractSize": 1},
-            "ETH/USDT:USDT": {"id": "ETHUSDT_UMCBL", "contractSize": 1},
-        }
+
+        # Generate a set of markets with fixed random volume for the session
+        bases = [
+            "BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "DOT", "AVAX",
+            "MATIC", "LTC", "BCH", "LINK", "UNI", "ALGO", "ATOM", "FIL",
+            "APT", "ARB", "OP", "SUI", "PEPE", "WIF", "FLOKI", "BONK", "MEME",
+        ]
+        self.markets = {}
+        for base in bases:
+            sym = f"{base}/USDT:USDT"
+            self.markets[sym] = {
+                "id": sym.replace("/", "").replace(":USDT", "") + "_UMCBL",
+                "contractSize": 1,
+                "symbol": sym,
+                "volume": random.randint(1000, 1_000_000),
+            }
 
         # Internal state
         self.positions: list[dict] = []
@@ -83,12 +97,17 @@ class MockExchange:
     def load_markets(self):
         return self.markets
 
+    def fetch_markets(self):
+        """Return market definitions including simulated volume."""
+        return self.markets
+
     def fetch_balance(self):
         return self.balance
 
     def set_leverage(self, leverage: int, market_id: str):
         self.leverage[market_id] = leverage
         return {"info": f"Leverage set to {leverage}x for {market_id}"}
+
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         order = {
@@ -167,5 +186,35 @@ def get_exchange(name: str):
         ex = MockExchange()
         ex.load_markets()
         logger.error("Using MockExchange due to connection failure")
+
+    if not isinstance(ex, MockExchange) and name == "bitget":
+        def fetch_markets():
+            url = "https://api.bitget.com/api/mix/v1/market/tickers"
+            params = {"productType": "umcbl"}
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("code") != "00000" or "data" not in data:
+                    raise RuntimeError("Bad response")
+                markets = {}
+                for item in data["data"]:
+                    sym = item.get("symbol", "")
+                    if not sym.endswith("USDT_UMCBL"):
+                        continue
+                    base_quote = sym.replace("_UMCBL", "")
+                    base = base_quote[:-4]
+                    quote = base_quote[-4:]
+                    unified = f"{base}/{quote}:USDT"
+                    markets[unified] = {
+                        "symbol": unified,
+                        "volume": float(item.get("usdtVolume") or item.get("quoteVolume", 0)),
+                    }
+                return markets
+            except Exception as exc:
+                logger.error("Error fetching Bitget markets: %s", exc)
+                return {sym: {"symbol": sym, "volume": 0.0} for sym in ex.markets.keys()}
+
+        ex.fetch_markets = fetch_markets
     _EXCHANGE_CACHE[name] = ex
     return ex
