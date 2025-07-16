@@ -47,21 +47,38 @@ class MockExchange:
         fill_price = order.get("price") or self._get_market_price(order["symbol"])
         order["average"] = fill_price
         amount = order["amount"]
-        side = order["side"]
+        side = order["side"].lower()
         sym = order["symbol"]
 
         # adjust balance (simplified: 1 contract = 1 quote currency)
         bal = self.balance["USDT"]
         cost = amount * fill_price
-        if side.lower() == "buy" or side.lower() == "close_short":
+        if side == "buy":
             bal["used"] += cost
             bal["free"] -= cost
-        else:
+        elif side == "sell":
             bal["free"] += cost
+        elif side == "close_long":
+            bal["used"] -= cost
+            bal["free"] += cost
+        elif side == "close_short":
+            bal["free"] -= cost
 
         # manage positions
         pos = next((p for p in self.positions if p["symbol"] == sym), None)
-        if side.lower() in ("buy", "close_short"):
+
+        if side == "close_long" and pos and pos.get("side") == "long":
+            pos["contracts"] -= amount
+            if pos["contracts"] <= 0:
+                self.positions.remove(pos)
+            return
+        if side == "close_short" and pos and pos.get("side") == "short":
+            pos["contracts"] -= amount
+            if pos["contracts"] <= 0:
+                self.positions.remove(pos)
+            return
+
+        if side in ("buy", "close_short"):
             direction = "long"
         else:
             direction = "short"
