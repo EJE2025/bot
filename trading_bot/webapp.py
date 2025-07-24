@@ -174,7 +174,18 @@ def api_trades():
 @app.route("/api/liquidity")
 def api_liquidity():
     """Return current liquidity order book data."""
-    return jsonify(liquidity_ws.get_liquidity())
+    raw = liquidity_ws.get_liquidity()
+    converted: dict[str, dict[str, list[list[float]]]] = {}
+    for sym, book in raw.items():
+        bids_dict = book.get("bids", {})
+        asks_dict = book.get("asks", {})
+        bids = sorted(bids_dict.items(), key=lambda x: x[0], reverse=True)
+        asks = sorted(asks_dict.items(), key=lambda x: x[0])
+        converted[sym] = {
+            "bids": [[float(p), float(q)] for p, q in bids],
+            "asks": [[float(p), float(q)] for p, q in asks],
+        }
+    return jsonify(converted)
 
 def start_dashboard(host: str, port: int):
     """Run the Flask dashboard in real-time with trades from trade_manager."""
