@@ -21,7 +21,7 @@ DEFAULT_TOP_15_SYMBOLS = [
 ]
 
 
-def get_top_15_symbols() -> list[str]:re
+def get_top_15_symbols() -> list[str]:
     """Return the 15 highest volume USDT futures symbols."""
     ex = exchanges.get_exchange(config.DEFAULT_EXCHANGE)
     symbols = data.get_common_top_symbols(ex, 15)
