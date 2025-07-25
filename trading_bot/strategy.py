@@ -56,14 +56,33 @@ def sentiment_score(symbol: str, period: str = "5m") -> float:
 
 def calcular_tamano_posicion(balance_usdt: float, entry_price: float, atr_value: float,
                              atr_multiplier: float, risk_per_trade_usd: float) -> float:
-    """Size position so max loss equals risk_per_trade_usd."""
+    """Size position so max loss equals ``risk_per_trade_usd``.
+
+    Returns ``None`` when inputs are invalid or the calculated quantity is
+    smaller than :data:`config.MIN_POSITION_SIZE`.
+    """
+    if atr_value <= 0 or entry_price <= 0:
+        return None
+
     distancia_stop = atr_value * atr_multiplier
-    if distancia_stop <= 0 or entry_price <= 0:
-        return 0.0
+    if distancia_stop <= 0:
+        return None
 
     qty = risk_per_trade_usd / (distancia_stop * entry_price)
     max_qty = balance_usdt / entry_price
-    return max(0.0, min(qty, max_qty))
+    qty = max(0.0, min(qty, max_qty))
+    if qty < config.MIN_POSITION_SIZE:
+        return None
+    return qty
+
+
+def risk_reward_ratio(entry_price: float, take_profit: float, stop_loss: float) -> float:
+    """Return reward-to-risk ratio or ``0.0`` if risk is zero."""
+    risk = abs(entry_price - stop_loss)
+    if risk <= 0:
+        return 0.0
+    reward = abs(take_profit - entry_price)
+    return reward / risk
 
 
 def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None):
@@ -146,11 +165,12 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         atr_mult,
         risk_usd,
     )
+    if quantity is None:
+        logger.error("[%s] position size below minimum", symbol)
+        return None
 
     risk = abs(entry_price - stop_loss)
-
-    reward = abs(take_profit - entry_price)
-    risk_reward = reward / risk if risk else 0.0
+    risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
     signal = {
         "symbol": symbol,
         "side": decision,

@@ -71,6 +71,9 @@ MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
 # Percent of available balance risked on each trade (e.g. 0.01 = 1%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
 
+# Minimum order size allowed when sizing positions
+MIN_POSITION_SIZE = float(os.getenv("MIN_POSITION_SIZE", "0.001"))
+
 # Optional in-memory trade history auditing
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
 MAX_TRADE_HISTORY_SIZE = int(os.getenv("MAX_TRADE_HISTORY_SIZE", "1000"))

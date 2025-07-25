@@ -12,9 +12,24 @@ _EXCHANGE_CACHE = {}
 
 
 class MockExchange:
-    """Simple deterministic mock of a futures exchange for tests."""
+    """Simple deterministic mock of a futures exchange for tests.
 
-    def __init__(self):
+    Parameters
+    ----------
+    slippage : float, optional
+        Percentual slippage applied to market prices (e.g. ``0.01`` for 1%).
+    fee_rate : float, optional
+        Trading fee rate applied on the notional value.
+    order_status_flow : str, optional
+        Control order life cycle. ``"filled"`` fills orders immediately while
+        ``"open"`` leaves limit orders pending.
+    """
+
+    def __init__(self, slippage: float = 0.0, fee_rate: float = 0.0,
+                 order_status_flow: str = "filled"):
+        self.slippage = slippage
+        self.fee_rate = fee_rate
+        self.order_status_flow = order_status_flow
 
         # Generate a set of markets with fixed random volume for the session
         bases = [
@@ -38,8 +53,6 @@ class MockExchange:
         self.leverage: dict[str, int] = {}
         self.balance = {"USDT": {"free": 100_000, "used": 0, "total": 100_000}}
         self.last_order_id = 0
-        # control whether limit orders fill immediately
-        self.order_status_flow = "filled"  # or "open"
 
     # --- Utility helpers -------------------------------------------------
 
@@ -59,24 +72,35 @@ class MockExchange:
         """Mark order as filled and update positions/balance."""
         order["status"] = "closed"
         fill_price = order.get("price") or self._get_market_price(order["symbol"])
+        side = order["side"].lower()
+
+        # apply simple slippage model
+        if self.slippage:
+            if side in ("buy", "close_short"):
+                fill_price *= 1 + self.slippage
+            else:
+                fill_price *= 1 - self.slippage
+
         order["average"] = fill_price
         amount = order["amount"]
-        side = order["side"].lower()
         sym = order["symbol"]
 
         # adjust balance (simplified: 1 contract = 1 quote currency)
         bal = self.balance["USDT"]
         cost = amount * fill_price
+        fee = cost * self.fee_rate
+        total = cost + fee
+
         if side == "buy":
-            bal["used"] += cost
-            bal["free"] -= cost
+            bal["used"] += total
+            bal["free"] -= total
         elif side == "sell":
-            bal["free"] += cost
+            bal["free"] -= total
         elif side == "close_long":
-            bal["used"] -= cost
-            bal["free"] += cost
+            bal["used"] -= total
+            bal["free"] += total
         elif side == "close_short":
-            bal["free"] -= cost
+            bal["free"] += total
 
         # manage positions
         pos = next((p for p in self.positions if p["symbol"] == sym), None)

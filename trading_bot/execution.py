@@ -1,5 +1,6 @@
 import logging
 import time
+import ccxt
 from . import config
 from .exchanges import get_exchange, MockExchange
 
@@ -83,42 +84,51 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_F
 
 
 
-def setup_leverage(exchange, symbol_raw: str, leverage: int = 10) -> bool:
+def setup_leverage(exchange, symbol: str, leverage: int = 10):
     """Configure leverage for a symbol and confirm on Bitget."""
     if exchange is None:
         logger.error("Exchange not initialized")
-        return False
+        return {"success": False, "error": "exchange not initialized"}
+
+    # Build unified ccxt symbol like "BTC/USDT:USDT" from raw symbol if needed
+    if "/" not in symbol:
+        base = symbol[:-4]
+        quote = symbol[-4:]
+        symbol = f"{base}/{quote}:USDT"
+
     if config.TEST_MODE or isinstance(exchange, MockExchange):
-        logger.info("Mock leverage setup for %s", symbol_raw)
-        return True
+        logger.info("Mock leverage setup for %s", symbol)
+        try:
+            result = exchange.set_leverage(leverage, symbol)
+            return {"success": True, "symbol": symbol, "result": result}
+        except Exception as exc:  # pragma: no cover - mock rarely fails
+            logger.error("Error setting leverage for %s: %s", symbol, exc)
+            return {"success": False, "symbol": symbol, "error": str(exc)}
 
-    # Build unified symbol used by ccxt: "BTC/USDT:USDT"
-    base = symbol_raw[:-4]
-    quote = symbol_raw[-4:]
-    unified = f"{base}/{quote}:USDT"
-
-    if unified not in exchange.markets:
+    if symbol not in exchange.markets:
         logger.warning(
-            "Skip leverage: %s no encontrado en mercados como %s", symbol_raw, unified
+            "Skip leverage: %s no encontrado en mercados", symbol
         )
-        return False
+        return {"success": False, "symbol": symbol, "error": "symbol not found"}
 
-    market_id = exchange.markets[unified]["id"]
     try:
-        exchange.set_leverage(leverage, market_id)
-        logger.info("Leverage set to %dx for %s", leverage, market_id)
+        result = exchange.set_leverage(leverage, symbol)
+        logger.info("Leverage set to %dx for %s", leverage, symbol)
         # verify leverage was applied
-        positions = exchange.fetch_positions([market_id])
+        positions = exchange.fetch_positions([symbol])
         for pos in positions:
-            if pos.get("info", {}).get("symbol") == market_id or pos.get("symbol") == market_id:
+            if pos.get("symbol") == symbol or pos.get("info", {}).get("symbol") == symbol:
                 applied = float(pos.get("leverage", 0))
-                logger.info("Confirmed leverage for %s: %sx", market_id, applied)
-                return applied == leverage
-        logger.warning("Could not confirm leverage for %s", market_id)
-        return False
-    except Exception as e:
-        logger.error("Error setting leverage for %s: %s", market_id, e)
-        return False
+                logger.info("Confirmed leverage for %s: %sx", symbol, applied)
+                return {"success": applied == leverage, "symbol": symbol, "result": result}
+        logger.warning("Could not confirm leverage for %s", symbol)
+        return {"success": False, "symbol": symbol, "result": result}
+    except ccxt.BaseError as exc:
+        logger.error("API error setting leverage for %s: %s", symbol, exc)
+        return {"success": False, "symbol": symbol, "error": str(exc)}
+    except Exception as exc:  # pragma: no cover - unexpected errors
+        logger.error("Error setting leverage for %s: %s", symbol, exc)
+        return {"success": False, "symbol": symbol, "error": str(exc)}
 
 
 def open_position(symbol: str, side: str, amount: float, price: float,

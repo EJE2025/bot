@@ -181,7 +181,11 @@ def run():
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if not sig or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                    if (
+                        not sig
+                        or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD
+                        or sig.get("quantity", 0) < config.MIN_POSITION_SIZE
+                    ):
                         continue
                     candidates.append(sig)
 
