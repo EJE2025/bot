@@ -94,6 +94,14 @@ variables definidas en `trading_bot/config.py`:
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
+## Pruebas
+
+Para ejecutar todas las pruebas y ver el reporte de cobertura ejecuta:
+
+```bash
+pytest
+```
+
 
 ## Licencia
 
