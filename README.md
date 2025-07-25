@@ -83,6 +83,7 @@ variables definidas en `trading_bot/config.py`:
 - `RSI_PERIOD` período del RSI (default `14`)
 - `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`)
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)
+- `MIN_POSITION_SIZE` tamaño mínimo de posición permitido (default `0.001`)
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
 - `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
 
