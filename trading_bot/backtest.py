@@ -6,12 +6,39 @@ from . import data, strategy
 logger = logging.getLogger(__name__)
 
 
-def run_backtest(symbols: List[str], interval: str = "Min15", limit: int = 500):
+def run_backtest(symbols: List[str], interval: str = "Min15", limit: int = 500) -> pd.DataFrame:
+    """Run a simplified historical backtest for several symbols.
+
+    Parameters
+    ----------
+    symbols : List[str]
+        Trading pairs in the format ``BASE_QUOTE`` (e.g. ``"BTC_USDT"``).
+    interval : str, optional
+        Candle interval used by :func:`data.get_market_data`. Defaults to
+        ``"Min15"``.
+    limit : int, optional
+        Number of candles to request for each symbol. Defaults to ``500``.
+
+    Algorithm
+    ---------
+    For each symbol the function downloads historical OHLCV data and iterates
+    over the candles starting at index 150. At each step a window of previous
+    prices is passed to :func:`strategy.decidir_entrada` in order to obtain a
+    hypothetical trade signal. The trade is simulated for up to ten candles
+    applying the provided take profit or stop loss. The equity curve is tracked
+    to calculate the win rate, cumulative profit and the maximum drawdown.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A dataframe with one row per symbol containing the columns
+        ``symbol``, ``trades``, ``profit``, ``win_rate`` and ``max_drawdown``.
+    """
     results = []
     for sym in symbols:
         info = data.get_market_data(sym, interval=interval, limit=limit)
-        if not info or "close" not in info:
-            logger.error("No data for %s", sym)
+        if not isinstance(info, dict) or not all(k in info for k in ("close", "high", "low", "vol")):
+            logger.error("Invalid data for %s", sym)
             continue
         closes = [float(x) for x in info["close"]]
         highs = [float(x) for x in info["high"]]
@@ -83,7 +110,15 @@ def run_backtest(symbols: List[str], interval: str = "Min15", limit: int = 500):
 
 
 if __name__ == "__main__":
-    syms = ["BTC_USDT"]
-    df = run_backtest(syms)
-    print(df)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run a simple backtest")
+    parser.add_argument("symbols", nargs="*", help="Symbols to backtest, e.g. BTC_USDT ETH_USDT")
+    parser.add_argument("--interval", default="Min15", help="Candle interval")
+    parser.add_argument("--limit", type=int, default=500, help="Number of candles")
+    args = parser.parse_args()
+
+    symbols = args.symbols or ["BTC_USDT"]
+    df = run_backtest(symbols, interval=args.interval, limit=args.limit)
+    print(df.to_string(index=False))
 
