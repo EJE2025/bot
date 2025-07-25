@@ -1,8 +1,13 @@
 import os
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
-load_dotenv(env_path)
+if load_dotenv is not None:
+    load_dotenv(env_path)
 
 BITGET_API_KEY = os.getenv("BITGET_API_KEY", "")
 BITGET_API_SECRET = os.getenv("BITGET_API_SECRET", "")
@@ -17,8 +22,16 @@ MEXC_API_SECRET = os.getenv("MEXC_API_SECRET", "")
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
-MAX_OPEN_TRADES = 10
-DAILY_RISK_LIMIT = -50.0
+# Number of concurrent trades allowed (configurable via MAX_OPEN_TRADES env var)
+try:
+    MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "10"))
+except (TypeError, ValueError):
+    MAX_OPEN_TRADES = 10
+# Maximum daily loss before trading stops (configurable via DAILY_RISK_LIMIT env var)
+try:
+    DAILY_RISK_LIMIT = float(os.getenv("DAILY_RISK_LIMIT", "-50"))
+except (TypeError, ValueError):
+    DAILY_RISK_LIMIT = -50.0
 
 BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
