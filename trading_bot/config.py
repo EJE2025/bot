@@ -75,3 +75,9 @@ RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
 MAX_TRADE_HISTORY_SIZE = int(os.getenv("MAX_TRADE_HISTORY_SIZE", "1000"))
 
+# Number of times to retry data fetch operations before falling back to cache
+DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))
+
+# Maximum attempts when submitting or closing orders
+ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
+
