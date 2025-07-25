@@ -123,6 +123,12 @@ def setup_leverage(exchange, symbol_raw: str, leverage: int = 10) -> bool:
 
 def open_position(symbol: str, side: str, amount: float, price: float,
                   order_type: str = "limit", stop_price: float | None = None):
+    """Send an order to open a position and return the order data.
+
+    The function validates that the exchange returns a dictionary containing the
+    keys ``id``, ``status`` and ``average``. Temporary errors are retried up to
+    ``ORDER_SUBMIT_ATTEMPTS`` times with exponential backoff.
+    """
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
@@ -134,7 +140,8 @@ def open_position(symbol: str, side: str, amount: float, price: float,
         cost = amount * price / exchange.markets[bitget_sym].get("contractSize", 1)
         if bal < cost:
             raise OrderSubmitError("Insufficient balance")
-    for attempt in range(3):
+    max_attempts = config.ORDER_SUBMIT_ATTEMPTS
+    for attempt in range(max_attempts):
         try:
             params = {"timeInForce": "GTC", "holdSide": "long" if side == "BUY" else "short"}
             ord_type = order_type.lower()
@@ -155,11 +162,17 @@ def open_position(symbol: str, side: str, amount: float, price: float,
                 price=ord_price,
                 params=params,
             )
-
+            if not isinstance(order, dict) or not {"id", "status", "average"}.issubset(order.keys()):
+                raise OrderSubmitError(f"Unexpected order response: {order}")
             return order
         except Exception as exc:
-            if attempt < 2:
-                logger.warning("Retry open %s attempt %d error: %s", symbol, attempt + 1, exc)
+            if attempt < max_attempts - 1:
+                logger.warning(
+                    "Retry open %s attempt %d error: %s",
+                    symbol,
+                    attempt + 1,
+                    exc,
+                )
                 time.sleep(2 ** attempt)
             else:
                 raise OrderSubmitError(f"Failed to open position {symbol}") from exc
@@ -168,6 +181,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
 
 
 def close_position(symbol: str, side: str, amount: float, order_type: str = "market"):
+    """Close an existing position with validation and retries."""
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
@@ -175,14 +189,15 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
         if bitget_sym not in exchange.markets:
             raise OrderSubmitError(f"Market {bitget_sym} not available")
-    for attempt in range(3):
+    max_attempts = config.ORDER_SUBMIT_ATTEMPTS
+    for attempt in range(max_attempts):
         try:
             params = {"reduceOnly": True}
             ord_type = order_type.lower()
             ord_price = None
             if ord_type not in ("market", "limit"):
                 ord_type = "market"
-            return exchange.create_order(
+            order = exchange.create_order(
                 symbol=bitget_sym,
                 type=ord_type,
                 side="buy" if side == "close_short" else "sell",
@@ -190,9 +205,12 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
                 price=ord_price,
                 params=params,
             )
+            if not isinstance(order, dict) or not {"id", "status", "average"}.issubset(order.keys()):
+                raise OrderSubmitError(f"Unexpected order response: {order}")
+            return order
 
         except Exception as exc:
-            if attempt < 2:
+            if attempt < max_attempts - 1:
                 logger.warning("Retry close %s attempt %d error: %s", symbol, attempt + 1, exc)
                 time.sleep(2 ** attempt)
             else:
@@ -202,11 +220,16 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
 
 
 def cancel_order(order_id: str, symbol: str):
+    """Cancel an open order if it hasn't been filled or closed."""
     bitget_sym = symbol.replace("_", "/") + ":USDT"
     if exchange is None:
         logger.error("Exchange not initialized")
         return
     try:
+        info = exchange.fetch_order(order_id, bitget_sym)
+        if info.get("status") != "open":
+            logger.info("Skip cancel: %s already %s", order_id, info.get("status"))
+            return
         exchange.cancel_order(order_id, bitget_sym)
     except Exception as exc:
         logger.error("Error canceling %s: %s", order_id, exc)

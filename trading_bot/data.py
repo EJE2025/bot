@@ -6,9 +6,17 @@ import json
 import requests
 from . import config
 
+# How many attempts should be made for network calls
+MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
+
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = "cache"
+
+
+def _generic_cache_path(prefix: str, *parts: str) -> str:
+    name = "_".join((prefix, *parts)) + ".json"
+    return os.path.join(CACHE_DIR, name)
 
 def _cache_path(symbol: str, interval: str, limit: int) -> str:
     name = f"{symbol}_{interval}_{limit}.json"
@@ -22,11 +30,16 @@ def _to_binance_interval(interval: str) -> str:
     return interval
 
 
-def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict:
+def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict | None:
+    """Return OHLCV data from Binance futures.
+
+    If the request fails ``MAX_ATTEMPTS`` times it falls back to cached data
+    stored under ``cache/``. ``None`` is returned when no cache is available.
+    """
     symbol_raw = symbol.replace("_", "")
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
     params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         try:
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
@@ -44,40 +57,77 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
                 json.dump(parsed, fh)
             return parsed
         except Exception as exc:
-            logger.warning("Network error fetching %s (attempt %d): %s", symbol, attempt + 1, exc)
+            logger.warning(
+                "Network error fetching %s (attempt %d/%d): %s",
+                symbol,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+            )
             time.sleep(2 ** attempt)
-    # fallback to cache
 
     path = _cache_path(symbol_raw, interval, limit)
-
     if os.path.exists(path):
         logger.info("Using cached data for %s", symbol)
         with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
-    return {}
+    return None
 
 
-def get_ticker(symbol: str) -> Dict:
-    """Return last price and bid/ask data for a Binance futures symbol."""
+def get_ticker(symbol: str) -> Dict | None:
+    """Return last price and bid/ask data for a Binance futures symbol.
+
+    Falls back to cached data when the request repeatedly fails. ``None`` is
+    returned if no cache exists.
+    """
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/bookTicker"
     params = {"symbol": symbol.replace("_", "")}
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-
-        return data
-    except Exception as exc:
-        logger.error("Ticker network error for %s: %s", symbol, exc)
-    return {}
+    cache_file = _generic_cache_path("ticker", symbol)
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            return data
+        except Exception as exc:
+            logger.warning(
+                "Ticker network error for %s attempt %d/%d: %s",
+                symbol,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+    if os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as fh:
+            logger.info("Using cached ticker for %s", symbol)
+            return json.load(fh)
+    return None
 
 
 def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
-    """Return the most liquid symbols according to ``exchange.fetch_markets``."""
-    try:
-        markets = exchange.fetch_markets()
-    except Exception as exc:
-        logger.error("Error fetching markets: %s", exc)
+    """Return the most liquid symbols according to ``exchange.fetch_markets``.
+
+    If the request fails multiple times, the cached ``exchange.markets`` mapping
+    is used as a fallback.
+    """
+    markets = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            markets = exchange.fetch_markets()
+            break
+        except Exception as exc:
+            logger.warning(
+                "Error fetching markets attempt %d/%d: %s",
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+    if markets is None:
         markets = getattr(exchange, "markets", {})
 
     if isinstance(markets, list):
@@ -104,36 +154,77 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
     return top
 
 
-def get_current_price_ticker(symbol: str) -> float:
-    """Return the latest traded price from Bitget for the given symbol."""
+def get_current_price_ticker(symbol: str) -> float | None:
+    """Return the latest traded price from Bitget for the given symbol.
+
+    Returns ``None`` when the request cannot be completed and no cached value is
+    available.
+    """
     bitget_sym = symbol.replace("_", "") + "_UMCBL"
     endpoint = "/api/mix/v1/market/ticker"
     params = {"symbol": bitget_sym, "productType": "USDT-FUTURES"}
     url = config.BASE_URL_BITGET + endpoint
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") == "00000" and "data" in data:
-            return float(data["data"]["last"])
-    except Exception as exc:
-        logger.error("Ticker error for %s: %s", symbol, exc)
-    return 0.0
+    cache_file = _generic_cache_path("price", symbol)
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code") == "00000" and "data" in data:
+                price = float(data["data"]["last"])
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump({"price": price}, fh)
+                return price
+        except Exception as exc:
+            logger.warning(
+                "Ticker error for %s attempt %d/%d: %s",
+                symbol,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+    if os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as fh:
+            logger.info("Using cached price for %s", symbol)
+            return json.load(fh).get("price")
+    return None
 
 
-def get_order_book(symbol: str, limit: int = 50) -> Dict:
+def get_order_book(symbol: str, limit: int = 50) -> Dict | None:
 
-    """Fetch order book data from Binance for a given symbol."""
+    """Fetch order book data from Binance for a given symbol.
+
+    On repeated failures the cached order book is returned when available.
+    """
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
     params = {"symbol": symbol.replace("_", ""), "limit": limit}
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
-    except Exception as exc:
-        logger.error("Order book network error for %s: %s", symbol, exc)
-        return {}
+    cache_file = _generic_cache_path("book", f"{symbol}_{limit}")
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            book = {"bids": data.get("bids", []), "asks": data.get("asks", [])}
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as fh:
+                json.dump(book, fh)
+            return book
+        except Exception as exc:
+            logger.warning(
+                "Order book network error for %s attempt %d/%d: %s",
+                symbol,
+                attempt + 1,
+                MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(2 ** attempt)
+    if os.path.exists(cache_file):
+        with open(cache_file, "r", encoding="utf-8") as fh:
+            logger.info("Using cached order book for %s", symbol)
+            return json.load(fh)
+    return None
 
 
 def order_book_imbalance(book: Dict, price: float, pct: float = 0.01) -> float:
