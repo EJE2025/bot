@@ -37,7 +37,10 @@ from .trade_manager import (
     count_open_trades,
 )
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+    format='[%(asctime)s] %(levelname)s: %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +82,7 @@ def open_new_trade(signal: dict):
             "open_time": signal.get("open_time", datetime.utcnow().isoformat()),
         }
         add_trade(trade)
+        save_trades()
         return trade
     except execution.OrderSubmitError:
         logger.error("Order submission failed for %s", symbol)
@@ -93,6 +97,7 @@ def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: 
     update_trade(trade.get("trade_id"), exit_price=exit_price, profit=profit, close_time=close_ts)
     history.append_trade({**trade, "exit_price": exit_price, "profit": profit, "close_time": close_ts})
     close_trade(trade_id=trade.get("trade_id"), reason=reason, exit_price=exit_price, profit=profit)
+    save_trades()
 
 
 def run_one_iteration_open(model=None):
