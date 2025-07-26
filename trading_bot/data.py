@@ -4,7 +4,10 @@ from typing import Dict, List
 import os
 import json
 import requests
+import pandas as pd
+import numpy as np
 from . import config
+from .utils import normalize_symbol
 
 # How many attempts should be made for network calls
 MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
@@ -12,6 +15,7 @@ MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = "cache"
+SAMPLE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data_samples")
 
 
 def _generic_cache_path(prefix: str, *parts: str) -> str:
@@ -37,6 +41,33 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     stored under ``cache/``. ``None`` is returned when no cache is available.
     """
     symbol_raw = symbol.replace("_", "")
+
+    # Look for local CSV samples before making any network calls
+    csv_file = os.path.join(SAMPLE_DATA_DIR, f"{normalize_symbol(symbol)}_{interval}.csv")
+    if os.path.exists(csv_file):
+        df = pd.read_csv(csv_file)
+        df = df.head(limit)
+        return {
+            "close": df["close"].tolist(),
+            "high": df["high"].tolist(),
+            "low": df["low"].tolist(),
+            "vol": df["vol"].tolist(),
+        }
+
+    if config.TEST_MODE:
+        rng = np.random.default_rng(hash(symbol) % 2**32)
+        base_price = 100.0
+        price = base_price + rng.standard_normal(limit).cumsum() * 0.5
+        high = price + rng.uniform(0.1, 1.0, size=limit)
+        low = price - rng.uniform(0.1, 1.0, size=limit)
+        vol = rng.uniform(100, 1000, size=limit)
+        return {
+            "close": price.tolist(),
+            "high": high.tolist(),
+            "low": low.tolist(),
+            "vol": vol.tolist(),
+        }
+
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
     params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
     for attempt in range(MAX_ATTEMPTS):
@@ -146,10 +177,7 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
         reverse=True,
     )
 
-    def normalize(sym: str) -> str:
-        return sym.replace("/", "_").replace(":USDT", "")
-
-    top = [normalize(m["symbol"]) for m in sorted_by_vol[:n]]
+    top = [normalize_symbol(m["symbol"]) for m in sorted_by_vol[:n]]
     logger.info("Top %d symbols by volume: %s", len(top), top)
     return top
 

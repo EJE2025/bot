@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import logging
 from . import config
+from .utils import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,12 @@ def add_trade(trade):
 
 def find_trade(symbol=None, trade_id=None):
     """Devuelve la primera operación abierta que coincida con el símbolo o el ID."""
+    norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         for trade in open_trades:
-            if (symbol and trade.get("symbol") == symbol) or (trade_id and trade.get("trade_id") == trade_id):
+            if norm and normalize_symbol(trade.get("symbol")) == norm:
+                return trade
+            if trade_id and trade.get("trade_id") == trade_id:
                 return trade
     return None
 
