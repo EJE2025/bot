@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, Iterable, List
 import os
 import json
 import requests
@@ -12,6 +12,11 @@ MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = "cache"
+
+
+def normalize_symbol(sym: str) -> str:
+    """Return symbol in plain ``BTCUSDT`` format."""
+    return sym.replace("/", "").replace("_", "").replace(":USDT", "").upper()
 
 
 def _generic_cache_path(prefix: str, *parts: str) -> str:
@@ -108,7 +113,7 @@ def get_ticker(symbol: str) -> Dict | None:
     return None
 
 
-def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
+def get_common_top_symbols(exchange, n: int = 15, exclude: Iterable[str] | None = None) -> List[str]:
     """Return the most liquid symbols according to ``exchange.fetch_markets``.
 
     If the request fails multiple times, the cached ``exchange.markets`` mapping
@@ -135,21 +140,35 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
     else:
         market_dict = markets or {}
 
-    # Keep only USDT pairs
+    exclude_set = {normalize_symbol(s) for s in (exclude or [])}
+
+    # Keep only USDT pairs and remove blacklisted/excluded symbols
+    blacklist = {normalize_symbol(s) for s in config.BLACKLIST_SYMBOLS}
+    unsupported = {normalize_symbol(s) for s in config.UNSUPPORTED_SYMBOLS}
     filtered = [
         m for m in market_dict.values()
-        if m.get("symbol", "").upper().endswith("USDT")
+        if (
+            m.get("symbol", "").upper().endswith("USDT")
+            and normalize_symbol(m.get("symbol", "")) not in blacklist
+            and normalize_symbol(m.get("symbol", "")) not in unsupported
+            and normalize_symbol(m.get("symbol", "")) not in exclude_set
+        )
     ]
+
     sorted_by_vol = sorted(
         filtered,
         key=lambda m: float(m.get("volume") or 0),
         reverse=True,
     )
 
-    def normalize(sym: str) -> str:
-        return sym.replace("/", "_").replace(":USDT", "")
+    if config.TEST_MODE and config.TEST_SYMBOLS:
+        result = [
+            s for s in config.TEST_SYMBOLS
+            if normalize_symbol(s) not in exclude_set
+        ]
+        return result[:n]
 
-    top = [normalize(m["symbol"]) for m in sorted_by_vol[:n]]
+    top = [normalize_symbol(m["symbol"]) for m in sorted_by_vol[:n]]
     logger.info("Top %d symbols by volume: %s", len(top), top)
     return top
 

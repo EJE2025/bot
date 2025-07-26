@@ -32,8 +32,8 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
   `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
  - La lista de símbolos que analiza el bot se obtiene de forma dinámica según el
   volumen de futuros USDT del exchange. En `TEST_MODE` se usa `MockExchange`,
-  que genera 25 pares con volúmenes aleatorios fijos y devuelve los 15 más
-  líquidos.
+  que genera 25 pares con volúmenes predecibles y devuelve los 15 más
+  líquidos o los definidos mediante `TEST_SYMBOLS`.
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar
@@ -78,6 +78,8 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_OPEN_TRADES` (default 10)
 - `DAILY_RISK_LIMIT` (default `-50`)
 - `TEST_MODE` set to `1` to use a mock exchange without sending real orders
+- `TEST_SYMBOLS` comma separated list of symbols to analyze when `TEST_MODE` is
+  enabled
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `RSI_PERIOD` período del RSI (default `14`)

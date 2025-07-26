@@ -31,20 +31,22 @@ class MockExchange:
         self.fee_rate = fee_rate
         self.order_status_flow = order_status_flow
 
-        # Generate a set of markets with fixed random volume for the session
+        # Generate a deterministic set of markets with descending volume
         bases = [
             "BTC", "ETH", "SOL", "ADA", "XRP", "DOGE", "DOT", "AVAX",
             "MATIC", "LTC", "BCH", "LINK", "UNI", "ALGO", "ATOM", "FIL",
             "APT", "ARB", "OP", "SUI", "PEPE", "WIF", "FLOKI", "BONK", "MEME",
         ]
         self.markets = {}
-        for base in bases:
+        for idx, base in enumerate(bases):
             sym = f"{base}/USDT:USDT"
+            # Higher volume for the first symbols so ordering is stable
+            volume = 1_000_000 - idx * 1000
             self.markets[sym] = {
                 "id": sym.replace("/", "").replace(":USDT", "") + "_UMCBL",
                 "contractSize": 1,
                 "symbol": sym,
-                "volume": random.randint(1000, 1_000_000),
+                "volume": volume,
             }
 
         # Internal state
