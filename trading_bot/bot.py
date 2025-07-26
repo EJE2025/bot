@@ -24,6 +24,7 @@ from . import (
     notify,
     history,
     optimizer,
+    trade_manager,
 )
 from .trade_manager import (
     add_trade,
@@ -92,6 +93,43 @@ def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: 
     update_trade(trade.get("trade_id"), exit_price=exit_price, profit=profit, close_time=close_ts)
     history.append_trade({**trade, "exit_price": exit_price, "profit": profit, "close_time": close_ts})
     close_trade(trade_id=trade.get("trade_id"), reason=reason, exit_price=exit_price, profit=profit)
+
+
+def run_one_iteration_open(model=None):
+    """Execute a single iteration of the opening logic."""
+    execution.cleanup_old_orders()
+    if count_open_trades() >= config.MAX_OPEN_TRADES:
+        return
+    symbols = data.get_common_top_symbols(execution.exchange, 15)
+    candidates = []
+    seen = set()
+    for symbol in symbols:
+        if find_trade(symbol=symbol) or trade_manager.in_cooldown(symbol):
+            continue
+        norm = trade_manager.normalize_symbol(symbol)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        raw = symbol.replace("_", "")
+        if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
+            continue
+        sig = strategy.decidir_entrada(symbol, modelo_historico=model)
+        if (
+            not sig
+            or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD
+            or sig.get("quantity", 0) < config.MIN_POSITION_SIZE
+        ):
+            continue
+        candidates.append(sig)
+
+    candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
+    for sig in candidates:
+        if count_open_trades() >= config.MAX_OPEN_TRADES:
+            break
+        try:
+            open_new_trade(sig)
+        except Exception as exc:
+            logger.error("Error processing %s: %s", sig.get("symbol"), exc)
 
 def run():
     load_trades()  # Restaurar operaciones guardadas
@@ -174,9 +212,14 @@ def run():
             if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
                 symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
+                seen = set()
                 for symbol in symbols:
-                    if find_trade(symbol=symbol):
+                    if find_trade(symbol=symbol) or trade_manager.in_cooldown(symbol):
                         continue
+                    norm = trade_manager.normalize_symbol(symbol)
+                    if norm in seen:
+                        continue
+                    seen.add(norm)
                     raw = symbol.replace("_", "")
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue

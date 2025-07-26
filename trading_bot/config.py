@@ -84,3 +84,6 @@ DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))
 # Maximum attempts when submitting or closing orders
 ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
 
+# Seconds to wait before reopening a trade on the same symbol
+TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", "0"))
+
