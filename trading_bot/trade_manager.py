@@ -174,3 +174,10 @@ def export_trade_history(filepath: str):
 def count_open_trades():
     with LOCK:
         return len(open_trades)
+
+
+def count_trades_for_symbol(symbol: str) -> int:
+    """Return number of open trades for ``symbol``."""
+    with LOCK:
+        return sum(1 for t in open_trades if t.get("symbol") == symbol)
+

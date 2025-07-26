@@ -27,6 +27,16 @@ try:
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "10"))
 except (TypeError, ValueError):
     MAX_OPEN_TRADES = 10
+# Maximum simultaneous trades per symbol
+try:
+    MAX_TRADES_PER_SYMBOL = int(os.getenv("MAX_TRADES_PER_SYMBOL", "1"))
+except (TypeError, ValueError):
+    MAX_TRADES_PER_SYMBOL = 1
+# Cooldown in minutes between trades on the same symbol
+try:
+    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "5"))
+except (TypeError, ValueError):
+    COOLDOWN_MINUTES = 5
 # Maximum daily loss before trading stops (configurable via DAILY_RISK_LIMIT env var)
 try:
     DAILY_RISK_LIMIT = float(os.getenv("DAILY_RISK_LIMIT", "-50"))
@@ -50,7 +60,9 @@ MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
 # ATR multiple for stop loss calculation
 STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
-MIN_RISK_REWARD = float(os.getenv("MIN_RISK_REWARD", "2.0"))
+MIN_RISK_REWARD = float(
+    os.getenv("MIN_RISK_REWARD", "1.5" if TEST_MODE else "2.0")
+)
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 
 # Seconds to wait for a limit order to be filled before canceling
@@ -72,7 +84,9 @@ MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
 
 # Minimum order size allowed when sizing positions
-MIN_POSITION_SIZE = float(os.getenv("MIN_POSITION_SIZE", "0.001"))
+MIN_POSITION_SIZE = float(
+    os.getenv("MIN_POSITION_SIZE", "1e-4" if TEST_MODE else "0.001")
+)
 
 # Optional in-memory trade history auditing
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
