@@ -36,6 +36,21 @@ except (TypeError, ValueError):
 BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
 
+if TEST_MODE:
+    env_symbols = os.getenv("TEST_SYMBOLS")
+    if env_symbols:
+        TEST_SYMBOLS = [
+            s.strip().replace("/", "_").upper() for s in env_symbols.split(",") if s.strip()
+        ]
+    else:
+        TEST_SYMBOLS = [
+            "BTC_USDT", "ETH_USDT", "SOL_USDT", "ADA_USDT", "XRP_USDT",
+            "DOGE_USDT", "DOT_USDT", "AVAX_USDT", "MATIC_USDT", "LTC_USDT",
+            "BCH_USDT", "LINK_USDT", "UNI_USDT", "ALGO_USDT", "ATOM_USDT",
+        ]
+else:
+    TEST_SYMBOLS: list[str] = []
+
 BASE_URL_MEXC = "https://contract.mexc.com/api/v1"
 BASE_URL_BITGET = "https://api.bitget.com"
 BASE_URL_BINANCE = "https://fapi.binance.com"
