@@ -14,7 +14,7 @@ def test_calcular_tamano_atr_zero():
         atr_multiplier=1.5,
         risk_per_trade_usd=10,
     )
-    assert size == 0.0
+    assert size is None
 
 
 def test_calcular_tamano_distancia_negativa():
@@ -25,7 +25,7 @@ def test_calcular_tamano_distancia_negativa():
         atr_multiplier=-1,
         risk_per_trade_usd=10,
     )
-    assert size == 0.0
+    assert size is None
 
 
 def test_calcular_tamano_capped_by_balance():
