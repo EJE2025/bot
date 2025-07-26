@@ -78,6 +78,7 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_OPEN_TRADES` (default 10)
 - `DAILY_RISK_LIMIT` (default `-50`)
 - `TEST_MODE` set to `1` to use a mock exchange without sending real orders
+- `LOG_LEVEL` controls verbosity of logs (`DEBUG`, `INFO`, etc., default `INFO`)
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `RSI_PERIOD` período del RSI (default `14`)
