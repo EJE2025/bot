@@ -23,6 +23,8 @@ MEXC_API_SECRET = get_secret("MEXC_API_SECRET") or ""
 
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 # Optional comma separated list of symbols to analyze when TEST_MODE is enabled
 _test_syms = os.getenv("TEST_SYMBOLS", "")
