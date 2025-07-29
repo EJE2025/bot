@@ -3,10 +3,6 @@ from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
 load_dotenv(env_path)
-if not os.getenv("BITGET_API_KEY"):
-    print("\u26a0\ufe0f  No se carg\xf3 la API KEY. Revisa si el archivo .env existe y est\xe1 bien ubicado.")
-else:
-    print("\u2705 Archivo .env cargado correctamente.")
 
 import logging
 import time
@@ -37,7 +33,14 @@ from .trade_manager import (
     count_open_trades,
     count_trades_for_symbol,
 )
-from .utils import normalize_symbol
+
+from .metrics import start_metrics_server, update_trade_metrics
+from .monitor import monitor_system
+
+if not config.BITGET_API_KEY:
+    print("\u26a0\ufe0f  No se carg\xf3 la API KEY. Revisa si el archivo .env existe o el gestor de secretos est\xe1 configurado.")
+else:
+    print("\u2705 Archivo .env cargado correctamente.")
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -196,11 +199,18 @@ def run():
         daemon=True,
     ).start()
 
+    # Expose Prometheus metrics and start system monitor
+    Thread(target=start_metrics_server, args=(8001,), daemon=True).start()
+    Thread(target=monitor_system, daemon=True).start()
+
     strategy.start_liquidity()
 
     model = optimizer.load_model(config.MODEL_PATH)
     daily_profit = 0.0
     trading_active = True
+
+    # Initial metric update
+    update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
 
     logger.info("Starting trading loop...")
 
@@ -323,6 +333,7 @@ def run():
                     )
 
             save_trades()  # Guarda el estado periódicamente
+            update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
 
             if not trading_active and count_open_trades() == 0:
                 logger.info("All positions closed after reaching daily limit")

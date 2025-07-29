@@ -5,7 +5,7 @@ import pandas as pd
 import time
 import requests
 from . import liquidity_ws
-from .indicators import (
+from .indicators_talib import (
     compute_rsi,
     compute_macd,
     calculate_atr,
@@ -54,27 +54,41 @@ def sentiment_score(symbol: str, period: str = "5m") -> float:
     return 0.0
 
 
-def calcular_tamano_posicion(balance_usdt: float, entry_price: float, atr_value: float,
-                             atr_multiplier: float, risk_per_trade_usd: float) -> float:
-    """Size position so max loss equals ``risk_per_trade_usd``.
+def calcular_tamano_posicion(
+    balance_usdt: float,
+    entry_price: float,
+    atr_value: float,
+    atr_multiplier: float,
+    risk_per_trade_usd: float,
+) -> float | None:
+    """Dimensiona la posición para que la pérdida máxima sea ``risk_per_trade_usd``.
 
-    Returns ``None`` when inputs are invalid or the calculated quantity is
-    smaller than :data:`config.MIN_POSITION_SIZE`.
+    Devuelve ``None`` cuando los parámetros son inválidos (ATR o precio no
+    positivos, o distancia al ``stop`` no positiva) o si la cantidad resultante
+    es inferior a :data:`config.MIN_POSITION_SIZE`.
     """
+
+    # Validaciones básicas de entrada
     if atr_value <= 0 or entry_price <= 0:
-        return None if risk_per_trade_usd >= 50 else 0.0
+        return None
 
     distancia_stop = atr_value * atr_multiplier
+    # Si la distancia al stop es nula o negativa no se abre la operación
     if distancia_stop <= 0:
-        return None if risk_per_trade_usd >= 50 else 0.0
+        return None
 
+    # Cantidad de contratos acorde al riesgo permitido
     qty = risk_per_trade_usd / (distancia_stop * entry_price)
+
+    # No superar el saldo disponible
     max_qty = balance_usdt / entry_price
     qty = max(0.0, min(qty, max_qty))
+
     if qty < config.MIN_POSITION_SIZE:
         if atr_value < entry_price * 0.0001:
             return config.MIN_POSITION_SIZE
         return None
+
     return qty
 
 

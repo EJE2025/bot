@@ -7,3 +7,5 @@ scikit-learn
 flask
 websockets
 scipy
+prometheus-client
+psutil
