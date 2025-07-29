@@ -22,8 +22,12 @@ MEXC_API_SECRET = os.getenv("MEXC_API_SECRET", "")
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
-# Logging level for the application
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+# Optional comma separated list of symbols to analyze when TEST_MODE is enabled
+_test_syms = os.getenv("TEST_SYMBOLS", "")
+TEST_SYMBOLS = [
+    s.strip().upper().replace("/", "").replace("_", "")
+    for s in _test_syms.split(",") if s.strip()
+]
 # Number of concurrent trades allowed (configurable via MAX_OPEN_TRADES env var)
 try:
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "10"))

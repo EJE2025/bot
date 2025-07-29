@@ -215,7 +215,11 @@ def run():
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
             if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
-                symbols = data.get_common_top_symbols(execution.exchange, 15)
+                if config.TEST_MODE and config.TEST_SYMBOLS:
+                    symbols = [s.replace("/", "_").replace("-", "_")
+                               for s in config.TEST_SYMBOLS]
+                else:
+                    symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
                 seen = set()
                 for symbol in symbols:
