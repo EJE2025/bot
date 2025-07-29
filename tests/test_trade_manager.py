@@ -26,3 +26,10 @@ def test_atomic_save(tmp_path, monkeypatch):
     tm.save_trades(tmp_path / "open.json", tmp_path / "closed.json")
     assert (tmp_path / "open.json").exists()
     assert not Path(str(tmp_path / "open.json") + ".tmp").exists()
+
+
+def test_count_trades_for_symbol():
+    tm.add_trade({"symbol": "BTC_USDT"})
+    tm.add_trade({"symbol": "BTC_USDT"})
+    assert tm.count_trades_for_symbol("BTC_USDT") == 2
+

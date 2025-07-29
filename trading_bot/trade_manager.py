@@ -196,19 +196,7 @@ def count_open_trades():
         return len(open_trades)
 
 
-def in_cooldown(symbol: str) -> bool:
-    """Return ``True`` if ``symbol`` was closed recently."""
-    sym = normalize_symbol(symbol)
-    ts = _last_closed.get(sym)
-    if ts is None:
-        return False
-    return (time.time() - ts) < config.TRADE_COOLDOWN
-
-
-def reset_state():
-    """Clear open, closed trades and cooldowns (for tests)."""
+def count_trades_for_symbol(symbol: str) -> int:
+    """Return number of open trades for ``symbol``."""
     with LOCK:
-        open_trades.clear()
-        closed_trades.clear()
-        trade_history.clear()
-        _last_closed.clear()
+        return sum(1 for t in open_trades if t.get("symbol") == symbol)

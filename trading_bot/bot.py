@@ -11,7 +11,7 @@ else:
 import logging
 import time
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -35,13 +35,18 @@ from .trade_manager import (
     load_trades,
     save_trades,
     count_open_trades,
+    count_trades_for_symbol,
 )
+from .utils import normalize_symbol
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Track last close time per symbol to enforce cooldown
+_last_trade_time: dict[str, datetime] = {}
 
 
 def open_new_trade(signal: dict):
@@ -223,13 +228,14 @@ def run():
                 candidates = []
                 seen = set()
                 for symbol in symbols:
-                    if find_trade(symbol=symbol) or trade_manager.in_cooldown(symbol):
+                    # enforce per-symbol trade limit
+                    if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                         continue
-                    norm = trade_manager.normalize_symbol(symbol)
-                    if norm in seen:
+                    sym_norm = normalize_symbol(symbol)
+                    last = _last_trade_time.get(sym_norm)
+                    if last and datetime.utcnow() - last < timedelta(minutes=config.COOLDOWN_MINUTES):
                         continue
-                    seen.add(norm)
-                    raw = symbol.replace("_", "")
+                    raw = sym_norm
                     if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
@@ -308,6 +314,7 @@ def run():
                         profit,
                         "TP" if profit >= 0 else "SL",
                     )
+                    _last_trade_time[normalize_symbol(op["symbol"])] = datetime.utcnow()
                     daily_profit += profit
 
                     notify.send_telegram(
