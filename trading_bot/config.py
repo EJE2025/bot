@@ -1,5 +1,7 @@
 import os
 
+from .secret_manager import get_secret
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
@@ -9,15 +11,15 @@ env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"
 if load_dotenv is not None:
     load_dotenv(env_path)
 
-BITGET_API_KEY = os.getenv("BITGET_API_KEY", "")
-BITGET_API_SECRET = os.getenv("BITGET_API_SECRET", "")
-BITGET_PASSPHRASE = os.getenv("BITGET_PASSPHRASE", os.getenv("BITGET_API_PASSPHRASE", ""))
+BITGET_API_KEY = get_secret("BITGET_API_KEY") or ""
+BITGET_API_SECRET = get_secret("BITGET_API_SECRET") or ""
+BITGET_PASSPHRASE = get_secret("BITGET_PASSPHRASE") or os.getenv("BITGET_API_PASSPHRASE", "")
 
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BINANCE_API_KEY = get_secret("BINANCE_API_KEY") or ""
+BINANCE_API_SECRET = get_secret("BINANCE_API_SECRET") or ""
 
-MEXC_API_KEY = os.getenv("MEXC_API_KEY", "")
-MEXC_API_SECRET = os.getenv("MEXC_API_SECRET", "")
+MEXC_API_KEY = get_secret("MEXC_API_KEY") or ""
+MEXC_API_SECRET = get_secret("MEXC_API_SECRET") or ""
 
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
@@ -88,4 +90,12 @@ ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
 
 # Seconds to wait before reopening a trade on the same symbol
 TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", "0"))
+
+# Maximum number of simultaneous requests to exchanges
+MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
+
+# Thresholds for system monitoring alerts
+CPU_THRESHOLD = float(os.getenv("CPU_THRESHOLD", "0.8"))  # 80%
+MEMORY_THRESHOLD_MB = float(os.getenv("MEMORY_THRESHOLD_MB", "500"))  # 500 MB
+LATENCY_THRESHOLD_MS = float(os.getenv("LATENCY_THRESHOLD_MS", "1000"))  # 1 s
 
