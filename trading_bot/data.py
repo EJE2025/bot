@@ -1,9 +1,11 @@
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, Iterable, List
 import os
 import json
 import requests
+import pandas as pd
+import numpy as np
 from . import config
 from .utils import circuit_breaker
 
@@ -13,6 +15,20 @@ MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = "cache"
+SAMPLE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data_samples")
+
+
+def normalize_symbol(sym: str) -> str:
+    """Return compact symbol like ``BTCUSDT`` ignoring separators."""
+    return sym.replace("/", "").replace("_", "").replace(":USDT", "").replace("-", "").upper()
+
+
+def display_symbol(sym: str) -> str:
+    """Return symbol formatted with underscore as ``BTC_USDT``."""
+    norm = normalize_symbol(sym)
+    if norm.endswith("USDT") and len(norm) > 4:
+        return norm[:-4] + "_USDT"
+    return norm
 
 
 def _generic_cache_path(prefix: str, *parts: str) -> str:
@@ -39,6 +55,33 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     stored under ``cache/``. ``None`` is returned when no cache is available.
     """
     symbol_raw = symbol.replace("_", "")
+
+    # Look for local CSV samples before making any network calls
+    csv_file = os.path.join(SAMPLE_DATA_DIR, f"{normalize_symbol(symbol)}_{interval}.csv")
+    if os.path.exists(csv_file):
+        df = pd.read_csv(csv_file)
+        df = df.head(limit)
+        return {
+            "close": df["close"].tolist(),
+            "high": df["high"].tolist(),
+            "low": df["low"].tolist(),
+            "vol": df["vol"].tolist(),
+        }
+
+    if config.TEST_MODE:
+        rng = np.random.default_rng(hash(symbol) % 2**32)
+        base_price = 100.0
+        price = base_price + rng.standard_normal(limit).cumsum() * 0.5
+        high = price + rng.uniform(0.1, 1.0, size=limit)
+        low = price - rng.uniform(0.1, 1.0, size=limit)
+        vol = rng.uniform(100, 1000, size=limit)
+        return {
+            "close": price.tolist(),
+            "high": high.tolist(),
+            "low": low.tolist(),
+            "vol": vol.tolist(),
+        }
+
     url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
     params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
     for attempt in range(MAX_ATTEMPTS):
@@ -110,7 +153,8 @@ def get_ticker(symbol: str) -> Dict | None:
     return None
 
 
-def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
+def get_common_top_symbols(exchange, n: int = 15,
+                           exclude: Iterable[str] | None = None) -> List[str]:
     """Return the most liquid symbols according to ``exchange.fetch_markets``.
 
     If the request fails multiple times, the cached ``exchange.markets`` mapping
@@ -137,10 +181,19 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
     else:
         market_dict = markets or {}
 
-    # Keep only USDT pairs
+    # symbols to exclude normalized
+    excluded = {
+        normalize_symbol(s)
+        for s in (config.BLACKLIST_SYMBOLS | config.UNSUPPORTED_SYMBOLS)
+    }
+    if exclude:
+        excluded.update(normalize_symbol(s) for s in exclude)
+
+    # Keep only USDT pairs and not excluded
     filtered = [
         m for m in market_dict.values()
         if m.get("symbol", "").upper().endswith("USDT")
+        and normalize_symbol(m.get("symbol", "")) not in excluded
     ]
     sorted_by_vol = sorted(
         filtered,
@@ -148,10 +201,7 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
         reverse=True,
     )
 
-    def normalize(sym: str) -> str:
-        return sym.replace("/", "_").replace(":USDT", "")
-
-    top = [normalize(m["symbol"]) for m in sorted_by_vol[:n]]
+    top = [normalize_symbol(m["symbol"]) for m in sorted_by_vol[:n]]
     logger.info("Top %d symbols by volume: %s", len(top), top)
     return top
 

@@ -85,6 +85,8 @@ def calcular_tamano_posicion(
     qty = max(0.0, min(qty, max_qty))
 
     if qty < config.MIN_POSITION_SIZE:
+        if atr_value < entry_price * 0.0001:
+            return config.MIN_POSITION_SIZE
         return None
 
     return qty

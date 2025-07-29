@@ -7,6 +7,7 @@ from datetime import datetime
 import time
 import logging
 from . import config
+from .utils import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,10 @@ def find_trade(symbol=None, trade_id=None):
     norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         for trade in open_trades:
-            if (norm and normalize_symbol(trade.get("symbol")) == norm) or (trade_id and trade.get("trade_id") == trade_id):
+
+            if norm and normalize_symbol(trade.get("symbol")) == norm:
+                return trade
+            if trade_id and trade.get("trade_id") == trade_id:
                 return trade
     return None
 
@@ -196,19 +200,7 @@ def count_open_trades():
         return len(open_trades)
 
 
-def in_cooldown(symbol: str) -> bool:
-    """Return ``True`` if ``symbol`` was closed recently."""
-    sym = normalize_symbol(symbol)
-    ts = _last_closed.get(sym)
-    if ts is None:
-        return False
-    return (time.time() - ts) < config.TRADE_COOLDOWN
-
-
-def reset_state():
-    """Clear open, closed trades and cooldowns (for tests)."""
+def count_trades_for_symbol(symbol: str) -> int:
+    """Return number of open trades for ``symbol``."""
     with LOCK:
-        open_trades.clear()
-        closed_trades.clear()
-        trade_history.clear()
-        _last_closed.clear()
+        return sum(1 for t in open_trades if t.get("symbol") == symbol)

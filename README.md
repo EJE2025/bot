@@ -32,8 +32,8 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
   `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
  - La lista de símbolos que analiza el bot se obtiene de forma dinámica según el
   volumen de futuros USDT del exchange. En `TEST_MODE` se usa `MockExchange`,
-  que genera 25 pares con volúmenes aleatorios fijos y devuelve los 15 más
-  líquidos.
+  que genera 25 pares con volúmenes deterministas para devolver siempre los 15
+  más líquidos.
 - Sentimiento de mercado usando el ratio de posiciones long/short de Bitget
 - Reconciliación automática con posiciones de Bitget al iniciar
 - Cancelación de órdenes pendientes no registradas al sincronizar
@@ -78,18 +78,22 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_OPEN_TRADES` (default 10)
 - `DAILY_RISK_LIMIT` (default `-50`)
 - `TEST_MODE` set to `1` to use a mock exchange without sending real orders
-- `LOG_LEVEL` controls verbosity of logs (`DEBUG`, `INFO`, etc., default `INFO`)
+
+- `TEST_SYMBOLS` comma separated list of symbols to analyse when `TEST_MODE` is
+  enabled
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `RSI_PERIOD` período del RSI (default `14`)
-- `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`)
+- `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`, `1.5` en modo test)
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)
-- `MIN_POSITION_SIZE` tamaño mínimo de posición permitido (default `0.001`)
+- `MIN_POSITION_SIZE` tamaño mínimo de posición permitido (default `0.001`, `1e-4` en modo test)
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
 - `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
 
 - `ENABLE_TRADE_HISTORY_LOG` activa el registro detallado de cambios en memoria (default `0`)
 - `MAX_TRADE_HISTORY_SIZE` número máximo de eventos en memoria antes de descartar los más antiguos (default `1000`)
+- `MAX_TRADES_PER_SYMBOL` límite de operaciones simultáneas por par (default `1`)
+- `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `5`)
 
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)

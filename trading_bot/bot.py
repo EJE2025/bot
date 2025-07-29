@@ -7,7 +7,7 @@ load_dotenv(env_path)
 import logging
 import time
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 
@@ -31,7 +31,9 @@ from .trade_manager import (
     load_trades,
     save_trades,
     count_open_trades,
+    count_trades_for_symbol,
 )
+
 from .metrics import start_metrics_server, update_trade_metrics
 from .monitor import monitor_system
 
@@ -46,11 +48,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Track last close time per symbol to enforce cooldown
+_last_trade_time: dict[str, datetime] = {}
+
 
 def open_new_trade(signal: dict):
     """Open a position on the exchange and register it via trade_manager."""
     symbol = signal["symbol"]
-    raw = symbol.replace("_", "")
+    raw = normalize_symbol(symbol).replace("_", "")
     try:
         execution.setup_leverage(execution.exchange, raw, signal["leverage"])
         order = execution.open_position(
@@ -146,7 +151,7 @@ def run():
     positions = execution.fetch_positions()
     active_symbols = set()
     for pos in positions:
-        symbol = pos.get("symbol", "").replace("/", "_").replace(":USDT", "")
+        symbol = normalize_symbol(pos.get("symbol", ""))
         qty = float(pos.get("contracts", 0))
         if qty == 0:
             continue
@@ -179,7 +184,7 @@ def run():
 
     # Cancelar órdenes abiertas pendientes no registradas
     for order in execution.fetch_open_orders():
-        sym = order.get("symbol", "").replace("/", "_").replace(":USDT", "")
+        sym = normalize_symbol(order.get("symbol", ""))
         if sym not in active_symbols:
             execution.cancel_order(order.get("id"), sym)
 
@@ -225,18 +230,21 @@ def run():
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
             if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
-                symbols = data.get_common_top_symbols(execution.exchange, 15)
+                if config.TEST_MODE and config.TEST_SYMBOLS:
+                    symbols = [s.replace("/", "_").replace("-", "_")
+                               for s in config.TEST_SYMBOLS]
+                else:
+                    symbols = data.get_common_top_symbols(execution.exchange, 15)
                 candidates = []
                 seen = set()
                 for symbol in symbols:
-                    if find_trade(symbol=symbol) or trade_manager.in_cooldown(symbol):
+                    # enforce per-symbol trade limit
+                    if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                         continue
-                    norm = trade_manager.normalize_symbol(symbol)
-                    if norm in seen:
-                        continue
-                    seen.add(norm)
-                    raw = symbol.replace("_", "")
-                    if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
+                    raw = normalize_symbol(symbol).replace("_", "")
+                    bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
+                    unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
+                    if raw in bl or raw in unsup:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
                     if (
@@ -252,7 +260,7 @@ def run():
                     if count_open_trades() >= config.MAX_OPEN_TRADES:
                         break
                     symbol = sig["symbol"]
-                    raw = symbol.replace("_", "")
+                    raw = normalize_symbol(symbol).replace("_", "")
                     try:
                         trade = open_new_trade(sig)
                         if not trade:
@@ -314,6 +322,7 @@ def run():
                         profit,
                         "TP" if profit >= 0 else "SL",
                     )
+                    _last_trade_time[normalize_symbol(op["symbol"])] = datetime.utcnow()
                     daily_profit += profit
 
                     notify.send_telegram(
