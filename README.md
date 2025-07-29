@@ -78,6 +78,7 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_OPEN_TRADES` (default 10)
 - `DAILY_RISK_LIMIT` (default `-50`)
 - `TEST_MODE` set to `1` to use a mock exchange without sending real orders
+
 - `TEST_SYMBOLS` comma separated list of symbols to analyse when `TEST_MODE` is
   enabled
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
