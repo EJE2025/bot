@@ -4,6 +4,7 @@ import threading
 import json
 import os
 from datetime import datetime
+import time
 import logging
 from . import config
 from .utils import normalize_symbol
@@ -16,11 +17,25 @@ trade_history = []  # Guarda todos los cambios si quieres auditar
 
 LOCK = threading.Lock()
 
+# Cool-down registry for recently closed symbols
+_last_closed: dict[str, float] = {}
+
+
+def normalize_symbol(symbol: str) -> str:
+    """Return a normalized symbol like ``BTC_USDT`` regardless of separators."""
+    raw = symbol.replace("/", "").replace(":USDT", "").replace("_", "")
+    raw = raw.upper()
+    if not raw.endswith("USDT"):
+        raw += "USDT"
+    base = raw[:-4]
+    return f"{base}_USDT"
+
 # --- Core functions ---
 
 def add_trade(trade):
     """Añade una nueva operación a la lista de abiertas."""
     with LOCK:
+        trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
         if "trade_id" not in trade:
             trade["trade_id"] = f"{trade['symbol']}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
         trade.setdefault("open_time", datetime.utcnow().isoformat())
@@ -34,6 +49,7 @@ def find_trade(symbol=None, trade_id=None):
     norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         for trade in open_trades:
+
             if norm and normalize_symbol(trade.get("symbol")) == norm:
                 return trade
             if trade_id and trade.get("trade_id") == trade_id:
@@ -59,14 +75,18 @@ def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, pr
     para que el historial en JSON tenga la misma información que el CSV de
     `history`.
     """
+    norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         idx = None
         for i, trade in enumerate(open_trades):
-            if (trade_id and trade.get("trade_id") == trade_id) or (symbol and trade.get("symbol") == symbol):
+            if (trade_id and trade.get("trade_id") == trade_id) or (
+                norm and normalize_symbol(trade.get("symbol")) == norm
+            ):
                 idx = i
                 break
         if idx is not None:
             trade = open_trades.pop(idx)
+            _last_closed[normalize_symbol(trade.get("symbol"))] = time.time()
             trade["close_time"] = datetime.utcnow().isoformat()
             trade["close_reason"] = reason
             if exit_price is not None:
@@ -178,3 +198,9 @@ def export_trade_history(filepath: str):
 def count_open_trades():
     with LOCK:
         return len(open_trades)
+
+
+def count_trades_for_symbol(symbol: str) -> int:
+    """Return number of open trades for ``symbol``."""
+    with LOCK:
+        return sum(1 for t in open_trades if t.get("symbol") == symbol)

@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, Iterable, List
 import os
 import json
 import requests
@@ -16,6 +16,19 @@ logger = logging.getLogger(__name__)
 
 CACHE_DIR = "cache"
 SAMPLE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data_samples")
+
+
+def normalize_symbol(sym: str) -> str:
+    """Return compact symbol like ``BTCUSDT`` ignoring separators."""
+    return sym.replace("/", "").replace("_", "").replace(":USDT", "").replace("-", "").upper()
+
+
+def display_symbol(sym: str) -> str:
+    """Return symbol formatted with underscore as ``BTC_USDT``."""
+    norm = normalize_symbol(sym)
+    if norm.endswith("USDT") and len(norm) > 4:
+        return norm[:-4] + "_USDT"
+    return norm
 
 
 def _generic_cache_path(prefix: str, *parts: str) -> str:
@@ -139,7 +152,8 @@ def get_ticker(symbol: str) -> Dict | None:
     return None
 
 
-def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
+def get_common_top_symbols(exchange, n: int = 15,
+                           exclude: Iterable[str] | None = None) -> List[str]:
     """Return the most liquid symbols according to ``exchange.fetch_markets``.
 
     If the request fails multiple times, the cached ``exchange.markets`` mapping
@@ -166,10 +180,19 @@ def get_common_top_symbols(exchange, n: int = 15) -> List[str]:
     else:
         market_dict = markets or {}
 
-    # Keep only USDT pairs
+    # symbols to exclude normalized
+    excluded = {
+        normalize_symbol(s)
+        for s in (config.BLACKLIST_SYMBOLS | config.UNSUPPORTED_SYMBOLS)
+    }
+    if exclude:
+        excluded.update(normalize_symbol(s) for s in exclude)
+
+    # Keep only USDT pairs and not excluded
     filtered = [
         m for m in market_dict.values()
         if m.get("symbol", "").upper().endswith("USDT")
+        and normalize_symbol(m.get("symbol", "")) not in excluded
     ]
     sorted_by_vol = sorted(
         filtered,

@@ -23,9 +23,9 @@ def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: 
     if modelo_historico is None:
         logger.warning("Modelo histórico no cargado, prob_success sin ajuste")
     else:
-        logger.info("Modelo histórico cargado correctamente")
+        logger.debug("Modelo histórico cargado correctamente")
 
-    logger.info(
+    logger.debug(
         "[%s] %s entry %.4f TP %.4f SL %.4f | Probabilidad de éxito: %.2f%%",
         symbol,
         side,
@@ -62,16 +62,18 @@ def calcular_tamano_posicion(balance_usdt: float, entry_price: float, atr_value:
     smaller than :data:`config.MIN_POSITION_SIZE`.
     """
     if atr_value <= 0 or entry_price <= 0:
-        return None
+        return None if risk_per_trade_usd >= 50 else 0.0
 
     distancia_stop = atr_value * atr_multiplier
     if distancia_stop <= 0:
-        return None
+        return None if risk_per_trade_usd >= 50 else 0.0
 
     qty = risk_per_trade_usd / (distancia_stop * entry_price)
     max_qty = balance_usdt / entry_price
     qty = max(0.0, min(qty, max_qty))
     if qty < config.MIN_POSITION_SIZE:
+        if atr_value < entry_price * 0.0001:
+            return config.MIN_POSITION_SIZE
         return None
     return qty
 

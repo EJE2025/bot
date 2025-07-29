@@ -24,6 +24,10 @@ DEFAULT_TOP_15_SYMBOLS = [
 
 def get_top_15_symbols() -> list[str]:
     """Return the 15 highest volume USDT futures symbols."""
+    if config.TEST_MODE and config.TEST_SYMBOLS:
+        return [s.replace("/", "").replace("_", "").upper()
+                for s in config.TEST_SYMBOLS]
+
     ex = exchanges.get_exchange(config.DEFAULT_EXCHANGE)
     symbols = data.get_common_top_symbols(ex, 15)
     if not symbols:
