@@ -22,6 +22,12 @@ MEXC_API_SECRET = os.getenv("MEXC_API_SECRET", "")
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
+# Optional comma separated list of symbols to analyze when TEST_MODE is enabled
+_test_syms = os.getenv("TEST_SYMBOLS", "")
+TEST_SYMBOLS = [
+    s.strip().upper().replace("/", "").replace("_", "")
+    for s in _test_syms.split(",") if s.strip()
+]
 # Number of concurrent trades allowed (configurable via MAX_OPEN_TRADES env var)
 try:
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "10"))
@@ -97,4 +103,7 @@ DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))
 
 # Maximum attempts when submitting or closing orders
 ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
+
+# Seconds to wait before reopening a trade on the same symbol
+TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", "0"))
 

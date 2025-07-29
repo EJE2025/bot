@@ -23,9 +23,9 @@ def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: 
     if modelo_historico is None:
         logger.warning("Modelo histórico no cargado, prob_success sin ajuste")
     else:
-        logger.info("Modelo histórico cargado correctamente")
+        logger.debug("Modelo histórico cargado correctamente")
 
-    logger.info(
+    logger.debug(
         "[%s] %s entry %.4f TP %.4f SL %.4f | Probabilidad de éxito: %.2f%%",
         symbol,
         side,
