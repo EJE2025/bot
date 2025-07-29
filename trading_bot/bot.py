@@ -52,7 +52,7 @@ _last_trade_time: dict[str, datetime] = {}
 def open_new_trade(signal: dict):
     """Open a position on the exchange and register it via trade_manager."""
     symbol = signal["symbol"]
-    raw = symbol.replace("_", "")
+    raw = normalize_symbol(symbol).replace("_", "")
     try:
         execution.setup_leverage(execution.exchange, raw, signal["leverage"])
         order = execution.open_position(
@@ -148,7 +148,7 @@ def run():
     positions = execution.fetch_positions()
     active_symbols = set()
     for pos in positions:
-        symbol = pos.get("symbol", "").replace("/", "_").replace(":USDT", "")
+        symbol = normalize_symbol(pos.get("symbol", ""))
         qty = float(pos.get("contracts", 0))
         if qty == 0:
             continue
@@ -181,7 +181,7 @@ def run():
 
     # Cancelar órdenes abiertas pendientes no registradas
     for order in execution.fetch_open_orders():
-        sym = order.get("symbol", "").replace("/", "_").replace(":USDT", "")
+        sym = normalize_symbol(order.get("symbol", ""))
         if sym not in active_symbols:
             execution.cancel_order(order.get("id"), sym)
 
@@ -231,12 +231,10 @@ def run():
                     # enforce per-symbol trade limit
                     if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                         continue
-                    sym_norm = normalize_symbol(symbol)
-                    last = _last_trade_time.get(sym_norm)
-                    if last and datetime.utcnow() - last < timedelta(minutes=config.COOLDOWN_MINUTES):
-                        continue
-                    raw = sym_norm
-                    if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
+                    raw = normalize_symbol(symbol).replace("_", "")
+                    bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
+                    unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
+                    if raw in bl or raw in unsup:
                         continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
                     if (
@@ -252,7 +250,7 @@ def run():
                     if count_open_trades() >= config.MAX_OPEN_TRADES:
                         break
                     symbol = sig["symbol"]
-                    raw = symbol.replace("_", "")
+                    raw = normalize_symbol(symbol).replace("_", "")
                     try:
                         trade = open_new_trade(sig)
                         if not trade:

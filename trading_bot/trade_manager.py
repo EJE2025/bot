@@ -7,6 +7,7 @@ from datetime import datetime
 import time
 import logging
 from . import config
+from .utils import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,10 @@ def find_trade(symbol=None, trade_id=None):
     norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         for trade in open_trades:
-            if (norm and normalize_symbol(trade.get("symbol")) == norm) or (trade_id and trade.get("trade_id") == trade_id):
+
+            if norm and normalize_symbol(trade.get("symbol")) == norm:
+                return trade
+            if trade_id and trade.get("trade_id") == trade_id:
                 return trade
     return None
 

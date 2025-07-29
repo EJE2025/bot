@@ -7,6 +7,7 @@ import threading
 from collections import defaultdict
 from typing import Iterable
 from . import exchanges, config, data
+from .utils import normalize_symbol
 
 import websockets
 
@@ -277,8 +278,9 @@ def get_liquidity(symbol=None):
     """Get current liquidity map. If symbol provided, return its book."""
     with _lock:
         if symbol:
-            if symbol in _liquidity:
-                return _liquidity.get(symbol)
+            norm = normalize_symbol(symbol)
+            if norm in _liquidity:
+                return _liquidity.get(norm)
             return None
         return {k: v.copy() for k, v in _liquidity.items()}
 
