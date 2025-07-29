@@ -5,8 +5,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 
 ## Funcionalidades
 
-- Indicadores técnicos avanzados (RSI, MACD, ATR) con soportes y resistencias
-  detectados mediante extremos locales (requiere `scipy`)
+- Indicadores técnicos avanzados (RSI, MACD, ATR) con soporte opcional de [TA-Lib](https://ta-lib.org) y soportes/resistencias mediante extremos locales (requiere `scipy`)
 - Parámetros de gestión de riesgo
 - Tamaño de posición calculado según porcentaje de balance disponible y distancia al stop
 
@@ -27,6 +26,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
   realizado calculado con el precio actual
 - Notificaciones por Telegram y Discord al abrir y cerrar operaciones
 - Arquitectura modular para facilitar mejoras
+- Métricas de Prometheus disponibles en `http://localhost:8001/metrics`
 - Análisis del libro de órdenes para zonas de liquidez
 - Los símbolos en el dashboard de liquidez muestran la fuente, p.ej.
   `BTC_USDT (Binance)` o `BTC_USDT (Bitget)`
@@ -98,6 +98,37 @@ variables definidas en `trading_bot/config.py`:
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
+## Dependencias opcionales
+
+Para acelerar el cálculo de indicadores se puede instalar [TA-Lib](https://ta-lib.org).
+La detección de soportes y resistencias utiliza `scipy`; si estas bibliotecas no están disponibles, se usarán implementaciones en Python puro.
+
+
+## Configuración avanzada
+
+| Variable | Descripción | Por defecto |
+|----------------------|-------------------------------------------------------------------------------|------------|
+| `LOG_LEVEL` | Nivel de verbosidad del log (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
+| `DATA_RETRY_ATTEMPTS`| Número de reintentos al descargar datos antes de usar la caché. | `3` |
+| `ORDER_SUBMIT_ATTEMPTS` | Reintentos al enviar o cerrar órdenes. | `3` |
+| `TRADE_COOLDOWN` | Tiempo en segundos que debe transcurrir antes de reabrir el mismo símbolo. | `0` |
+| `MAX_CONCURRENT_REQUESTS` | Número máximo de llamadas simultáneas al exchange. | `5` |
+| `CPU_THRESHOLD` | Fracción de uso de CPU a partir de la cual se enviará una alerta (0–1). | `0.8` |
+| `MEMORY_THRESHOLD_MB` | Uso de memoria en MB que dispara una alerta. | `500` |
+| `LATENCY_THRESHOLD_MS` | Latencia (en milisegundos) considerada excesiva para llamadas de API. | `1000` |
+
+Las métricas del bot se exponen por defecto en `http://localhost:8001/metrics`. Pueden configurarse alertas de uso de CPU y memoria mediante las variables de entorno anteriores.
+
+```mermaid
+graph TD
+    config --> data
+    config --> execution
+    data --> strategy
+    strategy --> execution
+    execution --> trade_manager
+    trade_manager --> webapp
+    webapp --> notify
+```
 ## Pruebas
 
 Para ejecutar todas las pruebas y ver el reporte de cobertura ejecuta:

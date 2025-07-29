@@ -5,6 +5,7 @@ import os
 import json
 import requests
 from . import config
+from .utils import circuit_breaker
 
 # How many attempts should be made for network calls
 MAX_ATTEMPTS = config.DATA_RETRY_ATTEMPTS
@@ -30,6 +31,7 @@ def _to_binance_interval(interval: str) -> str:
     return interval
 
 
+@circuit_breaker(fallback=None, max_failures=3, reset_timeout=30)
 def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict | None:
     """Return OHLCV data from Binance futures.
 

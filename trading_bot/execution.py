@@ -1,12 +1,17 @@
 import logging
 import time
+import asyncio
 import ccxt
 from . import config
 from .exchanges import get_exchange, MockExchange
+from .utils import circuit_breaker
 
 
 
 logger = logging.getLogger(__name__)
+
+# Limit concurrent API requests across async tasks
+api_semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
 
 try:
     exchange = get_exchange(config.DEFAULT_EXCHANGE)
@@ -131,6 +136,7 @@ def setup_leverage(exchange, symbol: str, leverage: int = 10):
         return {"success": False, "symbol": symbol, "error": str(exc)}
 
 
+@circuit_breaker(fallback=None, max_failures=3, reset_timeout=60)
 def open_position(symbol: str, side: str, amount: float, price: float,
                   order_type: str = "limit", stop_price: float | None = None):
     """Send an order to open a position and return the order data.
@@ -190,6 +196,7 @@ def open_position(symbol: str, side: str, amount: float, price: float,
     raise OrderSubmitError(f"Failed to open position {symbol}")
 
 
+@circuit_breaker(fallback=None, max_failures=3, reset_timeout=60)
 def close_position(symbol: str, side: str, amount: float, order_type: str = "market"):
     """Close an existing position with validation and retries."""
     if exchange is None:
@@ -260,3 +267,43 @@ def cleanup_old_orders(max_age: int = config.ORDER_MAX_AGE):
             sym_clean = sym.replace("/", "_").replace(":USDT", "")
             logger.info("Cancelling stale order %s for %s age %.1fs", oid, sym_clean, age)
             cancel_order(oid, sym_clean)
+
+
+# ---------------------- Async wrappers ----------------------
+async def fetch_balance_async() -> float:
+    """Asynchronous wrapper for :func:`fetch_balance` with concurrency limit."""
+    async with api_semaphore:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, fetch_balance)
+
+
+async def open_position_async(
+    symbol: str,
+    side: str,
+    amount: float,
+    price: float,
+    order_type: str = "limit",
+    stop_price: float | None = None,
+) -> dict | None:
+    """Async helper that calls :func:`open_position` under the semaphore."""
+    async with api_semaphore:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: open_position(symbol, side, amount, price, order_type, stop_price),
+        )
+
+
+async def close_position_async(
+    symbol: str,
+    side: str,
+    amount: float,
+    order_type: str = "market",
+) -> dict | None:
+    """Async helper for :func:`close_position` with concurrency limit."""
+    async with api_semaphore:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: close_position(symbol, side, amount, order_type),
+        )
