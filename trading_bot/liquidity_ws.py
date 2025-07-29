@@ -76,7 +76,7 @@ class LiquidityStream:
 
 
 def get_top_15_symbols() -> list[str]:
-  
+
     ex = exchanges.get_exchange(config.DEFAULT_EXCHANGE)
     symbols = data.get_common_top_symbols(ex, 15)
     if not symbols:

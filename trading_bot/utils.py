@@ -3,6 +3,16 @@ from functools import wraps
 from typing import Any, Callable
 
 
+def normalize_symbol(sym: str) -> str:
+    """Return a normalized symbol like ``BTC_USDT`` regardless of separators."""
+    if not sym:
+        return ""
+    s = sym.replace('/', '').replace('_', '').replace(':USDT', '').upper()
+    if s.endswith('USDT'):
+        return f"{s[:-4]}_USDT"
+    return s
+
+
 def circuit_breaker(max_failures: int = 3, reset_timeout: int = 60, fallback: Any = None):
     """Simple circuit breaker decorator.
 
