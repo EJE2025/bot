@@ -21,15 +21,22 @@ LOCK = threading.Lock()
 _last_closed: dict[str, float] = {}
 
 
-def normalize_symbol(symbol: str) -> str:
-    """Return a normalized symbol like ``BTC_USDT`` regardless of separators."""
-    raw = symbol.replace("/", "").replace(":USDT", "").replace("_", "")
-    raw = raw.upper()
-    if not raw.endswith("USDT"):
-        raw += "USDT"
-    base = raw[:-4]
-    return f"{base}_USDT"
+def reset_state() -> None:
+    """Clear all in-memory trade state (used in tests)."""
+    with LOCK:
+        open_trades.clear()
+        closed_trades.clear()
+        trade_history.clear()
+        _last_closed.clear()
 
+
+def in_cooldown(symbol: str) -> bool:
+    """Return ``True`` if ``symbol`` was closed recently and is cooling down."""
+    norm = normalize_symbol(symbol)
+    ts = _last_closed.get(norm)
+    if ts is None:
+        return False
+    return (time.time() - ts) < config.TRADE_COOLDOWN
 # --- Core functions ---
 
 def add_trade(trade):

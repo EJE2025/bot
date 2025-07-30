@@ -57,7 +57,7 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     symbol_raw = symbol.replace("_", "")
 
     # Look for local CSV samples before making any network calls
-    csv_file = os.path.join(SAMPLE_DATA_DIR, f"{normalize_symbol(symbol)}_{interval}.csv")
+    csv_file = os.path.join(SAMPLE_DATA_DIR, f"{display_symbol(symbol)}_{interval}.csv")
     if os.path.exists(csv_file):
         df = pd.read_csv(csv_file)
         df = df.head(limit)
@@ -201,7 +201,7 @@ def get_common_top_symbols(exchange, n: int = 15,
         reverse=True,
     )
 
-    top = [normalize_symbol(m["symbol"]) for m in sorted_by_vol[:n]]
+    top = [display_symbol(m["symbol"]) for m in sorted_by_vol[:n]]
     logger.info("Top %d symbols by volume: %s", len(top), top)
     return top
 

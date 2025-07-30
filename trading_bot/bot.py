@@ -35,6 +35,7 @@ from .trade_manager import (
 )
 from .metrics import start_metrics_server, update_trade_metrics
 from .monitor import monitor_system
+from .utils import normalize_symbol
 
 if not config.BITGET_API_KEY:
     print("\u26a0\ufe0f  No se carg\xf3 la API KEY. Revisa si el archivo .env existe o el gestor de secretos est\xe1 configurado.")
