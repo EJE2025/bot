@@ -10,6 +10,7 @@ from threading import Thread
 from datetime import datetime, timedelta
 
 import pandas as pd
+from .utils import normalize_symbol
 
 from . import (
     config,

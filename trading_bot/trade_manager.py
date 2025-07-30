@@ -30,6 +30,15 @@ def normalize_symbol(symbol: str) -> str:
     base = raw[:-4]
     return f"{base}_USDT"
 
+
+def reset_state() -> None:
+    """Clear all in-memory trade state for tests."""
+    with LOCK:
+        open_trades.clear()
+        closed_trades.clear()
+        trade_history.clear()
+        _last_closed.clear()
+
 # --- Core functions ---
 
 def add_trade(trade):
