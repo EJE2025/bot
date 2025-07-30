@@ -21,7 +21,7 @@ def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: 
                        stop_loss: float, prob_success: float, modelo_historico) -> None:
     """Log detailed signal information and model status."""
     if modelo_historico is None:
-        logger.warning("Modelo histórico no cargado, prob_success sin ajuste")
+        logger.info("Modelo histórico no cargado; prob_success sin ajuste")
     else:
         logger.debug("Modelo histórico cargado correctamente")
 
@@ -137,6 +137,9 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
     volume_factor = min(1, avg_vol / 1000)
 
     book = data.get_order_book(symbol)
+    if not book:
+        logger.warning("No se pudo obtener order book para %s; se descarta la señal", symbol)
+        return None
     ob_imb = data.order_book_imbalance(book, entry_price)
     bids_top, asks_top = data.top_liquidity_levels(book)
 

@@ -256,6 +256,13 @@ def get_order_book(symbol: str, limit: int = 50) -> Dict | None:
     for attempt in range(MAX_ATTEMPTS):
         try:
             resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code == 400:
+                logger.error(
+                    "Símbolo no válido para order book %s: %s",
+                    symbol,
+                    resp.text,
+                )
+                return None
             resp.raise_for_status()
             data = resp.json()
             book = {"bids": data.get("bids", []), "asks": data.get("asks", [])}
@@ -290,8 +297,10 @@ def order_book_imbalance(book: Dict, price: float, pct: float = 0.01) -> float:
     return bid_vol - ask_vol
 
 
-def top_liquidity_levels(book: Dict, n: int = 5):
+def top_liquidity_levels(book: Dict | None, n: int = 5):
     """Return the highest volume bid and ask levels."""
+    if not book:
+        return [], []
     bids = [(float(p), float(q)) for p, q in book.get("bids", [])]
     asks = [(float(p), float(q)) for p, q in book.get("asks", [])]
     bids.sort(key=lambda x: x[1], reverse=True)

@@ -215,6 +215,11 @@ def run():
     strategy.start_liquidity()
 
     model = optimizer.load_model(config.MODEL_PATH)
+    if model is None:
+        logger.warning(
+            "No se encontró el modelo histórico en %s; las señales se generarán sin ajuste.",
+            config.MODEL_PATH,
+        )
     daily_profit = 0.0
     trading_active = True
 
