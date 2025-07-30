@@ -30,6 +30,7 @@ def reset_state() -> None:
         _last_closed.clear()
 
 
+ 
 def in_cooldown(symbol: str) -> bool:
     """Return ``True`` if ``symbol`` was closed recently and is cooling down."""
     norm = normalize_symbol(symbol)
