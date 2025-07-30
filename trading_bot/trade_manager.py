@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 import time
 import logging
+import uuid
 from . import config
 from .utils import normalize_symbol
 
@@ -45,8 +46,8 @@ def add_trade(trade):
     with LOCK:
         trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
         if "trade_id" not in trade:
-            trade["trade_id"] = f"{trade['symbol']}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
-        trade.setdefault("open_time", datetime.utcnow().isoformat())
+            trade["trade_id"] = str(uuid.uuid4())
+        trade.setdefault("open_time", datetime.utcnow().isoformat() + "Z")
         trade.setdefault("status", "pending")
         open_trades.append(trade)
         log_history("open", trade)
