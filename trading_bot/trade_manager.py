@@ -9,6 +9,7 @@ import logging
 import uuid
 from . import config
 from .utils import normalize_symbol
+from .state_machine import TradeState, StatefulTrade, InvalidStateTransition
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ def add_trade(trade):
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
         trade.setdefault("status", "pending")
+        trade.setdefault("state", TradeState.PENDING.value)
         open_trades.append(trade)
         log_history("open", trade)
 
@@ -80,6 +82,22 @@ def update_trade(trade_id, **kwargs):
     return False
 
 
+def set_trade_state(trade_id: str, new_state: TradeState) -> None:
+    t = None
+    with LOCK:
+        for trade in open_trades:
+            if trade.get("trade_id") == trade_id:
+                t = trade
+                break
+        if t is None:
+            raise ValueError("Trade no encontrado")
+        st = StatefulTrade(trade_id=trade_id, state=TradeState(t["state"]))
+        if not st.can_transition_to(new_state):
+            raise InvalidStateTransition(f"{st.state} → {new_state} no permitido")
+        st.transition_to(new_state)
+        t["state"] = st.state.value
+
+
 def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, profit=None):
     """Cierra una operación y la mueve a cerradas, añadiendo motivo.
 
@@ -87,31 +105,34 @@ def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, pr
     para que el historial en JSON tenga la misma información que el CSV de
     `history`.
     """
-    norm = normalize_symbol(symbol) if symbol else None
+    trade = find_trade(symbol=symbol, trade_id=trade_id)
+    if not trade:
+        return None
+    tid = trade.get("trade_id")
+    cur = TradeState(trade["state"])
+    if cur in (TradeState.OPEN, TradeState.PARTIALLY_FILLED):
+        set_trade_state(tid, TradeState.CLOSING)
+    set_trade_state(tid, TradeState.CLOSED)
     with LOCK:
-        idx = None
-        for i, trade in enumerate(open_trades):
-            if (trade_id and trade.get("trade_id") == trade_id) or (
-                norm and normalize_symbol(trade.get("symbol")) == norm
-            ):
-                idx = i
+        for i, t in enumerate(open_trades):
+            if t.get("trade_id") == tid:
+                trade = open_trades.pop(i)
                 break
-        if idx is not None:
-            trade = open_trades.pop(idx)
-            _last_closed[normalize_symbol(trade.get("symbol"))] = time.time()
-            trade["close_time"] = (
-                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            )
-            trade["close_reason"] = reason
-            if exit_price is not None:
-                trade["exit_price"] = exit_price
-            if profit is not None:
-                trade["profit"] = profit
-            trade["status"] = "closed"
-            closed_trades.append(trade)
-            log_history("close", trade)
-            return trade
-    return None
+        else:
+            return None
+        _last_closed[normalize_symbol(trade.get("symbol"))] = time.time()
+        trade["close_time"] = (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        trade["close_reason"] = reason
+        if exit_price is not None:
+            trade["exit_price"] = exit_price
+        if profit is not None:
+            trade["profit"] = profit
+        trade["status"] = "closed"
+        closed_trades.append(trade)
+        log_history("close", trade)
+        return trade
 
 
 def all_open_trades():
@@ -165,6 +186,12 @@ def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
                 open_trades.clear()
                 for t in data:
                     t.setdefault("status", "active")
+                    default_state = (
+                        TradeState.PENDING.value
+                        if t.get("status") == "pending"
+                        else TradeState.OPEN.value
+                    )
+                    t.setdefault("state", default_state)
                 open_trades.extend(data)
         if os.path.exists(closed_path):
             with open(closed_path, "r") as f:
@@ -173,6 +200,7 @@ def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
                 closed_trades.clear()
                 for t in data:
                     t.setdefault("status", "closed")
+                    t.setdefault("state", TradeState.CLOSED.value)
                 closed_trades.extend(data)
     except Exception as e:
         logger.error("Error cargando trades: %s", e)
