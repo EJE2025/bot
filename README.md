@@ -84,7 +84,7 @@ variables definidas en `trading_bot/config.py`:
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `RSI_PERIOD` período del RSI (default `14`)
-- `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`, `1.5` en modo test)
+- `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`, `1.3` en modo test)
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)
 - `MIN_POSITION_SIZE` tamaño mínimo de posición permitido (default `0.001`, `1e-4` en modo test)
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
@@ -115,7 +115,7 @@ La detección de soportes y resistencias utiliza `scipy`; si estas bibliotecas n
 | `LOG_LEVEL` | Nivel de verbosidad del log (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `DATA_RETRY_ATTEMPTS`| Número de reintentos al descargar datos antes de usar la caché. | `3` |
 | `ORDER_SUBMIT_ATTEMPTS` | Reintentos al enviar o cerrar órdenes. | `3` |
-| `TRADE_COOLDOWN` | Tiempo en segundos que debe transcurrir antes de reabrir el mismo símbolo. | `0` |
+| `TRADE_COOLDOWN` | Tiempo en segundos que debe transcurrir antes de reabrir el mismo símbolo (derivado de `COOLDOWN_MINUTES` si no se especifica). | `300` |
 | `MAX_CONCURRENT_REQUESTS` | Número máximo de llamadas simultáneas al exchange. | `5` |
 | `CPU_THRESHOLD` | Fracción de uso de CPU a partir de la cual se enviará una alerta (0–1). | `0.8` |
 | `MEMORY_THRESHOLD_MB` | Uso de memoria en MB que dispara una alerta. | `500` |

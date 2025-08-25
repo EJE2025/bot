@@ -7,10 +7,9 @@ load_dotenv(env_path)
 import logging
 import time
 from threading import Thread
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-from .utils import normalize_symbol
 
 from . import (
     config,
@@ -43,23 +42,11 @@ if not config.BITGET_API_KEY:
 else:
     print("\u2705 Archivo .env cargado correctamente.")
 
-from .metrics import start_metrics_server, update_trade_metrics
-from .monitor import monitor_system
-
-if not config.BITGET_API_KEY:
-    print("\u26a0\ufe0f  No se carg\xf3 la API KEY. Revisa si el archivo .env existe o el gestor de secretos est\xe1 configurado.")
-else:
-    print("\u2705 Archivo .env cargado correctamente.")
-
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# Track last close time per symbol to enforce cooldown
-_last_trade_time: dict[str, datetime] = {}
-
 
 def open_new_trade(signal: dict):
     """Open a position on the exchange and register it via trade_manager."""
@@ -81,6 +68,36 @@ def open_new_trade(signal: dict):
         if not execution.check_order_filled(order_id, symbol):
             logger.warning("Order not filled for %s", symbol)
             execution.cancel_order(order_id, symbol)
+            # Detectar si quedó posición parcial en el exchange
+            try:
+                positions = execution.fetch_positions()
+                norm = normalize_symbol(symbol)
+                for pos in positions:
+                    sym = normalize_symbol(pos.get("symbol", ""))
+                    contracts = float(pos.get("contracts", 0))
+                    if sym == norm and contracts > 0:
+                        avg_price = float(pos.get("entryPrice", 0)) or signal["entry_price"]
+                        trade = {
+                            "symbol": norm,
+                            "side": "BUY" if pos.get("side") == "long" else "SELL",
+                            "quantity": contracts,
+                            "entry_price": avg_price,
+                            "take_profit": signal.get("take_profit"),
+                            "stop_loss": signal.get("stop_loss"),
+                            "leverage": signal.get("leverage", config.DEFAULT_LEVERAGE),
+                            "status": "active",
+                        }
+                        add_trade(trade)
+                        save_trades()
+                        logger.warning(
+                            "Partial fill registrado: %s qty=%.6f @ %.6f",
+                            norm,
+                            contracts,
+                            avg_price,
+                        )
+                        return trade
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Error comprobando partial fill para %s: %s", symbol, exc)
             return None
         avg_price = float(order.get("average") or signal["entry_price"])
         slippage = abs(avg_price - signal["entry_price"]) / signal["entry_price"]
@@ -96,7 +113,10 @@ def open_new_trade(signal: dict):
             "leverage": signal.get("leverage", config.DEFAULT_LEVERAGE),
             "order_id": order_id,
             "status": "active",
-            "open_time": signal.get("open_time", datetime.utcnow().isoformat()),
+            "open_time": signal.get(
+                "open_time",
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            ),
         }
         add_trade(trade)
         save_trades()
@@ -110,7 +130,7 @@ def open_new_trade(signal: dict):
 
 def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: str) -> None:
     """Update the trade with final info and mark it closed."""
-    close_ts = datetime.utcnow().isoformat()
+    close_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     update_trade(trade.get("trade_id"), exit_price=exit_price, profit=profit, close_time=close_ts)
     history.append_trade({**trade, "exit_price": exit_price, "profit": profit, "close_time": close_ts})
     close_trade(trade_id=trade.get("trade_id"), reason=reason, exit_price=exit_price, profit=profit)
@@ -136,11 +156,20 @@ def run_one_iteration_open(model=None):
         if raw in config.BLACKLIST_SYMBOLS or raw in config.UNSUPPORTED_SYMBOLS:
             continue
         sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-        if (
-            not sig
-            or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD
-            or sig.get("quantity", 0) < config.MIN_POSITION_SIZE
-        ):
+        if not sig:
+            continue
+        if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+            logger.debug(
+                "Skip %s: RR=%.2f < %.2f", symbol, sig.get("risk_reward", 0), config.MIN_RISK_REWARD
+            )
+            continue
+        if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
+            logger.debug(
+                "Skip %s: qty=%.8f < min=%.8f",
+                symbol,
+                sig.get("quantity", 0),
+                config.MIN_POSITION_SIZE,
+            )
             continue
         candidates.append(sig)
 
@@ -199,6 +228,9 @@ def run():
 
     # Remove any stale pending orders
     execution.cleanup_old_orders()
+
+    # Persist state after initial synchronization
+    save_trades()
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
@@ -260,12 +292,27 @@ def run():
                     unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
                     if raw in bl or raw in unsup:
                         continue
+                    if trade_manager.in_cooldown(symbol):
+                        logger.info("Cooldown activo para %s; se omite nueva entrada", symbol)
+                        continue
                     sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if (
-                        not sig
-                        or sig.get("risk_reward", 0) < config.MIN_RISK_REWARD
-                        or sig.get("quantity", 0) < config.MIN_POSITION_SIZE
-                    ):
+                    if not sig:
+                        continue
+                    if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                        logger.debug(
+                            "Skip %s: RR=%.2f < %.2f",
+                            symbol,
+                            sig.get("risk_reward", 0),
+                            config.MIN_RISK_REWARD,
+                        )
+                        continue
+                    if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
+                        logger.debug(
+                            "Skip %s: qty=%.8f < min=%.8f",
+                            symbol,
+                            sig.get("quantity", 0),
+                            config.MIN_POSITION_SIZE,
+                        )
                         continue
                     candidates.append(sig)
 
@@ -336,7 +383,6 @@ def run():
                         profit,
                         "TP" if profit >= 0 else "SL",
                     )
-                    _last_trade_time[normalize_symbol(op["symbol"])] = datetime.utcnow()
                     daily_profit += profit
 
                     notify.send_telegram(

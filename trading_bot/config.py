@@ -47,6 +47,8 @@ try:
     COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "5"))
 except (TypeError, ValueError):
     COOLDOWN_MINUTES = 5
+# Seconds to wait before reopening a trade on the same symbol
+TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", str(COOLDOWN_MINUTES * 60)))
 # Maximum daily loss before trading stops (configurable via DAILY_RISK_LIMIT env var)
 try:
     DAILY_RISK_LIMIT = float(os.getenv("DAILY_RISK_LIMIT", "-50"))
@@ -54,7 +56,7 @@ except (TypeError, ValueError):
     DAILY_RISK_LIMIT = -50.0
 
 BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
-UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT"}
+UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT", "PEPEUSDT"}
 
 BASE_URL_MEXC = "https://contract.mexc.com/api/v1"
 BASE_URL_BITGET = "https://api.bitget.com"
@@ -71,7 +73,7 @@ MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
 STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
 MIN_RISK_REWARD = float(
-    os.getenv("MIN_RISK_REWARD", "1.5" if TEST_MODE else "2.0")
+    os.getenv("MIN_RISK_REWARD", "1.3" if TEST_MODE else "2.0")
 )
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 
@@ -108,8 +110,6 @@ DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))
 # Maximum attempts when submitting or closing orders
 ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
 
-# Seconds to wait before reopening a trade on the same symbol
-TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", "0"))
 
 # Maximum number of simultaneous requests to exchanges
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))

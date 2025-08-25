@@ -3,7 +3,7 @@
 import threading
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import logging
 import uuid
@@ -47,7 +47,10 @@ def add_trade(trade):
         trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
-        trade.setdefault("open_time", datetime.utcnow().isoformat() + "Z")
+        trade.setdefault(
+            "open_time",
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        )
         trade.setdefault("status", "pending")
         open_trades.append(trade)
         log_history("open", trade)
@@ -96,7 +99,9 @@ def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, pr
         if idx is not None:
             trade = open_trades.pop(idx)
             _last_closed[normalize_symbol(trade.get("symbol"))] = time.time()
-            trade["close_time"] = datetime.utcnow().isoformat()
+            trade["close_time"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
             trade["close_reason"] = reason
             if exit_price is not None:
                 trade["exit_price"] = exit_price
@@ -179,7 +184,7 @@ def log_history(event_type, trade):
     if not config.ENABLE_TRADE_HISTORY_LOG:
         return
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": event_type,
         "trade_snapshot": trade.copy(),
     }
