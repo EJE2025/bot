@@ -7,6 +7,7 @@ import requests
 import pandas as pd
 import numpy as np
 from . import config
+from .execution import exchange, MockExchange
 from .utils import circuit_breaker
 
 # How many attempts should be made for network calls
@@ -207,11 +208,21 @@ def get_common_top_symbols(exchange, n: int = 15,
 
 
 def get_current_price_ticker(symbol: str) -> float | None:
-    """Return the latest traded price from Bitget for the given symbol.
+    """Return the latest traded price for the given symbol.
 
+    In test mode or when using :class:`MockExchange`, prices are obtained from
+    the mock directly to avoid inconsistencies with real network data.
     Returns ``None`` when the request cannot be completed and no cached value is
     available.
     """
+    sym_ccxt = symbol.replace("_", "/") + ":USDT"
+    if config.TEST_MODE or isinstance(exchange, MockExchange):
+        try:
+            return exchange._get_market_price(sym_ccxt)
+        except Exception as exc:  # pragma: no cover - mock rarely fails
+            logger.error("Mock price retrieval failed for %s: %s", symbol, exc)
+            return None
+
     bitget_sym = symbol.replace("_", "") + "_UMCBL"
     endpoint = "/api/mix/v1/market/ticker"
     params = {"symbol": bitget_sym, "productType": "USDT-FUTURES"}
