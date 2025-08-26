@@ -4,7 +4,8 @@ from typing import Any, Callable
 
 
 def normalize_symbol(sym: str) -> str:
-    """Return a normalized symbol like ``BTC_USDT`` regardless of separators."""
+    """Return a normalized symbol like ``BTC_USDT``
+    regardless of separators."""
     if not sym:
         return ""
     s = sym.replace('/', '').replace('_', '').replace(':USDT', '').upper()
@@ -13,7 +14,11 @@ def normalize_symbol(sym: str) -> str:
     return s
 
 
-def circuit_breaker(max_failures: int = 3, reset_timeout: int = 60, fallback: Any = None):
+def circuit_breaker(
+    max_failures: int = 3,
+    reset_timeout: int = 60,
+    fallback: Any = None,
+):
     """Simple circuit breaker decorator.
 
     If ``max_failures`` consecutive calls raise an exception, the circuit opens

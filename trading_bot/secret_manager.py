@@ -25,5 +25,9 @@ def get_secret(name: str) -> Optional[str]:
         response = client.get_secret_value(SecretId=name)
         return response.get("SecretString")
     except (BotoCoreError, ClientError) as exc:  # pragma: no cover - network errors
-        logger.warning("No se pudo recuperar %s de Secrets Manager: %s", name, exc)
+        logger.warning(
+            "No se pudo recuperar %s de Secrets Manager: %s",
+            name,
+            exc,
+        )
         return os.getenv(name)

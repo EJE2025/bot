@@ -28,5 +28,3 @@ def load_model(path: str = "model.pkl"):
             return pickle.load(f)
     except Exception:
         return None
-
-

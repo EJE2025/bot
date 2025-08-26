@@ -23,8 +23,16 @@ class TradeState(str, Enum):
 # FAILED → (ninguna)
 ALLOWED_TRANSITIONS: Dict[TradeState, Set[TradeState]] = {
     TradeState.PENDING: {TradeState.OPEN, TradeState.FAILED},
-    TradeState.OPEN: {TradeState.PARTIALLY_FILLED, TradeState.CLOSING, TradeState.FAILED},
-    TradeState.PARTIALLY_FILLED: {TradeState.OPEN, TradeState.CLOSING, TradeState.FAILED},
+    TradeState.OPEN: {
+        TradeState.PARTIALLY_FILLED,
+        TradeState.CLOSING,
+        TradeState.FAILED,
+    },
+    TradeState.PARTIALLY_FILLED: {
+        TradeState.OPEN,
+        TradeState.CLOSING,
+        TradeState.FAILED,
+    },
     TradeState.CLOSING: {TradeState.CLOSED, TradeState.FAILED},
     TradeState.CLOSED: set(),
     TradeState.FAILED: set(),
@@ -52,5 +60,6 @@ class StatefulTrade:
 
     def transition_to(self, new_state: TradeState) -> None:
         if not self.can_transition_to(new_state):
-            raise InvalidStateTransition(f"{self.state} → {new_state} no permitido")
+            msg = f"{self.state} → {new_state} no permitido"
+            raise InvalidStateTransition(msg)
         self.state = new_state

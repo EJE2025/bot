@@ -1,4 +1,3 @@
-import os
 import time
 import psutil
 from . import notify
@@ -20,4 +19,3 @@ def monitor_system() -> None:
             notify.send_telegram(f"⚠️ Alto uso de memoria: {mem_usage:.0f} MB")
             notify.send_discord(f"⚠️ Alto uso de memoria: {mem_usage:.0f} MB")
         time.sleep(60)
-

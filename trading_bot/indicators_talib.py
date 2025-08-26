@@ -76,4 +76,3 @@ def calculate_atr(
 def calculate_support_resistance(prices, window: int = 50, tolerance: float = 0.02):
     """Support and resistance levels via fallback implementation."""
     return fallback_sr(prices, window, tolerance)
-
