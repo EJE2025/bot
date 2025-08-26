@@ -9,4 +9,4 @@ websockets
 scipy
 prometheus-client
 psutil
-asyncio
+pytest-asyncio
