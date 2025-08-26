@@ -9,3 +9,4 @@ websockets
 scipy
 prometheus-client
 psutil
+asyncio
