@@ -15,7 +15,7 @@ if Flask:
 
     @app.route("/api/trades")
     def api_trades():
-        """Return open trades enriched with current price and unrealized PnL."""
+        """Return open trades with current price and unrealized PnL."""
         trades = []
         for t in all_open_trades():
             sym = t.get("symbol")
@@ -25,7 +25,11 @@ if Flask:
             current_price = data.get_current_price_ticker(sym)
             if not current_price:
                 current_price = entry
-            pnl = (current_price - entry) * qty if side == "BUY" else (entry - current_price) * qty
+            pnl = (
+                (current_price - entry) * qty
+                if side == "BUY"
+                else (entry - current_price) * qty
+            )
             row = t.copy()
             row["current_price"] = current_price
             row["pnl_unrealized"] = pnl
@@ -49,9 +53,8 @@ if Flask:
         return jsonify(converted)
 
     def start_dashboard(host: str, port: int):
-        """Run the Flask dashboard in real-time with trades from trade_manager."""
+        """Run the Flask dashboard in real-time with trade data."""
         app.run(host=host, port=port)
 else:
     def start_dashboard(host: str, port: int):
         raise ImportError("Flask is required to run the dashboard")
-

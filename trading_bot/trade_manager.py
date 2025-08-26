@@ -32,15 +32,18 @@ def reset_state() -> None:
         _last_closed.clear()
 
 
- 
 def in_cooldown(symbol: str) -> bool:
-    """Return ``True`` if ``symbol`` was closed recently and is cooling down."""
+    """Return ``True`` if ``symbol`` was closed recently and is cooling
+    down."""
     norm = normalize_symbol(symbol)
     ts = _last_closed.get(norm)
     if ts is None:
         return False
     return (time.time() - ts) < config.TRADE_COOLDOWN
+
+
 # --- Core functions ---
+
 
 def add_trade(trade):
     """Añade una nueva operación a la lista de abiertas."""
@@ -57,8 +60,11 @@ def add_trade(trade):
         open_trades.append(trade)
         log_history("open", trade)
         return trade
+
+
 def find_trade(symbol=None, trade_id=None):
-    """Devuelve la primera operación abierta que coincida con el símbolo o el ID."""
+    """Devuelve la primera operación abierta que coincida con el símbolo
+    o el ID."""
     norm = normalize_symbol(symbol) if symbol else None
     with LOCK:
         for trade in open_trades:
@@ -92,12 +98,19 @@ def set_trade_state(trade_id: str, new_state: TradeState) -> None:
             raise ValueError("Trade no encontrado")
         st = StatefulTrade(trade_id=trade_id, state=TradeState(t["state"]))
         if not st.can_transition_to(new_state):
-            raise InvalidStateTransition(f"{st.state} → {new_state} no permitido")
+            msg = f"{st.state} → {new_state} no permitido"
+            raise InvalidStateTransition(msg)
         st.transition_to(new_state)
         t["state"] = st.state.value
 
 
-def close_trade(trade_id=None, symbol=None, reason="closed", exit_price=None, profit=None):
+def close_trade(
+    trade_id=None,
+    symbol=None,
+    reason="closed",
+    exit_price=None,
+    profit=None,
+):
     """Cierra una operación y la mueve a cerradas, añadiendo motivo.
 
     Parámetros adicionales permiten registrar precio de salida y beneficio
@@ -145,6 +158,7 @@ def all_closed_trades():
 
 # --- Persistence ---
 
+
 def atomic_write(path: str, data) -> None:
     """Write JSON data atomically to ``path``."""
     tmp = path + ".tmp"
@@ -159,7 +173,10 @@ def atomic_write(path: str, data) -> None:
         raise
 
 
-def save_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
+def save_trades(
+    open_path="open_trades.json",
+    closed_path="closed_trades.json",
+):
     """Persist open and closed trades to disk separately."""
     with LOCK:
         open_data = list(open_trades)
@@ -176,7 +193,10 @@ def save_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
         logger.error("Failed to save closed trades")
 
 
-def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
+def load_trades(
+    open_path="open_trades.json",
+    closed_path="closed_trades.json",
+):
     try:
         if os.path.exists(open_path):
             with open(open_path, "r") as f:
@@ -206,12 +226,15 @@ def load_trades(open_path="open_trades.json", closed_path="closed_trades.json"):
 
 # --- Optional: Auditing/history ---
 
+
 def log_history(event_type, trade):
     """Store a snapshot of the trade change if history logging is enabled."""
     if not config.ENABLE_TRADE_HISTORY_LOG:
         return
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": (
+            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        ),
         "event": event_type,
         "trade_snapshot": trade.copy(),
     }
@@ -224,6 +247,7 @@ def log_history(event_type, trade):
 def get_history():
     return list(trade_history)
 
+
 def export_trade_history(filepath: str):
     """Export and clear the in-memory trade history."""
     with LOCK:
@@ -235,6 +259,7 @@ def export_trade_history(filepath: str):
         logger.error("Failed to export trade history")
 
 # --- Utilities ---
+
 
 def count_open_trades():
     with LOCK:

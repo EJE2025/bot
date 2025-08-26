@@ -4,10 +4,20 @@ from . import optimizer
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train ML model for trading bot")
+    parser = argparse.ArgumentParser(
+        description="Train ML model for trading bot"
+    )
     parser.add_argument("csv", help="CSV file with training data")
-    parser.add_argument("--target", default="target", help="Target column name")
-    parser.add_argument("--model", default="model.pkl", help="Output model path")
+    parser.add_argument(
+        "--target",
+        default="target",
+        help="Target column name",
+    )
+    parser.add_argument(
+        "--model",
+        default="model.pkl",
+        help="Output model path",
+    )
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv)

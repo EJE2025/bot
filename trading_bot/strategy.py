@@ -17,8 +17,15 @@ from . import config, data, execution
 logger = logging.getLogger(__name__)
 
 
-def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: float,
-                       stop_loss: float, prob_success: float, modelo_historico) -> None:
+def log_signal_details(
+    symbol: str,
+    side: str,
+    entry_price: float,
+    take_profit: float,
+    stop_loss: float,
+    prob_success: float,
+    modelo_historico,
+) -> None:
     """Log detailed signal information and model status."""
     if modelo_historico is None:
         logger.info("Modelo histórico no cargado; prob_success sin ajuste")
@@ -34,6 +41,7 @@ def log_signal_details(symbol: str, side: str, entry_price: float, take_profit: 
         stop_loss,
         prob_success * 100,
     )
+
 
 def sentiment_score(symbol: str, period: str = "5m") -> float:
     """Market sentiment based on long/short ratio from Bitget.
@@ -61,7 +69,8 @@ def calcular_tamano_posicion(
     atr_multiplier: float,
     risk_per_trade_usd: float,
 ) -> float | None:
-    """Dimensiona la posición para que la pérdida máxima sea ``risk_per_trade_usd``.
+    """Dimensiona la posición para que la pérdida máxima sea
+    ``risk_per_trade_usd``.
 
     Devuelve ``None`` cuando los parámetros son inválidos (ATR o precio no
     positivos, o distancia al ``stop`` no positiva) o si la cantidad resultante
@@ -92,7 +101,11 @@ def calcular_tamano_posicion(
     return qty
 
 
-def risk_reward_ratio(entry_price: float, take_profit: float, stop_loss: float) -> float:
+def risk_reward_ratio(
+    entry_price: float,
+    take_profit: float,
+    stop_loss: float,
+) -> float:
     """Return reward-to-risk ratio or ``0.0`` if risk is zero."""
     risk = abs(entry_price - stop_loss)
     if risk <= 0:
@@ -101,7 +114,11 @@ def risk_reward_ratio(entry_price: float, take_profit: float, stop_loss: float) 
     return reward / risk
 
 
-def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None):
+def decidir_entrada(
+    symbol: str,
+    modelo_historico=None,
+    info: dict | None = None,
+):
     if info is None:
         info = data.get_market_data(symbol, interval="Min15", limit=1000)
     if not info or "close" not in info:
@@ -138,13 +155,18 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
 
     book = data.get_order_book(symbol)
     if not book:
-        logger.warning("No se pudo obtener order book para %s; se descarta la señal", symbol)
+        logger.warning(
+            "No se pudo obtener order book para %s; se descarta la señal",
+            symbol,
+        )
         return None
     ob_imb = data.order_book_imbalance(book, entry_price)
     bids_top, asks_top = data.top_liquidity_levels(book)
 
     score_long = max(0, 45 - rsi_val) + max(0, macd_val) + max(0, senti * 10)
-    score_short = max(0, rsi_val - 55) + max(0, -macd_val) + max(0, -senti * 10)
+    score_short = (
+        max(0, rsi_val - 55) + max(0, -macd_val) + max(0, -senti * 10)
+    )
     score_long += max(0, ob_imb)
     score_short += max(0, -ob_imb)
 
@@ -167,10 +189,19 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
     )
     trend_strength = abs(macd_val) + abs(rsi_val - 50)
     tp_factor = 3.0 if trend_strength > 20 else 2.0
-    take_profit = (entry_price + atr_val * tp_factor) if decision == "BUY" else (
-        entry_price - atr_val * tp_factor)
+    take_profit = (
+        entry_price + atr_val * tp_factor
+        if decision == "BUY"
+        else entry_price - atr_val * tp_factor
+    )
 
-    prob_success = min(max(score_long if decision == "BUY" else score_short, 0) / 5.0, 0.85) * volume_factor
+    prob_success = (
+        min(
+            max(score_long if decision == "BUY" else score_short, 0) / 5.0,
+            0.85,
+        )
+        * volume_factor
+    )
     leverage = config.DEFAULT_LEVERAGE
     balance = execution.fetch_balance()
     if config.RISK_PER_TRADE < 1:
@@ -200,7 +231,9 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         "take_profit": take_profit,
         "prob_success": prob_success,
         "risk_reward": risk_reward,
-        "open_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "open_time": datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
 
     if modelo_historico and risk > 0:
@@ -211,7 +244,6 @@ def decidir_entrada(symbol: str, modelo_historico=None, info: dict | None = None
         )
         pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
         signal["prob_success"] = (prob_success + pred_hist) / 2
-
 
     log_signal_details(
         symbol,
@@ -236,18 +268,26 @@ def start_liquidity(symbols=None):
     else:
         liquidity_ws.start(symbols)
 
+
 def print_liquidity():
     """Example function showing how to query liquidity data."""
     while True:
         book = liquidity_ws.get_liquidity()
-        for sym, data in book.items():
-            top_bid = next(iter(sorted(data["bids"].items(), reverse=True)), None)
-            top_ask = next(iter(sorted(data["asks"].items())), None)
+        for sym, book_data in book.items():
+            top_bid = next(
+                iter(sorted(book_data["bids"].items(), reverse=True)), None
+            )
+            top_ask = next(
+                iter(sorted(book_data["asks"].items())), None
+            )
             if top_bid and top_ask:
-                print(f"{sym}: bid {top_bid[0]} ({top_bid[1]}), ask {top_ask[0]} ({top_ask[1]})")
+                print(
+                    f"{sym}: bid {top_bid[0]} ({top_bid[1]}), "
+                    f"ask {top_ask[0]} ({top_ask[1]})"
+                )
         time.sleep(5)
+
 
 if __name__ == "__main__":
     start_liquidity()
     print_liquidity()
-

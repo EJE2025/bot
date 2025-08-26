@@ -230,7 +230,11 @@ class DualExchangeLiquidityStream:
             symbols = get_top_15_symbols()
         self._stop_event.clear()
         self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._start_loop, args=(list(symbols),), daemon=True)
+        self._thread = threading.Thread(
+            target=self._start_loop,
+            args=(list(symbols),),
+            daemon=True,
+        )
         self._thread.start()
         logger.info("Liquidity WS thread started")
 
@@ -240,9 +244,15 @@ class DualExchangeLiquidityStream:
         logger.info("Stopping Liquidity WS...")
         self._stop_event.set()
         if self._ws_binance is not None:
-            asyncio.run_coroutine_threadsafe(self._ws_binance.close(), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                self._ws_binance.close(),
+                self._loop,
+            )
         if self._ws_bitget is not None:
-            asyncio.run_coroutine_threadsafe(self._ws_bitget.close(), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                self._ws_bitget.close(),
+                self._loop,
+            )
         self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
             self._thread.join(timeout=5)
@@ -276,5 +286,8 @@ def stop():
 def get_liquidity(symbol: str | None = None) -> Dict[str, Any]:
     if _stream is None or _stream._loop is None:
         return {}
-    fut = asyncio.run_coroutine_threadsafe(_stream.get_orderbook(symbol), _stream._loop)
+    fut = asyncio.run_coroutine_threadsafe(
+        _stream.get_orderbook(symbol),
+        _stream._loop,
+    )
     return fut.result()
