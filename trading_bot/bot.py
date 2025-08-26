@@ -32,7 +32,9 @@ from .trade_manager import (
     save_trades,
     count_open_trades,
     count_trades_for_symbol,
+    set_trade_state,
 )
+from .state_machine import TradeState
 from .metrics import start_metrics_server, update_trade_metrics
 from .monitor import monitor_system
 from .utils import normalize_symbol
@@ -119,6 +121,7 @@ def open_new_trade(signal: dict):
             ),
         }
         add_trade(trade)
+        set_trade_state(trade["trade_id"], TradeState.OPEN)
         save_trades()
         return trade
     except execution.OrderSubmitError:
