@@ -56,8 +56,7 @@ def add_trade(trade):
         trade.setdefault("state", TradeState.PENDING.value)
         open_trades.append(trade)
         log_history("open", trade)
-
-
+        return trade
 def find_trade(symbol=None, trade_id=None):
     """Devuelve la primera operación abierta que coincida con el símbolo o el ID."""
     norm = normalize_symbol(symbol) if symbol else None
