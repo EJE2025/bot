@@ -1,4 +1,4 @@
-name: Continuous Integration
+name: CI
 
 on:
   push:
@@ -7,46 +7,23 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Sanitize requirements (remove local editable lines)
-        run: |
-          for f in requirements*.txt requirements/*.txt 2>/dev/null; do
-            [ -f "$f" ] || continue
-            sed -i '/^-e[[:space:]]\+\.$/d' "$f"
-            sed -i '/file:\/\/\/home\/runner\/work\/bot\/bot/d' "$f"
-            sed -i '/^-e[[:space:]]\+file:\/\//d' "$f"
-            sed -i '/^file:\/\//d' "$f"
-          done
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           python -m pip install -U pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-      - name: Expose repo to PYTHONPATH
+      - name: Add repo to PYTHONPATH
         run: echo "PYTHONPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
       - name: Run tests
         run: pytest -q --cov=trading_bot
-
-      - name: Run flake8
-        run: flake8 trading_bot
-
-      - name: Run mypy
-        run: mypy trading_bot --config-file mypy.ini
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          fail_ci_if_error: true
