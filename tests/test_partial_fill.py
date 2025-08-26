@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import trading_bot.bot as bot
 from trading_bot import trade_manager, execution
 from trading_bot.exchanges import MockExchange
+from trading_bot.state_machine import TradeState
 
 
 def test_partial_fill_is_registered(monkeypatch):
@@ -25,24 +26,16 @@ def test_partial_fill_is_registered(monkeypatch):
         "leverage": 1,
     }
 
-    monkeypatch.setattr(execution, "open_position", lambda *a, **k: {"id": "1"})
-    monkeypatch.setattr(execution, "check_order_filled", lambda oid, sym: False)
-    monkeypatch.setattr(execution, "cancel_order", lambda oid, sym: None)
-
-    def fake_fetch_positions():
-        return [{
-            "symbol": "AAA/USDT:USDT",
-            "contracts": 4,
-            "entryPrice": 1.01,
-            "side": "long",
-            "leverage": 1,
-        }]
-
-    monkeypatch.setattr(execution, "fetch_positions", fake_fetch_positions)
+    monkeypatch.setattr(
+        execution,
+        "open_position",
+        lambda *a, **k: {"id": "1", "average": signal["entry_price"]},
+    )
+    monkeypatch.setattr(execution, "fetch_order_status", lambda oid, sym: "partial")
     monkeypatch.setattr(bot, "save_trades", lambda: None)
 
     trade = bot.open_new_trade(signal)
     assert trade is not None
-    assert trade["quantity"] == 4
+    stored = trade_manager.find_trade(symbol="AAA_USDT")
+    assert stored["state"] == TradeState.PARTIALLY_FILLED.value
     assert trade_manager.count_open_trades() == 1
-    assert trade_manager.find_trade(symbol="AAA_USDT") is not None

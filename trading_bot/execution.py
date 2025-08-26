@@ -64,6 +64,34 @@ def fetch_balance():
         return 0.0
 
 
+def fetch_order_status(order_id: str, symbol: str) -> str:
+    """Return normalized status for an order.
+
+    The status values are reduced to ``"new"``, ``"partial"``, ``"filled"`` or
+    terminal states like ``"canceled"``/``"rejected"``.
+    """
+    if exchange is None:
+        return "new"
+
+    bitget_sym = symbol.replace("_", "/") + ":USDT"
+    try:
+        info = exchange.fetch_order(order_id, bitget_sym)
+    except Exception as exc:
+        logger.error("Error fetching order %s for %s: %s", order_id, symbol, exc)
+        return "new"
+
+    status = str(info.get("status", "")).lower()
+    if status in ("open", "new"):
+        return "new"
+    if status in ("partially_filled", "partial"):
+        return "partial"
+    if status in ("closed", "filled"):
+        return "filled"
+    if status in ("canceled", "rejected", "expired"):
+        return status
+    return "new"
+
+
 
 def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_FILL_TIMEOUT) -> bool:
 

@@ -51,9 +51,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def open_new_trade(signal: dict):
-    """Open a position on the exchange and register it via trade_manager."""
+    """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
     raw = normalize_symbol(symbol).replace("_", "")
+
+    # Register trade in pending state first
+    trade = add_trade(signal)
     try:
         execution.setup_leverage(execution.exchange, raw, signal["leverage"])
         order = execution.open_position(
@@ -65,78 +68,60 @@ def open_new_trade(signal: dict):
         )
         if not isinstance(order, dict):
             logger.warning("Order response unexpected for %s: %s", symbol, order)
+            set_trade_state(trade["trade_id"], TradeState.FAILED)
             return None
+
         order_id = order.get("id")
-        if not execution.check_order_filled(order_id, symbol):
-            logger.warning("Order not filled for %s", symbol)
-            execution.cancel_order(order_id, symbol)
-            # Detectar si quedó posición parcial en el exchange
-            try:
-                positions = execution.fetch_positions()
-                norm = normalize_symbol(symbol)
-                for pos in positions:
-                    sym = normalize_symbol(pos.get("symbol", ""))
-                    contracts = float(pos.get("contracts", 0))
-                    if sym == norm and contracts > 0:
-                        avg_price = float(pos.get("entryPrice", 0)) or signal["entry_price"]
-                        trade = {
-                            "symbol": norm,
-                            "side": "BUY" if pos.get("side") == "long" else "SELL",
-                            "quantity": contracts,
-                            "entry_price": avg_price,
-                            "take_profit": signal.get("take_profit"),
-                            "stop_loss": signal.get("stop_loss"),
-                            "leverage": signal.get("leverage", config.DEFAULT_LEVERAGE),
-                            "status": "active",
-                        }
-                        add_trade(trade)
-                        save_trades()
-                        logger.warning(
-                            "Partial fill registrado: %s qty=%.6f @ %.6f",
-                            norm,
-                            contracts,
-                            avg_price,
-                        )
-                        return trade
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Error comprobando partial fill para %s: %s", symbol, exc)
-            return None
         avg_price = float(order.get("average") or signal["entry_price"])
-        slippage = abs(avg_price - signal["entry_price"]) / signal["entry_price"]
-        if slippage > 0.01:
-            logger.warning("High slippage %.2f%% on %s", slippage * 100, symbol)
-        trade = {
-            "symbol": symbol,
-            "side": signal["side"],
-            "quantity": signal["quantity"],
-            "entry_price": avg_price,
-            "take_profit": signal.get("take_profit"),
-            "stop_loss": signal.get("stop_loss"),
-            "leverage": signal.get("leverage", config.DEFAULT_LEVERAGE),
-            "order_id": order_id,
-            "status": "active",
-            "open_time": signal.get(
-                "open_time",
-                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            ),
-        }
-        add_trade(trade)
-        set_trade_state(trade["trade_id"], TradeState.OPEN)
+        update_trade(
+            trade["trade_id"],
+            order_id=order_id,
+            entry_price=avg_price,
+            status="active",
+        )
+
+        status = execution.fetch_order_status(order_id, symbol)
+        if status == "filled":
+            set_trade_state(trade["trade_id"], TradeState.OPEN)
+        elif status == "partial":
+            # promote to OPEN first, then PARTIALLY_FILLED
+            set_trade_state(trade["trade_id"], TradeState.OPEN)
+            set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
+        # else: remain in PENDING
+
         save_trades()
-        return trade
+        return find_trade(trade_id=trade["trade_id"])
+
     except execution.OrderSubmitError:
         logger.error("Order submission failed for %s", symbol)
+        set_trade_state(trade["trade_id"], TradeState.FAILED)
     except Exception as exc:
         logger.error("Error processing %s: %s", symbol, exc)
+        set_trade_state(trade["trade_id"], TradeState.FAILED)
     return None
 
 
 def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: str) -> None:
-    """Update the trade with final info and mark it closed."""
-    close_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    update_trade(trade.get("trade_id"), exit_price=exit_price, profit=profit, close_time=close_ts)
-    history.append_trade({**trade, "exit_price": exit_price, "profit": profit, "close_time": close_ts})
-    close_trade(trade_id=trade.get("trade_id"), reason=reason, exit_price=exit_price, profit=profit)
+    """Close a trade enforcing state transitions."""
+    trade_id = trade.get("trade_id")
+    symbol = trade.get("symbol")
+    qty = trade.get("quantity", 0)
+    close_side = "close_short" if trade.get("side") == "SELL" else "close_long"
+
+    set_trade_state(trade_id, TradeState.CLOSING)
+    order = execution.close_position(symbol, close_side, qty, order_type="market")
+    status = execution.fetch_order_status(order.get("id"), symbol)
+
+    if status in ("filled", "partial"):
+        close_trade(
+            trade_id=trade_id,
+            reason=reason,
+            exit_price=exit_price,
+            profit=profit,
+        )
+    else:
+        set_trade_state(trade_id, TradeState.FAILED)
+
     save_trades()
 
 
