@@ -9,3 +9,4 @@ pytest-cov
 flake8
 mypy
 codecov
+hypothesis>=6.99
