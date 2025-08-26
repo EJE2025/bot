@@ -1,6 +1,10 @@
 pytest>=8
 pytest-asyncio>=0.23
+pytest-cov>=4.1
 websockets>=12
+hypothesis>=6.99
+flake8>=6
+mypy>=1.6
 pytest-cov
 flake8
 mypy
