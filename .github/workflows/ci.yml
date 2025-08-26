@@ -18,6 +18,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Sanitize requirements (remove local editable lines)
+        run: |
+          for f in requirements*.txt requirements/*.txt 2>/dev/null; do
+            [ -f "$f" ] || continue
+            sed -i '/^-e[[:space:]]\+\.$/d' "$f"
+            sed -i '/file:\/\/\/home\/runner\/work\/bot\/bot/d' "$f"
+            sed -i '/^-e[[:space:]]\+file:\/\//d' "$f"
+            sed -i '/^file:\/\//d' "$f"
+          done
+
       - name: Install dependencies
         run: |
           python -m pip install -U pip
