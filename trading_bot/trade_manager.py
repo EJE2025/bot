@@ -3,6 +3,7 @@
 import threading
 import json
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 import time
 import logging
@@ -17,7 +18,13 @@ open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
 
-LOCK = threading.Lock()
+# ``add_trade`` y otros métodos llaman a ``log_history`` mientras mantienen el
+# cerrojo principal. Ese helper también necesita bloquear el estado global para
+# evitar condiciones de carrera. Con un ``Lock`` normal esto provocaba un
+# deadlock al intentar readquirirlo desde el mismo hilo cuando el historial está
+# habilitado. Cambiar a ``RLock`` permite la reentrada y mantiene la seguridad
+# frente a accesos concurrentes.
+LOCK = threading.RLock()
 
 # Cool-down registry for recently closed symbols
 _last_closed: dict[str, float] = {}
@@ -57,6 +64,8 @@ def add_trade(trade):
         )
         trade.setdefault("status", "pending")
         trade.setdefault("state", TradeState.PENDING.value)
+        trade.setdefault("timeframe", "short_term")
+        trade.setdefault("max_duration_minutes", config.MAX_TRADE_DURATION_MINUTES)
         open_trades.append(trade)
         log_history("open", trade)
         return trade
@@ -124,7 +133,14 @@ def close_trade(
     cur = TradeState(trade["state"])
     if cur in (TradeState.OPEN, TradeState.PARTIALLY_FILLED):
         set_trade_state(tid, TradeState.CLOSING)
-    set_trade_state(tid, TradeState.CLOSED)
+    try:
+        set_trade_state(tid, TradeState.CLOSED)
+    except InvalidStateTransition:
+        logger.debug(
+            "Forcing trade %s to CLOSED from %s", trade.get("trade_id"), cur
+        )
+        with LOCK:
+            trade["state"] = TradeState.CLOSED.value
     with LOCK:
         for i, t in enumerate(open_trades):
             if t.get("trade_id") == tid:
@@ -159,17 +175,18 @@ def all_closed_trades():
 # --- Persistence ---
 
 
-def atomic_write(path: str, data) -> None:
+def atomic_write(path: str | os.PathLike[str], data) -> None:
     """Write JSON data atomically to ``path``."""
-    tmp = path + ".tmp"
+    target = Path(path)
+    tmp = target.with_name(target.name + ".tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        os.replace(tmp, path)
+        os.replace(tmp, target)
     except Exception as exc:
-        logger.error("Error saving file %s: %s", path, exc)
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        logger.error("Error saving file %s: %s", target, exc)
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
         raise
 
 
@@ -270,3 +287,40 @@ def count_trades_for_symbol(symbol: str) -> int:
     """Return number of open trades for ``symbol``."""
     with LOCK:
         return sum(1 for t in open_trades if t.get("symbol") == symbol)
+
+
+def _parse_timestamp(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        if ts.endswith("Z"):
+            ts = ts[:-1] + "+00:00"
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        logger.debug("Invalid timestamp %s", ts)
+        return None
+
+
+def trade_age_minutes(trade: dict, now: datetime | None = None) -> float | None:
+    """Return the age of a trade in minutes or ``None`` if unknown."""
+    opened = _parse_timestamp(trade.get("open_time"))
+    if opened is None:
+        return None
+    if now is None:
+        now = datetime.now(timezone.utc)
+    delta = now.astimezone(timezone.utc) - opened.astimezone(timezone.utc)
+    return delta.total_seconds() / 60.0
+
+
+def exceeded_max_duration(
+    trade: dict, now: datetime | None = None, max_minutes: int | None = None
+) -> bool:
+    """Return ``True`` if the trade surpassed its allowed duration."""
+    if max_minutes is None:
+        max_minutes = trade.get("max_duration_minutes") or config.MAX_TRADE_DURATION_MINUTES
+    if max_minutes <= 0:
+        return False
+    age = trade_age_minutes(trade, now=now)
+    if age is None:
+        return False
+    return age >= max_minutes

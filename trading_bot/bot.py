@@ -20,6 +20,7 @@ from . import (
     notify,
     history,
     optimizer,
+    permissions,
     trade_manager,
 )
 from .trade_manager import (
@@ -92,6 +93,9 @@ def open_new_trade(signal: dict):
         save_trades()
         return find_trade(trade_id=trade["trade_id"])
 
+    except permissions.PermissionError as exc:
+        logger.error("Permission denied opening %s: %s", symbol, exc)
+        set_trade_state(trade["trade_id"], TradeState.FAILED)
     except execution.OrderSubmitError:
         logger.error("Order submission failed for %s", symbol)
         set_trade_state(trade["trade_id"], TradeState.FAILED)
@@ -172,6 +176,7 @@ def run_one_iteration_open(model=None):
 
 def run():
     load_trades()  # Restaurar operaciones guardadas
+    permissions.audit_environment(execution.exchange)
 
     # Sincronizar con posiciones reales en el exchange
     positions = execution.fetch_positions()
@@ -263,7 +268,11 @@ def run():
 
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
-            if trading_active and count_open_trades() < config.MAX_OPEN_TRADES:
+            if (
+                trading_active
+                and count_open_trades() < config.MAX_OPEN_TRADES
+                and permissions.can_open_trade(execution.exchange)
+            ):
                 if config.TEST_MODE and config.TEST_SYMBOLS:
                     symbols = [s.replace("/", "_").replace("-", "_")
                                for s in config.TEST_SYMBOLS]
@@ -321,8 +330,13 @@ def run():
                             f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
                         )
                         logger.info("Opened trade: %s", trade)
+                    except permissions.PermissionError as exc:
+                        logger.error("Permission denied for %s: %s", symbol, exc)
+                        break
                     except Exception as exc:
                         logger.error("Error processing %s: %s", symbol, exc)
+            elif trading_active and not permissions.can_open_trade(execution.exchange):
+                logger.debug("Skipping entries: live trading permissions not granted")
 
             # MONITOREAR OPERACIONES ABIERTAS
             for op in list(all_open_trades()):
@@ -337,6 +351,13 @@ def run():
                     profit = (op["entry_price"] - price) * op["quantity"]
                     close = price >= op["stop_loss"] or price <= op["take_profit"]
                     side_close = "close_short"
+
+                reason = None
+                if close:
+                    reason = "TP" if profit >= 0 else "SL"
+                if reason is None and trade_manager.exceeded_max_duration(op):
+                    close = True
+                    reason = "MAX_DURATION"
 
                 if close:
                     try:
@@ -369,16 +390,17 @@ def run():
                         op,
                         exec_price,
                         profit,
-                        "TP" if profit >= 0 else "SL",
+                        reason or ("TP" if profit >= 0 else "SL"),
                     )
                     daily_profit += profit
 
-                    notify.send_telegram(
-                        f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
+                    outcome = reason or ("TP" if profit >= 0 else "SL")
+                    note = (
+                        f"Closed {op['symbol']} {outcome} "
+                        f"PnL {profit:.2f} Slippage {slippage:.4f}"
                     )
-                    notify.send_discord(
-                        f"Closed {op['symbol']} PnL {profit:.2f} Slippage {slippage:.4f}"
-                    )
+                    notify.send_telegram(note)
+                    notify.send_discord(note)
 
             save_trades()  # Guarda el estado periódicamente
             update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))

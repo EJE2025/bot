@@ -2,7 +2,7 @@ import logging
 import time
 import asyncio
 import ccxt
-from . import config
+from . import config, permissions
 from .exchanges import get_exchange, MockExchange
 from .utils import circuit_breaker
 
@@ -145,6 +145,12 @@ def setup_leverage(exchange, symbol: str, leverage: int = 10):
         return {"success": False, "symbol": symbol, "error": "symbol not found"}
 
     try:
+        permissions.ensure_open_trade_allowed(exchange)
+    except permissions.PermissionError as exc:
+        logger.error("Leverage setup blocked: %s", exc)
+        return {"success": False, "symbol": symbol, "error": str(exc)}
+
+    try:
         result = exchange.set_leverage(leverage, symbol)
         logger.info("Leverage set to %dx for %s", leverage, symbol)
         # verify leverage was applied
@@ -175,6 +181,8 @@ def open_position(symbol: str, side: str, amount: float, price: float,
     """
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
+
+    permissions.ensure_open_trade_allowed(exchange)
     bitget_sym = symbol.replace("_", "/") + ":USDT"
 
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
