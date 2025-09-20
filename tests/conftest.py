@@ -6,26 +6,30 @@ def pytest_addoption(parser):
     """Registrar flags de cobertura como no-op si pytest-cov no est\xe1 instalado."""
 
     group = parser.getgroup("cov")
-    group.addoption(
-        "--cov",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="(stub) ruta a cubrir, ignorada si pytest-cov no est\xe1 disponible",
-    )
-    group.addoption(
-        "--cov-report",
-        action="append",
-        default=[],
-        metavar="TYPE",
-        help="(stub) tipo de reporte, ignorado",
-    )
-    group.addoption(
-        "--cov-branch",
-        action="store_true",
-        default=False,
-        help="(stub) seguimiento de cobertura por rama, ignorado",
-    )
+    try:
+        group.addoption(
+            "--cov",
+            action="append",
+            default=[],
+            metavar="PATH",
+            help="(stub) ruta a cubrir, ignorada si pytest-cov no está disponible",
+        )
+        group.addoption(
+            "--cov-report",
+            action="append",
+            default=[],
+            metavar="TYPE",
+            help="(stub) tipo de reporte, ignorado",
+        )
+        group.addoption(
+            "--cov-branch",
+            action="store_true",
+            default=False,
+            help="(stub) seguimiento de cobertura por rama, ignorado",
+        )
+    except ValueError:
+        # Si pytest-cov ya está instalado, las opciones existen y no necesitamos redefinirlas.
+        return
 
 
 # --- Bloquear red por defecto (evita cuelgues por timeouts HTTP/WS) ---
