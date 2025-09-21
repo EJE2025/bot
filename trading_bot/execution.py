@@ -92,6 +92,17 @@ def fetch_balance():
     if exchange is None:
         return 0.0
 
+    if config.TEST_MODE or isinstance(exchange, MockExchange):
+        return 1_000_000.0
+
+    try:
+        bal = _retry_api_call(exchange.fetch_balance, "fetch_balance")
+        usdt = bal.get("USDT", {})
+        return usdt.get("free", 0.0)
+    except Exception as exc:
+        logger.error("Balance fetch error: %s", exc)
+        return 0.0
+
 
 def fetch_position_size(symbol: str) -> float:
     """Return the open contracts for ``symbol`` if any."""
@@ -105,16 +116,6 @@ def fetch_position_size(symbol: str) -> float:
             except (TypeError, ValueError):
                 return 0.0
     return 0.0
-    if config.TEST_MODE or isinstance(exchange, MockExchange):
-        return 1_000_000.0
-
-    try:
-        bal = _retry_api_call(exchange.fetch_balance, "fetch_balance")
-        usdt = bal.get("USDT", {})
-        return usdt.get("free", 0.0)
-    except Exception as exc:
-        logger.error("Balance fetch error: %s", exc)
-        return 0.0
 
 
 def fetch_order_status(order_id: str, symbol: str) -> str:

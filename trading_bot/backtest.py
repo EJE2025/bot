@@ -153,7 +153,11 @@ def compute_kpis(trades: Iterable[TradeResult]) -> dict:
     first_ts = trades_list[0].timestamp
     last_ts = trades_list[-1].timestamp
     years = max((last_ts - first_ts).days / 365.25, 1e-6)
-    cagr = float(((1 + profits.sum()) ** (1 / years)) - 1)
+    cumulative_return = float(profits.sum())
+    if cumulative_return <= -1.0:
+        cagr = float("nan")
+    else:
+        cagr = float(((1 + cumulative_return) ** (1 / years)) - 1)
     std = profits.std(ddof=1) if len(profits) > 1 else 0.0
     sharpe = float(expectancy / std) if std else 0.0
     return {
