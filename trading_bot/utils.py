@@ -4,12 +4,15 @@ from typing import Any, Callable
 
 
 def normalize_symbol(sym: str) -> str:
-    """Return a normalized symbol like ``BTC_USDT``
-    regardless of separators."""
+    """Return a normalized symbol like ``BTC_USDT`` regardless of separators."""
     if not sym:
         return ""
-    s = sym.replace('/', '').replace('_', '').replace(':USDT', '').upper()
-    if s.endswith('USDT'):
+    s = sym.upper()
+    if ":" in s:
+        s = s.split(":", 1)[0]
+    for ch in ("/", "_", "-"):
+        s = s.replace(ch, "")
+    if s.endswith("USDT"):
         return f"{s[:-4]}_USDT"
     return s
 

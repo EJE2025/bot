@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -68,4 +69,24 @@ def test_close_trade_forces_closing(monkeypatch):
     assert calls == [TradeState.CLOSING, TradeState.CLOSED]
     assert tm.find_trade(trade_id=tid) is None
     assert tm.closed_trades[-1]["state"] == TradeState.CLOSED.value
+
+
+def test_trade_age_minutes_roundtrip():
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    opened = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    trade = {"open_time": opened}
+    age = tm.trade_age_minutes(trade, now=now)
+    assert age is not None
+    assert pytest.approx(age, rel=1e-3) == 30
+
+
+def test_exceeded_max_duration_detection():
+    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    trade = {
+        "open_time": (now - timedelta(minutes=120)).isoformat().replace("+00:00", "Z"),
+        "max_duration_minutes": 90,
+    }
+    assert tm.exceeded_max_duration(trade, now=now)
+    trade["max_duration_minutes"] = 180
+    assert not tm.exceeded_max_duration(trade, now=now)
 

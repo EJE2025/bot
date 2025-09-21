@@ -25,6 +25,14 @@ DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Trading mode and permissions -------------------------------------------------
+TRADING_MODE = os.getenv("TRADING_MODE", "paper").strip().lower()
+ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "0") == "1"
+LIVE_TRADING_TOKEN_PATH = os.getenv("LIVE_TRADING_TOKEN_PATH", "")
+LIVE_TRADING_TOKEN_VALUE = os.getenv(
+    "LIVE_TRADING_TOKEN_VALUE", "ENABLE_LIVE_TRADING"
+)
+
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 # Optional comma separated list of symbols to analyze when TEST_MODE is enabled
 _test_syms = os.getenv("TEST_SYMBOLS", "")
@@ -99,6 +107,14 @@ RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
 MIN_POSITION_SIZE = float(
     os.getenv("MIN_POSITION_SIZE", "1e-4" if TEST_MODE else "0.001")
 )
+
+# Enforce short/medium term operations by limiting how long a trade can stay open
+try:
+    MAX_TRADE_DURATION_MINUTES = int(
+        os.getenv("MAX_TRADE_DURATION_MINUTES", "240")
+    )
+except (TypeError, ValueError):
+    MAX_TRADE_DURATION_MINUTES = 240
 
 # Optional in-memory trade history auditing
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"

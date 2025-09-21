@@ -231,6 +231,8 @@ def decidir_entrada(
         "take_profit": take_profit,
         "prob_success": prob_success,
         "risk_reward": risk_reward,
+        "timeframe": "short_term",
+        "max_duration_minutes": config.MAX_TRADE_DURATION_MINUTES,
         "open_time": datetime.now(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
