@@ -1,10 +1,18 @@
 import logging
 import time
 import asyncio
+import logging
+import random
+import time
+from typing import Any, Callable
+
 import ccxt
-from . import config, permissions
+
+from . import config, permissions, metrics
 from .exchanges import get_exchange, MockExchange
-from .utils import circuit_breaker
+from .utils import circuit_breaker, normalize_symbol
+from . import idempotency, exchange_rules
+from .latency import measure_latency
 
 
 
@@ -12,6 +20,34 @@ logger = logging.getLogger(__name__)
 
 # Limit concurrent API requests across async tasks
 api_semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_REQUESTS)
+
+RETRYABLE_EXCEPTIONS = (
+    ccxt.NetworkError,
+    ccxt.DDoSProtection,
+    ccxt.ExchangeNotAvailable,
+    ccxt.RequestTimeout,
+)
+
+
+def _retry_api_call(action: Callable[[], Any], label: str) -> Any:
+    """Execute ``action`` with exponential backoff on retryable errors."""
+
+    backoff = config.API_RETRY_BACKOFF
+    jitter = config.API_RETRY_JITTER
+    attempts = max(1, config.API_RETRY_ATTEMPTS)
+    for attempt in range(attempts):
+        try:
+            return action()
+        except RETRYABLE_EXCEPTIONS as exc:
+            metrics.record_api_retry()
+            if attempt == attempts - 1:
+                metrics.record_api_error()
+                raise
+            delay = backoff * (2 ** attempt) + random.uniform(0.0, jitter)
+            logger.warning(
+                "%s failed (attempt %d/%d): %s", label, attempt + 1, attempts, exc
+            )
+            time.sleep(delay)
 
 try:
     exchange = get_exchange(config.DEFAULT_EXCHANGE)
@@ -29,7 +65,10 @@ def fetch_positions():
     if exchange is None:
         return []
     try:
-        positions = exchange.fetch_positions(params={"productType": "USDT-FUTURES"})
+        positions = _retry_api_call(
+            lambda: exchange.fetch_positions(params={"productType": "USDT-FUTURES"}),
+            "fetch_positions",
+        )
         return [p for p in positions if float(p.get("contracts", 0)) != 0]
     except Exception as exc:
         logger.error("Failed fetching positions: %s", exc)
@@ -41,7 +80,7 @@ def fetch_open_orders():
     if exchange is None:
         return []
     try:
-        orders = exchange.fetch_open_orders()
+        orders = _retry_api_call(exchange.fetch_open_orders, "fetch_open_orders")
         return orders
     except Exception as exc:
         logger.error("Failed fetching open orders: %s", exc)
@@ -52,11 +91,25 @@ def fetch_balance():
     """Return available USDT balance if possible."""
     if exchange is None:
         return 0.0
+
+
+def fetch_position_size(symbol: str) -> float:
+    """Return the open contracts for ``symbol`` if any."""
+
+    norm = normalize_symbol(symbol)
+    for pos in fetch_positions():
+        psym = normalize_symbol(pos.get("symbol", ""))
+        if psym == norm:
+            try:
+                return abs(float(pos.get("contracts", 0.0)))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
     if config.TEST_MODE or isinstance(exchange, MockExchange):
         return 1_000_000.0
 
     try:
-        bal = exchange.fetch_balance()
+        bal = _retry_api_call(exchange.fetch_balance, "fetch_balance")
         usdt = bal.get("USDT", {})
         return usdt.get("free", 0.0)
     except Exception as exc:
@@ -75,7 +128,10 @@ def fetch_order_status(order_id: str, symbol: str) -> str:
 
     bitget_sym = symbol.replace("_", "/") + ":USDT"
     try:
-        info = exchange.fetch_order(order_id, bitget_sym)
+        info = _retry_api_call(
+            lambda: exchange.fetch_order(order_id, bitget_sym),
+            f"fetch_order:{order_id}",
+        )
     except Exception as exc:
         logger.error("Error fetching order %s for %s: %s", order_id, symbol, exc)
         return "new"
@@ -92,6 +148,54 @@ def fetch_order_status(order_id: str, symbol: str) -> str:
     return "new"
 
 
+def get_order_fill_details(order_id: str, symbol: str) -> dict[str, float] | None:
+    """Return filled and remaining quantities for ``order_id`` if available."""
+    if exchange is None:
+        return None
+
+    bitget_sym = symbol.replace("_", "/") + ":USDT"
+
+    try:
+        info = _retry_api_call(
+            lambda: exchange.fetch_order(order_id, bitget_sym),
+            f"fetch_order_details:{order_id}",
+        )
+    except Exception as exc:
+        logger.error("Error fetching order %s for %s: %s", order_id, symbol, exc)
+        return None
+
+    def _to_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    filled = _to_float(info.get("filled"))
+    remaining = _to_float(info.get("remaining"))
+    amount = _to_float(info.get("amount"))
+
+    if filled is None and amount is not None:
+        if remaining is not None:
+            filled = max(amount - remaining, 0.0)
+        elif str(info.get("status", "")).lower() in {"closed", "filled"}:
+            filled = amount
+            remaining = 0.0
+
+    if remaining is None and amount is not None and filled is not None:
+        remaining = max(amount - filled, 0.0)
+
+    average = _to_float(info.get("average"))
+
+    if filled is None and remaining is None and average is None:
+        return None
+
+    return {
+        "filled": filled if filled is not None else 0.0,
+        "remaining": remaining if remaining is not None else 0.0,
+        "average": average,
+    }
+
+
 
 def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_FILL_TIMEOUT) -> bool:
 
@@ -100,18 +204,22 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_F
         return False
     bitget_sym = symbol.replace("_", "/") + ":USDT"
     end = time.time() + timeout
-    while time.time() < end:
-        try:
-            info = exchange.fetch_order(order_id, bitget_sym)
-            status = info.get("status")
-            if status in ("closed", "filled"):
-                return True
-            if status in ("canceled", "rejected"):
-                logger.warning("Order %s %s", order_id, status)
-                return False
-        except Exception as exc:
-            logger.error("Fetch order %s error: %s", order_id, exc)
-        time.sleep(2)
+    with measure_latency("ack_to_filled"):
+        while time.time() < end:
+            try:
+                info = _retry_api_call(
+                    lambda: exchange.fetch_order(order_id, bitget_sym),
+                    f"fetch_order_poll:{order_id}",
+                )
+                status = info.get("status")
+                if status in ("closed", "filled"):
+                    return True
+                if status in ("canceled", "rejected"):
+                    logger.warning("Order %s %s", order_id, status)
+                    return False
+            except Exception as exc:
+                logger.error("Fetch order %s error: %s", order_id, exc)
+            time.sleep(2)
     logger.warning("Order %s not filled after %ds", order_id, timeout)
     return False
 
@@ -171,8 +279,15 @@ def setup_leverage(exchange, symbol: str, leverage: int = 10):
 
 
 @circuit_breaker(fallback=None, max_failures=3, reset_timeout=60)
-def open_position(symbol: str, side: str, amount: float, price: float,
-                  order_type: str = "limit", stop_price: float | None = None):
+def open_position(
+    symbol: str,
+    side: str,
+    amount: float,
+    price: float,
+    order_type: str = "limit",
+    stop_price: float | None = None,
+    idempotency_key: str | None = None,
+):
     """Send an order to open a position and return the order data.
 
     The function validates that the exchange returns a dictionary containing the
@@ -184,38 +299,58 @@ def open_position(symbol: str, side: str, amount: float, price: float,
 
     permissions.ensure_open_trade_allowed(exchange)
     bitget_sym = symbol.replace("_", "/") + ":USDT"
+    rules = exchange_rules.get_symbol_rules(symbol)
+    quantized_amount = exchange_rules.quantize_qty(amount, rules.qty_step)
 
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
         if bitget_sym not in exchange.markets:
             raise OrderSubmitError(f"Market {bitget_sym} not available")
         bal = fetch_balance()
-        cost = amount * price / exchange.markets[bitget_sym].get("contractSize", 1)
+        cost = quantized_amount * price / exchange.markets[bitget_sym].get("contractSize", 1)
         if bal < cost:
             raise OrderSubmitError("Insufficient balance")
     max_attempts = config.ORDER_SUBMIT_ATTEMPTS
+    ord_price = price
+    ord_type = order_type.lower()
+    if ord_type != "market":
+        ord_price = exchange_rules.quantize_price(price, rules.price_tick)
+    else:
+        ord_price = None
+    exchange_rules.validate_order(symbol, side, ord_price, quantized_amount, rules)
+    use_idempotency = not isinstance(exchange, MockExchange)
+    key = None
+    if use_idempotency:
+        key = idempotency_key or idempotency.build_idempotency_key(
+            symbol, side, ord_price or price, quantized_amount
+        )
+        if not idempotency.should_submit(key):
+            cached = idempotency.get_cached_result(key)
+            if cached is not None:
+                return cached
+            raise OrderSubmitError("Duplicate order suppressed")
     for attempt in range(max_attempts):
         try:
             params = {"timeInForce": "GTC", "holdSide": "long" if side == "BUY" else "short"}
-            ord_type = order_type.lower()
-            ord_price = price
             if ord_type == "market":
                 ord_type = "market"
-                ord_price = None
             elif ord_type == "stop":
                 params["stopPrice"] = stop_price or price
                 ord_type = "limit"
             else:
                 ord_type = "limit"
-            order = exchange.create_order(
-                symbol=bitget_sym,
-                type=ord_type,
-                side="buy" if side == "BUY" else "sell",
-                amount=amount,
-                price=ord_price,
-                params=params,
-            )
+            with measure_latency("submit_to_ack"):
+                order = exchange.create_order(
+                    symbol=bitget_sym,
+                    type=ord_type,
+                    side="buy" if side == "BUY" else "sell",
+                    amount=quantized_amount,
+                    price=ord_price,
+                    params=params,
+                )
             if not isinstance(order, dict) or not {"id", "status", "average"}.issubset(order.keys()):
                 raise OrderSubmitError(f"Unexpected order response: {order}")
+            if use_idempotency and key is not None:
+                idempotency.store_result(key, order)
             return order
         except Exception as exc:
             if attempt < max_attempts - 1:
@@ -233,16 +368,35 @@ def open_position(symbol: str, side: str, amount: float, price: float,
 
 
 @circuit_breaker(fallback=None, max_failures=3, reset_timeout=60)
-def close_position(symbol: str, side: str, amount: float, order_type: str = "market"):
+def close_position(
+    symbol: str,
+    side: str,
+    amount: float,
+    order_type: str = "market",
+    idempotency_key: str | None = None,
+):
     """Close an existing position with validation and retries."""
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
+    rules = exchange_rules.get_symbol_rules(symbol)
+    quantized_amount = exchange_rules.quantize_qty(amount, rules.qty_step)
 
     if not (config.TEST_MODE or isinstance(exchange, MockExchange)):
         if bitget_sym not in exchange.markets:
             raise OrderSubmitError(f"Market {bitget_sym} not available")
     max_attempts = config.ORDER_SUBMIT_ATTEMPTS
+    use_idempotency = not isinstance(exchange, MockExchange)
+    key = None
+    if use_idempotency:
+        key = idempotency_key or idempotency.build_idempotency_key(
+            symbol, side, 0.0, quantized_amount
+        )
+        if not idempotency.should_submit(key):
+            cached = idempotency.get_cached_result(key)
+            if cached is not None:
+                return cached
+            raise OrderSubmitError("Duplicate order suppressed")
     for attempt in range(max_attempts):
         try:
             params = {"reduceOnly": True}
@@ -250,16 +404,19 @@ def close_position(symbol: str, side: str, amount: float, order_type: str = "mar
             ord_price = None
             if ord_type not in ("market", "limit"):
                 ord_type = "market"
-            order = exchange.create_order(
-                symbol=bitget_sym,
-                type=ord_type,
-                side="buy" if side == "close_short" else "sell",
-                amount=amount,
-                price=ord_price,
-                params=params,
-            )
+            with measure_latency("submit_to_ack"):
+                order = exchange.create_order(
+                    symbol=bitget_sym,
+                    type=ord_type,
+                    side="buy" if side == "close_short" else "sell",
+                    amount=quantized_amount,
+                    price=ord_price,
+                    params=params,
+                )
             if not isinstance(order, dict) or not {"id", "status", "average"}.issubset(order.keys()):
                 raise OrderSubmitError(f"Unexpected order response: {order}")
+            if use_idempotency and key is not None:
+                idempotency.store_result(key, order)
             return order
 
         except Exception as exc:
@@ -279,11 +436,17 @@ def cancel_order(order_id: str, symbol: str):
         logger.error("Exchange not initialized")
         return
     try:
-        info = exchange.fetch_order(order_id, bitget_sym)
+        info = _retry_api_call(
+            lambda: exchange.fetch_order(order_id, bitget_sym),
+            f"fetch_order:{order_id}",
+        )
         if info.get("status") != "open":
             logger.info("Skip cancel: %s already %s", order_id, info.get("status"))
             return
-        exchange.cancel_order(order_id, bitget_sym)
+        _retry_api_call(
+            lambda: exchange.cancel_order(order_id, bitget_sym),
+            f"cancel_order:{order_id}",
+        )
     except Exception as exc:
         logger.error("Error canceling %s: %s", order_id, exc)
 
@@ -303,6 +466,18 @@ def cleanup_old_orders(max_age: int = config.ORDER_MAX_AGE):
             sym_clean = sym.replace("/", "_").replace(":USDT", "")
             logger.info("Cancelling stale order %s for %s age %.1fs", oid, sym_clean, age)
             cancel_order(oid, sym_clean)
+
+
+def cancel_all_orders() -> None:
+    """Cancel every open order regardless of age."""
+
+    for order in fetch_open_orders():
+        oid = order.get("id")
+        sym = order.get("symbol", "")
+        if not oid or not sym:
+            continue
+        sym_clean = sym.replace("/", "_").replace(":USDT", "")
+        cancel_order(oid, sym_clean)
 
 
 # ---------------------- Async wrappers ----------------------

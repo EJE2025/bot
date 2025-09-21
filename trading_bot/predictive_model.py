@@ -41,6 +41,8 @@ from __future__ import annotations
 import logging
 import pickle
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Union, cast
 
@@ -52,7 +54,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator
+from pandas.api.types import is_numeric_dtype, is_categorical_dtype
+from sklearn.base import BaseEstimator, clone
 from sklearn.compose import ColumnTransformer
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
@@ -71,8 +74,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures, StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.calibration import CalibratedClassifierCV
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _manifest_path(path: Union[str, Path]) -> Path:
+    destination = Path(path)
+    return destination.with_name(destination.stem + ".manifest.json")
 
 
 @dataclass
@@ -107,6 +116,9 @@ class TrainingConfig:
     use_polynomial_features: bool = False
     random_state: int = 42
     n_jobs: Optional[int] = None
+    calibrate_probabilities: bool = True
+    calibration_method: str = "isotonic"
+    calibration_cv: int = 3
     _validated_model_type: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -116,6 +128,10 @@ class TrainingConfig:
                              f"Choose from {sorted(supported)}")
         if self.cv_splits < 2:
             raise ValueError("cv_splits must be at least 2 for TimeSeriesSplit")
+        if self.calibration_method not in {"isotonic", "sigmoid"}:
+            raise ValueError("calibration_method must be 'isotonic' or 'sigmoid'")
+        if self.calibration_cv < 1:
+            raise ValueError("calibration_cv must be at least 1")
         self._validated_model_type = self.model_type
 
 
@@ -264,7 +280,40 @@ def train_model(
         grid.best_score_,
     )
 
-    return grid.best_estimator_
+    manifest = {
+        "features": list(X.columns),
+        "numeric": list(numeric_features),
+        "categorical": list(categorical_features),
+        "target": target,
+        "model_type": cfg.model_type,
+        "calibrated": cfg.calibrate_probabilities,
+        "created_at": datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    }
+
+    best_pipeline = grid.best_estimator_
+
+    if cfg.calibrate_probabilities:
+        preprocessor = clone(best_pipeline.named_steps["preprocessor"])
+        classifier = clone(best_pipeline.named_steps["classifier"])
+        calibrator = CalibratedClassifierCV(
+            estimator=classifier,
+            method=cfg.calibration_method,
+            cv=cfg.calibration_cv,
+        )
+        calibrated_pipeline = Pipeline(
+            steps=[
+                ("preprocessor", preprocessor),
+                ("classifier", calibrator),
+            ]
+        )
+        calibrated_pipeline.fit(X, y)
+        calibrated_pipeline.feature_manifest_ = manifest
+        return calibrated_pipeline
+
+    best_pipeline.feature_manifest_ = manifest
+    return best_pipeline
 
 
 def evaluate_model(
@@ -378,6 +427,13 @@ def save_model(model: BaseEstimator, path: str) -> None:
         pickle.dump(model, file)
     LOGGER.info("Model saved to %s", destination)
 
+    manifest = getattr(model, "feature_manifest_", None)
+    if manifest:
+        manifest_path = _manifest_path(destination)
+        with manifest_path.open("w", encoding="utf-8") as mf:
+            json.dump(manifest, mf, indent=2)
+        LOGGER.info("Feature manifest saved to %s", manifest_path)
+
 
 def load_model(path: str) -> Optional[BaseEstimator]:
     """Load a previously saved model from disk.
@@ -400,8 +456,59 @@ def load_model(path: str) -> Optional[BaseEstimator]:
 
     with model_path.open("rb") as file:
         model = pickle.load(file)
-    LOGGER.info("Model loaded from %s", model_path)
+    manifest_path = _manifest_path(model_path)
+    if manifest_path.exists():
+        try:
+            with manifest_path.open("r", encoding="utf-8") as mf:
+                manifest = json.load(mf)
+            setattr(model, "feature_manifest_", manifest)
+            LOGGER.info(
+                "Loaded model and manifest from %s and %s",
+                model_path,
+                manifest_path,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.error("Failed loading feature manifest %s: %s", manifest_path, exc)
+    else:
+        LOGGER.info("Model loaded from %s", model_path)
     return cast(BaseEstimator, model)
+
+
+def ensure_feature_schema(
+    model: BaseEstimator, frame: pd.DataFrame
+) -> pd.DataFrame:
+    """Validate that ``frame`` matches the model feature schema."""
+
+    manifest = getattr(model, "feature_manifest_", None)
+    if not manifest:
+        return frame
+
+    expected = manifest.get("features", [])
+    missing = [col for col in expected if col not in frame.columns]
+    if missing:
+        raise ValueError(f"Missing required feature columns: {missing}")
+
+    ordered = frame[expected].copy()
+
+    numeric = set(manifest.get("numeric", []))
+    categorical = set(manifest.get("categorical", []))
+
+    for col in numeric:
+        if col not in ordered.columns:
+            continue
+        if not is_numeric_dtype(ordered[col]):
+            raise TypeError(f"Feature '{col}' must be numeric")
+
+    for col in categorical:
+        if col not in ordered.columns:
+            continue
+        if not (
+            is_categorical_dtype(ordered[col])
+            or ordered[col].dtype.kind in {"O", "U"}
+        ):
+            ordered[col] = ordered[col].astype(str)
+
+    return ordered
 
 
 def predict_proba(
@@ -440,6 +547,8 @@ def predict_proba(
     else:
         raise TypeError("X must be a DataFrame, dict or sequence of dicts")
 
+    prepared_X = ensure_feature_schema(model, prepared_X)
+
     try:
         probabilities = model.predict_proba(prepared_X)[:, 1]
     except NotFittedError as exc:
@@ -457,6 +566,7 @@ __all__ = [
     "evaluate_model",
     "save_model",
     "load_model",
+    "ensure_feature_schema",
     "predict_proba",
 ]
 

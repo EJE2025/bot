@@ -58,6 +58,7 @@ def add_trade(trade):
         trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
+        trade.setdefault("requested_quantity", trade.get("quantity"))
         trade.setdefault(
             "open_time",
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
