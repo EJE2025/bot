@@ -1,3 +1,5 @@
+"""Utilities for promoting trained predictive models."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,11 +13,15 @@ from typing import Dict, List
 
 @dataclass
 class Report:
+    """Structured representation of a model evaluation report."""
+
     path: Path
     metrics: Dict[str, float]
 
     @classmethod
     def load(cls, path: Path) -> "Report":
+        """Load a JSON report ensuring the required KPIs are present."""
+
         data = json.loads(path.read_text(encoding="utf-8"))
         required = ["win_rate", "expectancy", "profit_factor"]
         missing = [key for key in required if key not in data]
@@ -26,6 +32,8 @@ class Report:
 
 
 def compare_kpis(candidate: Report, baseline: Report, keys: List[str]) -> int:
+    """Return how many KPIs improved in ``candidate`` versus ``baseline``."""
+
     better = 0
     for key in keys:
         if candidate.metrics.get(key, float("nan")) > baseline.metrics.get(key, float("nan")):
@@ -34,6 +42,8 @@ def compare_kpis(candidate: Report, baseline: Report, keys: List[str]) -> int:
 
 
 def promote(candidate_model: Path, candidate_manifest: Path, prod_model: Path, prod_manifest: Path) -> None:
+    """Copy the candidate artifacts into production destinations."""
+
     prod_model.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(candidate_model, prod_model)
     if candidate_manifest.exists():
@@ -41,10 +51,12 @@ def promote(candidate_model: Path, candidate_manifest: Path, prod_model: Path, p
 
 
 def main(argv: List[str]) -> int:
-    parser = argparse.ArgumentParser(prog="model_ops")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    """CLI entry point used by ``python -m trading_bot.model_ops``."""
 
-    promote_parser = sub.add_parser(
+    parser = argparse.ArgumentParser(prog="model_ops")
+    subparsers = parser.add_subparsers(dest="cmd", required=True)
+
+    promote_parser = subparsers.add_parser(
         "promote-if-better",
         help="Promueve el modelo si supera baseline en ≥ N KPIs",
     )
@@ -54,32 +66,34 @@ def main(argv: List[str]) -> int:
     promote_parser.add_argument(
         "--candidate-manifest",
         type=Path,
-        default=Path("models/candidate.manifest.json"),
+        default=Path("models/manifest.json"),
     )
     promote_parser.add_argument(
-        "--prod-model", type=Path, default=Path("models/model.pkl")
+        "--prod-model",
+        type=Path,
+        default=Path("models/model.pkl"),
     )
     promote_parser.add_argument(
-        "--prod-manifest", type=Path, default=Path("models/manifest.json")
+        "--prod-manifest",
+        type=Path,
+        default=Path("models/manifest.json"),
     )
-    promote_parser.add_argument(
-        "--kpis", default="win_rate,expectancy,profit_factor"
-    )
+    promote_parser.add_argument("--kpis", default="win_rate,expectancy,profit_factor")
     promote_parser.add_argument("--min-better", type=int, default=3)
     promote_parser.add_argument(
-        "--hot-reload-flag", type=Path, default=Path("models/.reload")
+        "--hot-reload-flag",
+        type=Path,
+        default=Path("models/.reload"),
     )
 
     args = parser.parse_args(argv)
+
     if args.cmd == "promote-if-better":
         candidate_report = Report.load(args.candidate_report)
         baseline_report = Report.load(args.baseline_report)
         keys = [key.strip() for key in str(args.kpis).split(",") if key.strip()]
         better = compare_kpis(candidate_report, baseline_report, keys)
-        print(
-            f"[model_ops] KPIs: {keys} | better={better}/{len(keys)}",
-            flush=True,
-        )
+        print(f"[model_ops] KPIs: {keys} | better={better}/{len(keys)}", flush=True)
         if better >= args.min_better:
             promote(
                 args.candidate_model,
@@ -98,5 +112,5 @@ def main(argv: List[str]) -> int:
     return 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - CLI hook
     sys.exit(main(sys.argv[1:]))

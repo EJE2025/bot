@@ -62,14 +62,22 @@ def probability_threshold(risk_reward: float) -> float:
     """Compute the minimum probability required to keep a signal."""
     if risk_reward <= 0:
         return 1.0
+
+    configured_threshold = getattr(config, "PROB_THRESHOLD", None)
+    base_threshold = config.MIN_PROB_SUCCESS
+    base_with_margin = base_threshold
+    if configured_threshold is not None:
+        base_threshold = max(base_threshold, configured_threshold)
+        if configured_threshold > config.MIN_PROB_SUCCESS:
+            base_with_margin = base_threshold + getattr(config, "FEE_AWARE_MARGIN_BPS", 0) / 10000.0
+        else:
+            base_with_margin = base_threshold
+    fee_margin = getattr(config, "FEE_AWARE_MARGIN_BPS", 0) / 10000.0
     fee = config.FEE_EST
     breakeven = fee / max(risk_reward + fee, 1e-9)
-    fee_margin = getattr(config, "FEE_AWARE_MARGIN_BPS", 0) / 10000.0
-    floor = max(
-        config.MIN_PROB_SUCCESS,
-        breakeven + config.PROBABILITY_MARGIN + fee_margin,
-    )
-    return min(floor, 0.995)
+    dynamic_threshold = breakeven + config.PROBABILITY_MARGIN + fee_margin
+    threshold = max(base_with_margin, dynamic_threshold)
+    return min(threshold, 0.995)
 
 
 def log_signal_details(
