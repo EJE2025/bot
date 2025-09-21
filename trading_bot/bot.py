@@ -1,6 +1,8 @@
 import argparse
 import os
 import sys
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -142,6 +144,25 @@ class ModelPerformanceMonitor:
             self.samples.clear()
 
 
+@dataclass
+class ShadowPosition:
+    trade_id: str
+    symbol: str
+    side: str
+    entry_price: float
+    quantity: float
+    take_profit: float
+    stop_loss: float
+    open_time: datetime
+    max_duration: timedelta
+    probabilities: dict[str, float]
+
+
+SHADOW_COMPARE_MODES = ("heuristic", "hybrid")
+_shadow_positions: dict[str, ShadowPosition] = {}
+_shadow_lock = RLock()
+
+
 _model_lock = RLock()
 _cached_model = None
 _cached_model_mtime: float | None = None
@@ -209,6 +230,160 @@ MODEL_MONITOR = ModelPerformanceMonitor(
     config.MODEL_MIN_WIN_RATE,
     config.MODEL_MAX_CALIBRATION_DRIFT,
 )
+
+
+def _reset_shadow_positions() -> None:
+    with _shadow_lock:
+        _shadow_positions.clear()
+
+
+def _record_shadow_payloads(position: ShadowPosition, signal: dict) -> None:
+    base_payload = dict(signal)
+    for mode in SHADOW_COMPARE_MODES:
+        payload = dict(base_payload)
+        if mode == "heuristic":
+            prob = position.probabilities.get(mode)
+            if "orig_prob" in payload:
+                payload["prob_success"] = payload["orig_prob"]
+            elif prob is not None:
+                payload["prob_success"] = prob
+        else:
+            prob = position.probabilities.get(mode)
+            if prob is not None:
+                payload["prob_success"] = prob
+        payload["trade_id"] = f"{position.trade_id}:{mode}"
+        payload["mode"] = mode
+        shadow.record_shadow_signal(position.symbol, mode, payload)
+
+
+def _register_shadow_trade(signal: dict) -> None:
+    trade_uuid = str(uuid.uuid4())
+    entry_price = float(signal.get("entry_price", 0.0))
+    quantity = float(signal.get("quantity", 0.0))
+    take_profit = float(signal.get("take_profit", entry_price))
+    stop_loss = float(signal.get("stop_loss", entry_price))
+    try:
+        max_minutes = int(
+            signal.get("max_duration_minutes", config.MAX_TRADE_DURATION_MINUTES)
+        )
+    except (TypeError, ValueError):
+        max_minutes = config.MAX_TRADE_DURATION_MINUTES
+    if max_minutes <= 0:
+        max_minutes = config.MAX_TRADE_DURATION_MINUTES
+
+    probabilities = {
+        "hybrid": float(signal.get("prob_success", 0.0)),
+        "heuristic": float(
+            signal.get("orig_prob", signal.get("prob_success", 0.0))
+        ),
+    }
+
+    position = ShadowPosition(
+        trade_id=trade_uuid,
+        symbol=str(signal.get("symbol", "")),
+        side=str(signal.get("side", "BUY")),
+        entry_price=entry_price,
+        quantity=quantity,
+        take_profit=take_profit,
+        stop_loss=stop_loss,
+        open_time=datetime.now(timezone.utc),
+        max_duration=timedelta(minutes=max_minutes),
+        probabilities=probabilities,
+    )
+
+    with _shadow_lock:
+        _shadow_positions[trade_uuid] = position
+
+    _record_shadow_payloads(position, signal)
+
+
+def _assess_shadow_close(
+    position: ShadowPosition, price: float, now: datetime
+) -> tuple[str | None, float, float]:
+    side = position.side.upper()
+    hit_tp = price >= position.take_profit if side == "BUY" else price <= position.take_profit
+    hit_sl = price <= position.stop_loss if side == "BUY" else price >= position.stop_loss
+
+    reason: str | None = None
+    if hit_tp:
+        reason = "TP"
+    elif hit_sl:
+        reason = "SL"
+    elif now - position.open_time >= position.max_duration:
+        reason = "MAX_DURATION"
+
+    if reason is None:
+        return None, price, 0.0
+
+    if side == "BUY":
+        profit = (price - position.entry_price) * position.quantity
+    else:
+        profit = (position.entry_price - price) * position.quantity
+
+    return reason, price, profit
+
+
+def _finalize_shadow_trade(
+    position: ShadowPosition,
+    reason: str,
+    exit_price: float,
+    profit: float,
+    closed_at: datetime,
+) -> None:
+    payload = {
+        "symbol": position.symbol,
+        "side": position.side,
+        "entry_price": position.entry_price,
+        "exit_price": exit_price,
+        "quantity": position.quantity,
+        "profit": profit,
+        "close_reason": reason,
+        "closed_at": closed_at.isoformat().replace("+00:00", "Z"),
+    }
+    for mode in SHADOW_COMPARE_MODES:
+        result = dict(payload)
+        prob = position.probabilities.get(mode)
+        if prob is not None:
+            result["prob_success"] = prob
+        result["mode"] = mode
+        shadow.finalize_shadow_trade(f"{position.trade_id}:{mode}", result)
+
+
+def _process_shadow_positions() -> float:
+    with _shadow_lock:
+        snapshot = list(_shadow_positions.items())
+
+    realized = 0.0
+    completed: list[str] = []
+    for trade_id, position in snapshot:
+        price_raw = data.get_current_price_ticker(position.symbol)
+        try:
+            price = float(price_raw)
+        except (TypeError, ValueError):
+            continue
+
+        now = datetime.now(timezone.utc)
+        reason, exit_price, profit = _assess_shadow_close(position, price, now)
+        if reason is None:
+            continue
+
+        _finalize_shadow_trade(position, reason, exit_price, profit, now)
+        logger.info(
+            "Shadow trade %s %s closed (%s) profit %.4f",
+            position.symbol,
+            position.side,
+            reason,
+            profit,
+        )
+        realized += profit
+        completed.append(trade_id)
+
+    if completed:
+        with _shadow_lock:
+            for trade_id in completed:
+                _shadow_positions.pop(trade_id, None)
+
+    return realized
 
 
 def parse_args():
@@ -282,12 +457,7 @@ def open_new_trade(signal: dict):
     raw = normalize_symbol(symbol).replace("_", "")
 
     if config.SHADOW_MODE:
-        hybrid_payload = dict(signal)
-        heuristic_payload = dict(signal)
-        if "orig_prob" in heuristic_payload:
-            heuristic_payload["prob_success"] = heuristic_payload["orig_prob"]
-        shadow.record_shadow_signal(symbol, "heuristic", heuristic_payload)
-        shadow.record_shadow_signal(symbol, "hybrid", hybrid_payload)
+        _register_shadow_trade(signal)
         return None
 
     # Register trade in pending state first
@@ -687,54 +857,56 @@ def run():
                 logger.debug("Skipping entries: live trading permissions not granted")
 
             # MONITOREAR OPERACIONES ABIERTAS
-            for op in list(all_open_trades()):
-                price = data.get_current_price_ticker(op["symbol"])
-                if not price:
-                    continue
-                if op["side"] == "BUY":
-                    profit = (price - op["entry_price"]) * op["quantity"]
-                    close = price <= op["stop_loss"] or price >= op["take_profit"]
-                    side_close = "close_long"
-                else:
-                    profit = (op["entry_price"] - price) * op["quantity"]
-                    close = price >= op["stop_loss"] or price <= op["take_profit"]
-                    side_close = "close_short"
-
-                reason = None
-                if close:
-                    reason = "TP" if profit >= 0 else "SL"
-                if reason is None and trade_manager.exceeded_max_duration(op):
-                    close = True
-                    reason = "MAX_DURATION"
-
-                if close:
-                    expected = op["take_profit"] if (
-                        (op["side"] == "BUY" and price >= op["take_profit"]) or
-                        (op["side"] == "SELL" and price <= op["take_profit"])
-                    ) else op["stop_loss"]
-                    close_label = reason or ("TP" if profit >= 0 else "SL")
-                    closed, exec_price, realized = close_existing_trade(
-                        op,
-                        close_label,
-                    )
-                    if not closed or exec_price is None or realized is None:
+            if config.SHADOW_MODE:
+                realized = _process_shadow_positions()
+                daily_profit += realized
+            else:
+                for op in list(all_open_trades()):
+                    price = data.get_current_price_ticker(op["symbol"])
+                    if not price:
                         continue
-                    slippage = exec_price - expected
-                    logger.info(
-                        "Closed %s at %.4f (target %.4f) slippage %.4f",
-                        op["symbol"], exec_price, expected, slippage
-                    )
-                    if abs(slippage) > config.MAX_SLIPPAGE:
-                        logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-                    daily_profit += realized
+                    if op["side"] == "BUY":
+                        profit = (price - op["entry_price"]) * op["quantity"]
+                        close = price <= op["stop_loss"] or price >= op["take_profit"]
+                    else:
+                        profit = (op["entry_price"] - price) * op["quantity"]
+                        close = price >= op["stop_loss"] or price <= op["take_profit"]
 
-                    outcome = close_label
-                    note = (
-                        f"Closed {op['symbol']} {outcome} "
-                        f"PnL {realized:.2f} Slippage {slippage:.4f}"
-                    )
-                    notify.send_telegram(note)
-                    notify.send_discord(note)
+                    reason = None
+                    if close:
+                        reason = "TP" if profit >= 0 else "SL"
+                    if reason is None and trade_manager.exceeded_max_duration(op):
+                        close = True
+                        reason = "MAX_DURATION"
+
+                    if close:
+                        expected = op["take_profit"] if (
+                            (op["side"] == "BUY" and price >= op["take_profit"]) or
+                            (op["side"] == "SELL" and price <= op["take_profit"])
+                        ) else op["stop_loss"]
+                        close_label = reason or ("TP" if profit >= 0 else "SL")
+                        closed, exec_price, realized = close_existing_trade(
+                            op,
+                            close_label,
+                        )
+                        if not closed or exec_price is None or realized is None:
+                            continue
+                        slippage = exec_price - expected
+                        logger.info(
+                            "Closed %s at %.4f (target %.4f) slippage %.4f",
+                            op["symbol"], exec_price, expected, slippage
+                        )
+                        if abs(slippage) > config.MAX_SLIPPAGE:
+                            logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
+                        daily_profit += realized
+
+                        outcome = close_label
+                        note = (
+                            f"Closed {op['symbol']} {outcome} "
+                            f"PnL {realized:.2f} Slippage {slippage:.4f}"
+                        )
+                        notify.send_telegram(note)
+                        notify.send_discord(note)
 
             save_trades()  # Guarda el estado periódicamente
             update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))

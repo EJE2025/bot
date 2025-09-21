@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Sequence, Union, cast
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple, Union, cast
 
 import matplotlib
 
@@ -135,45 +135,12 @@ class TrainingConfig:
         self._validated_model_type = self.model_type
 
 
-def train_model(
-    csv_path: str,
+def _prepare_training_data(
+    frame: pd.DataFrame,
     target: str,
-    config: Optional[TrainingConfig] = None,
-) -> BaseEstimator:
-    """Train a predictive model using data stored in a CSV file.
-
-    Parameters
-    ----------
-    csv_path:
-        Path to the dataset in CSV format. The CSV must contain the target
-        column and the feature columns expected at inference time (for example
-        ``risk_reward``, ``orig_prob`` and ``side``).
-    target:
-        Name of the binary target column (1 for profitable trades, 0 otherwise).
-    config:
-        Optional :class:`TrainingConfig` that controls preprocessing and
-        hyper-parameter search. When omitted a default configuration for
-        logistic regression is used.
-
-    Returns
-    -------
-    BaseEstimator
-        The fitted scikit-learn pipeline containing preprocessing and the best
-        estimator found by the grid search.
-
-    Raises
-    ------
-    ValueError
-        If the CSV is missing the target column or contains insufficient data.
-    """
-
-    cfg = config or TrainingConfig()
-    data_path = Path(csv_path)
-    if not data_path.exists():
-        raise ValueError(f"CSV file not found: {csv_path}")
-
-    LOGGER.info("Loading dataset from %s", data_path)
-    frame = pd.read_csv(data_path)
+    cfg: TrainingConfig,
+) -> Tuple[pd.DataFrame, pd.Series, list[str], list[str]]:
+    """Validate the dataset and split it into features and labels."""
 
     if target not in frame.columns:
         raise ValueError(f"Target column '{target}' not found in dataset")
@@ -194,13 +161,24 @@ def train_model(
     LOGGER.debug("Numeric features: %s", numeric_features)
     LOGGER.debug("Categorical features: %s", categorical_features)
 
+    return X, y, numeric_features, categorical_features
+
+
+def _fit_model(
+    X: pd.DataFrame,
+    y: pd.Series,
+    numeric_features: list[str],
+    categorical_features: list[str],
+    target: str,
+    cfg: TrainingConfig,
+) -> BaseEstimator:
+    """Fit the estimator pipeline using the provided data."""
+
     numeric_steps: list[tuple[str, Any]] = [
         ("imputer", SimpleImputer(strategy="median")),
     ]
     if cfg.use_polynomial_features and cfg.model_type == "logistic" and numeric_features:
-        numeric_steps.append(
-            ("poly", PolynomialFeatures(degree=2, include_bias=False))
-        )
+        numeric_steps.append(("poly", PolynomialFeatures(degree=2, include_bias=False)))
     numeric_steps.append(("scaler", StandardScaler()))
     numeric_transformer = Pipeline(steps=numeric_steps)
 
@@ -208,7 +186,7 @@ def train_model(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
             ("encoder", OneHotEncoder(handle_unknown="ignore")),
-        ]
+        ],
     )
 
     preprocessor = ColumnTransformer(
@@ -315,6 +293,36 @@ def train_model(
     best_pipeline.feature_manifest_ = manifest
     return best_pipeline
 
+
+def train_model_from_frame(
+    frame: pd.DataFrame,
+    target: str,
+    config: Optional[TrainingConfig] = None,
+) -> BaseEstimator:
+    """Train a predictive model using an in-memory dataframe."""
+
+    cfg = config or TrainingConfig()
+    X, y, numeric_features, categorical_features = _prepare_training_data(
+        frame, target, cfg
+    )
+    return _fit_model(X, y, numeric_features, categorical_features, target, cfg)
+
+
+def train_model(
+    csv_path: str,
+    target: str,
+    config: Optional[TrainingConfig] = None,
+) -> BaseEstimator:
+    """Train a predictive model using data stored in a CSV file."""
+
+    cfg = config or TrainingConfig()
+    data_path = Path(csv_path)
+    if not data_path.exists():
+        raise ValueError(f"CSV file not found: {csv_path}")
+
+    LOGGER.info("Loading dataset from %s", data_path)
+    frame = pd.read_csv(data_path)
+    return train_model_from_frame(frame, target, cfg)
 
 def evaluate_model(
     model: BaseEstimator,
