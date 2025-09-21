@@ -47,6 +47,12 @@ def promote(candidate_model: Path, candidate_manifest: Path, prod_model: Path, p
     prod_model.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(candidate_model, prod_model)
     if candidate_manifest.exists():
+        try:
+            if candidate_manifest.resolve() == prod_manifest.resolve():
+                return
+        except OSError:
+            # If resolution fails we conservatively attempt the copy below.
+            pass
         shutil.copy2(candidate_manifest, prod_manifest)
 
 
