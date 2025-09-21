@@ -25,6 +25,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
+        "--model",
+        dest="output",
         default="model.pkl",
         help="Output model path (default: %(default)s)",
     )
