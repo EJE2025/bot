@@ -133,6 +133,45 @@ graph TD
     trade_manager --> webapp
     webapp --> notify
 ```
+
+## Production hardening
+
+El bot incluye utilidades pensadas para operar en producción con resiliencia:
+
+### Backtest walk-forward
+
+* Ejecuta `python -m trading_bot.backtest --config backtest.yml --data dataset.csv` para generar reportes en `reports/backtest_*` con KPIs económicos (CAGR, Sharpe, Max Drawdown, Profit Factor, Expectancy).
+* El modo `walk_forward` amplía progresivamente la ventana de entrenamiento, mientras que `rolling` usa una ventana móvil (`rolling_train_days` / `rolling_test_days`).
+* Los reportes contienen `kpis.json`, `trades.csv` y `config.json` para auditar cada corrida.
+
+### Shadow-mode
+
+* Actívalo con `SHADOW_MODE=1` para comparar heurística vs. blending ML sin enviar órdenes reales.
+* Los resultados se almacenan en `shadow_trades/` (`signals.jsonl`, `results.jsonl`) y permiten calcular KPIs de ambos enfoques antes de desplegar.
+
+### Latencia y alertas
+
+* Las métricas `trading_bot_latency_ms_*` exponen p95/p99 de feature→predicción, submit→ack y ack→filled.
+* `maybe_alert` envía avisos a Telegram/Discord cuando se superan umbrales de pérdida diaria, latencia o drift del modelo.
+
+### Apagado limpio
+
+* El manejador de señales (`trading_bot.shutdown`) detiene nuevas entradas, cancela órdenes pendientes y guarda el estado antes de finalizar el proceso.
+
+### Nuevas variables de entorno
+
+| Variable | Descripción | Por defecto |
+| --- | --- | --- |
+| `MODEL_WEIGHT` | Peso del modelo predictivo en el blending (0–1). | `0.5` |
+| `MIN_PROB_SUCCESS` | Probabilidad mínima aceptada tras fees y blending. | `0.55` |
+| `FEE_EST` | Estimación de fees+slippage para los filtros de probabilidad. | `0.0006` |
+| `SHADOW_MODE` | Si es `1`, habilita el modo sombra (sin órdenes reales). | `0` |
+| `BACKTEST_REPORT_DIR` | Carpeta raíz donde se guardan los reportes de backtest. | `reports` |
+| `MAX_API_RETRIES` | Reintentos máximos al contactar con el exchange. | `5` |
+| `API_BACKOFF_BASE` | Backoff base (segundos) para reintentos exponenciales. | `0.2` |
+| `LATENCY_SLO_MS` | Límite de latencia (ms) que dispara alertas automáticas. | `1000` |
+| `RSI_OVERSOLD` / `RSI_OVERBOUGHT` | Banda de RSI configurable para la heurística. | `45` / `55` |
+
 ## Pruebas
 
 Para ejecutar todas las pruebas y ver el reporte de cobertura ejecuta:

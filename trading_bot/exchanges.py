@@ -87,6 +87,8 @@ class MockExchange:
 
         order["average"] = fill_price
         amount = order["amount"]
+        order["filled"] = float(amount)
+        order["remaining"] = 0.0
         sym = order["symbol"]
 
         # adjust balance (simplified: 1 contract = 1 quote currency)
@@ -161,6 +163,8 @@ class MockExchange:
             "type": type,
             "side": side,
             "amount": amount,
+            "filled": 0.0,
+            "remaining": float(amount),
             "price": price,
             "status": "open",
             "timestamp": int(time.time() * 1000),
@@ -176,6 +180,10 @@ class MockExchange:
         for order in self.open_orders:
             if order["id"] == order_id:
                 order["status"] = "canceled"
+                order["remaining"] = max(
+                    0.0,
+                    float(order.get("amount", 0.0)) - float(order.get("filled", 0.0)),
+                )
         self.open_orders = [o for o in self.open_orders if o["status"] == "open"]
         return {"id": order_id, "status": "canceled"}
 
@@ -184,7 +192,15 @@ class MockExchange:
             if order["id"] == order_id:
                 return order
         # assume closed if not found
-        return {"id": order_id, "status": "closed", "average": self._get_market_price(symbol) if symbol else None}
+        price = self._get_market_price(symbol) if symbol else None
+        return {
+            "id": order_id,
+            "status": "closed",
+            "average": price,
+            "amount": None,
+            "filled": None,
+            "remaining": 0.0,
+        }
 
     def fetch_open_orders(self):
         return [o for o in self.open_orders if o.get("status") == "open"]

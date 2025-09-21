@@ -14,6 +14,7 @@ import pytest
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from trading_bot import predictive_model
+from sklearn.calibration import CalibratedClassifierCV
 
 
 def _make_dataset() -> pd.DataFrame:
@@ -87,4 +88,51 @@ def test_model_serialisation_roundtrip(tmp_path: Path) -> None:
         direct = pickle.load(file)
     direct_probs = predictive_model.predict_proba(direct, X_eval)
     np.testing.assert_allclose(expected, direct_probs)
+
+
+def test_feature_manifest_saved_and_validated(tmp_path: Path) -> None:
+    dataset = _make_dataset()
+    csv_path = tmp_path / "train.csv"
+    dataset.to_csv(csv_path, index=False)
+
+    model = predictive_model.train_model(str(csv_path), "is_profitable")
+    manifest = getattr(model, "feature_manifest_", None)
+    assert manifest is not None
+    assert set(manifest["features"]) == set(dataset.columns[:-1])
+
+    model_path = tmp_path / "model.pkl"
+    predictive_model.save_model(model, str(model_path))
+    manifest_path = model_path.with_name(model_path.stem + ".manifest.json")
+    assert manifest_path.exists()
+
+    loaded = predictive_model.load_model(str(model_path))
+    assert loaded is not None
+
+    valid = dataset.iloc[:1, :-1].copy()
+    prepared = predictive_model.ensure_feature_schema(loaded, valid)
+    assert list(prepared.columns) == manifest["features"]
+
+    missing = valid.drop(columns=[manifest["features"][0]])
+    with pytest.raises(ValueError, match="Missing required feature"):
+        predictive_model.ensure_feature_schema(loaded, missing)
+
+    wrong_type = valid.copy()
+    wrong_type[manifest["numeric"][0]] = "oops"
+    with pytest.raises(TypeError, match="must be numeric"):
+        predictive_model.ensure_feature_schema(loaded, wrong_type)
+
+
+def test_training_uses_calibrated_classifier(tmp_path: Path) -> None:
+    dataset = _make_dataset()
+    csv_path = tmp_path / "train.csv"
+    dataset.to_csv(csv_path, index=False)
+
+    config = predictive_model.TrainingConfig(
+        model_type="logistic",
+        calibrate_probabilities=True,
+        calibration_cv=3,
+    )
+    model = predictive_model.train_model(str(csv_path), "is_profitable", config=config)
+    classifier = model.named_steps["classifier"]
+    assert isinstance(classifier, CalibratedClassifierCV)
 

@@ -1,6 +1,63 @@
 import os
+from typing import Tuple
 
 from .secret_manager import get_secret
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Clamp ``value`` between ``minimum`` and ``maximum``."""
+    return max(minimum, min(maximum, value))
+
+
+def _coerce_float(value: str | None, default: float) -> float:
+    try:
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_env(name: str, default: float, *, clamp: Tuple[float, float] | None = None) -> float:
+    """Read a float from the environment with optional clamping."""
+    value = _coerce_float(os.getenv(name), default)
+    if clamp is not None:
+        minimum, maximum = clamp
+        value = _clamp(value, minimum, maximum)
+    return value
+
+
+def _positive_float_env(name: str, default: float, *, minimum: float = 0.0) -> float:
+    """Return a float constrained to be greater than ``minimum``."""
+    value = _coerce_float(os.getenv(name), default)
+    if value <= minimum:
+        return default
+    return value
+
+
+def _int_env(name: str, default: int, *, clamp: Tuple[int, int] | None = None) -> int:
+    """Return an integer from the environment respecting optional bounds."""
+
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if clamp is not None:
+        minimum, maximum = clamp
+        value = max(minimum, min(maximum, value))
+    return value
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    """Return a boolean by interpreting common truthy strings."""
+
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _str_env(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value is not None else default
 
 try:
     from dotenv import load_dotenv
@@ -77,9 +134,26 @@ DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 # Path to ML model used by the strategy
 MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
 
+# Weight assigned to the predictive model when combining with heuristics
+MODEL_WEIGHT = _float_env("MODEL_WEIGHT", 0.5, clamp=(0.0, 1.0))
+# Minimum blended probability required to keep a signal
+MIN_PROB_SUCCESS = _float_env("MIN_PROB_SUCCESS", 0.55, clamp=(0.5, 0.99))
+# Additional margin applied over breakeven probability when filtering signals
+PROBABILITY_MARGIN = _clamp(_float_env("PROBABILITY_MARGIN", 0.05), 0.0, 0.25)
+# Estimated round-trip trading cost (fees + slippage) expressed as fraction of risk
+FEE_EST = _positive_float_env("FEE_EST", 0.0006, minimum=0.0)
+
+SHADOW_MODE = _bool_env("SHADOW_MODE", False)
+BACKTEST_REPORT_DIR = _str_env("BACKTEST_REPORT_DIR", "reports")
+MAX_API_RETRIES = _int_env("MAX_API_RETRIES", 5, clamp=(0, 10))
+API_BACKOFF_BASE = _float_env("API_BACKOFF_BASE", 0.2, clamp=(0.0, 5.0))
+LATENCY_SLO_MS = _int_env("LATENCY_SLO_MS", 1000, clamp=(10, 10000))
+
 # ATR multiple for stop loss calculation
 STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
+RSI_OVERSOLD = _float_env("RSI_OVERSOLD", 45.0, clamp=(1.0, 99.0))
+RSI_OVERBOUGHT = _float_env("RSI_OVERBOUGHT", 55.0, clamp=(1.0, 99.0))
 MIN_RISK_REWARD = float(
     os.getenv("MIN_RISK_REWARD", "1.3" if TEST_MODE else "2.0")
 )
@@ -99,6 +173,7 @@ WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))
 
 # Maximum acceptable slippage when closing a position
 MAX_SLIPPAGE = float(os.getenv("MAX_SLIPPAGE", "0.01"))
+CLOSE_REMAINING_TOLERANCE = _positive_float_env("CLOSE_REMAINING_TOLERANCE", 1e-6, minimum=0.0)
 
 # Percent of available balance risked on each trade (e.g. 0.01 = 1%)
 RISK_PER_TRADE = float(os.getenv("RISK_PER_TRADE", "0.01"))
@@ -130,8 +205,30 @@ ORDER_SUBMIT_ATTEMPTS = int(os.getenv("ORDER_SUBMIT_ATTEMPTS", "3"))
 # Maximum number of simultaneous requests to exchanges
 MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 
+# Retry strategy for exchange API requests
+API_RETRY_ATTEMPTS = int(os.getenv("API_RETRY_ATTEMPTS", "4"))
+API_RETRY_BACKOFF = _positive_float_env("API_RETRY_BACKOFF", 0.5, minimum=0.0)
+API_RETRY_JITTER = _positive_float_env("API_RETRY_JITTER", 0.25, minimum=0.0)
+
 # Thresholds for system monitoring alerts
 CPU_THRESHOLD = float(os.getenv("CPU_THRESHOLD", "0.8"))  # 80%
 MEMORY_THRESHOLD_MB = float(os.getenv("MEMORY_THRESHOLD_MB", "500"))  # 500 MB
 LATENCY_THRESHOLD_MS = float(os.getenv("LATENCY_THRESHOLD_MS", "1000"))  # 1 s
+
+# Basic configuration sanity checks
+if STOP_ATR_MULT <= 0:
+    raise ValueError("STOP_ATR_MULT must be positive")
+if RISK_PER_TRADE <= 0:
+    raise ValueError("RISK_PER_TRADE must be positive")
+if MODEL_WEIGHT < 0 or MODEL_WEIGHT > 1:
+    raise ValueError("MODEL_WEIGHT must be within [0, 1]")
+if MIN_PROB_SUCCESS < 0 or MIN_PROB_SUCCESS >= 1:
+    raise ValueError("MIN_PROB_SUCCESS must be within [0, 1)")
+# Model performance monitoring and drift handling
+MODEL_PERFORMANCE_WINDOW = int(os.getenv("MODEL_PERFORMANCE_WINDOW", "50"))
+MODEL_MIN_SAMPLES_FOR_MONITOR = int(os.getenv("MODEL_MIN_SAMPLES_FOR_MONITOR", "20"))
+MODEL_MIN_WIN_RATE = _clamp(_float_env("MODEL_MIN_WIN_RATE", 0.45), 0.0, 1.0)
+MODEL_MAX_CALIBRATION_DRIFT = _clamp(_float_env("MODEL_MAX_CALIBRATION_DRIFT", 0.15), 0.0, 0.5)
+MODEL_WEIGHT_FLOOR = _clamp(_float_env("MODEL_WEIGHT_FLOOR", 0.1), 0.0, 1.0)
+MODEL_WEIGHT_DEGRADATION = _clamp(_float_env("MODEL_WEIGHT_DEGRADATION", 0.5), 0.0, 1.0)
 
