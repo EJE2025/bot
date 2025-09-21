@@ -1,5 +1,7 @@
 import logging
 from datetime import datetime, timezone
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import time
@@ -11,10 +13,59 @@ from .indicators_talib import (
     calculate_atr,
     calculate_support_resistance,
 )
-from . import config, data, execution
+from . import config, data, execution, predictive_model
+from .latency import measure_latency
 
 
 logger = logging.getLogger(__name__)
+
+
+_MODEL_WEIGHT_OVERRIDE: Optional[float] = None
+
+
+def set_model_weight_override(weight: Optional[float]) -> None:
+    """Override the configured model weight at runtime."""
+    global _MODEL_WEIGHT_OVERRIDE
+    if weight is None:
+        _MODEL_WEIGHT_OVERRIDE = None
+        return
+    _MODEL_WEIGHT_OVERRIDE = max(0.0, min(1.0, float(weight)))
+
+
+def get_model_weight() -> float:
+    """Return the active model weight considering runtime overrides."""
+    if _MODEL_WEIGHT_OVERRIDE is not None:
+        return _MODEL_WEIGHT_OVERRIDE
+    return config.MODEL_WEIGHT
+
+
+def blend_probabilities(
+    orig_prob: float,
+    model_prob: float | None,
+    weight: float | None = None,
+) -> float:
+    """Combine heuristic and model probabilities respecting ``weight``."""
+
+    if model_prob is None:
+        return max(0.0, min(1.0, orig_prob))
+    active_weight = get_model_weight() if weight is None else max(0.0, min(1.0, weight))
+    blended = active_weight * model_prob + (1.0 - active_weight) * orig_prob
+    return max(0.0, min(1.0, blended))
+
+
+def passes_probability_threshold(prob: float, risk_reward: float) -> bool:
+    threshold = probability_threshold(risk_reward)
+    return prob >= threshold
+
+
+def probability_threshold(risk_reward: float) -> float:
+    """Compute the minimum probability required to keep a signal."""
+    if risk_reward <= 0:
+        return 1.0
+    fee = config.FEE_EST
+    breakeven = fee / max(risk_reward + fee, 1e-9)
+    floor = max(config.MIN_PROB_SUCCESS, breakeven + config.PROBABILITY_MARGIN)
+    return min(floor, 0.995)
 
 
 def log_signal_details(
@@ -25,6 +76,10 @@ def log_signal_details(
     stop_loss: float,
     prob_success: float,
     modelo_historico,
+    *,
+    orig_prob: float | None = None,
+    model_prob: float | None = None,
+    prob_threshold: float | None = None,
 ) -> None:
     """Log detailed signal information and model status."""
     if modelo_historico is None:
@@ -41,6 +96,16 @@ def log_signal_details(
         stop_loss,
         prob_success * 100,
     )
+    if orig_prob is not None:
+        logger.debug("[%s] Probabilidad heurística: %.2f%%", symbol, orig_prob * 100)
+    if model_prob is not None:
+        logger.debug("[%s] Probabilidad modelo: %.2f%%", symbol, model_prob * 100)
+    if prob_threshold is not None:
+        logger.debug(
+            "[%s] Umbral mínimo de probabilidad aplicado: %.2f%%",
+            symbol,
+            prob_threshold * 100,
+        )
 
 
 def sentiment_score(symbol: str, period: str = "5m") -> float:
@@ -163,9 +228,15 @@ def decidir_entrada(
     ob_imb = data.order_book_imbalance(book, entry_price)
     bids_top, asks_top = data.top_liquidity_levels(book)
 
-    score_long = max(0, 45 - rsi_val) + max(0, macd_val) + max(0, senti * 10)
+    score_long = (
+        max(0.0, config.RSI_OVERSOLD - rsi_val)
+        + max(0.0, macd_val)
+        + max(0.0, senti * 10)
+    )
     score_short = (
-        max(0, rsi_val - 55) + max(0, -macd_val) + max(0, -senti * 10)
+        max(0.0, rsi_val - config.RSI_OVERBOUGHT)
+        + max(0.0, -macd_val)
+        + max(0.0, -senti * 10)
     )
     score_long += max(0, ob_imb)
     score_short += max(0, -ob_imb)
@@ -195,13 +266,14 @@ def decidir_entrada(
         else entry_price - atr_val * tp_factor
     )
 
-    prob_success = (
+    prob_heuristic = (
         min(
             max(score_long if decision == "BUY" else score_short, 0) / 5.0,
             0.85,
         )
         * volume_factor
     )
+    prob_heuristic = min(max(prob_heuristic, 0.0), 0.99)
     leverage = config.DEFAULT_LEVERAGE
     balance = execution.fetch_balance()
     if config.RISK_PER_TRADE < 1:
@@ -229,7 +301,8 @@ def decidir_entrada(
         "leverage": leverage,
         "stop_loss": stop_loss,
         "take_profit": take_profit,
-        "prob_success": prob_success,
+        "prob_success": prob_heuristic,
+        "orig_prob": prob_heuristic,
         "risk_reward": risk_reward,
         "timeframe": "short_term",
         "max_duration_minutes": config.MAX_TRADE_DURATION_MINUTES,
@@ -238,14 +311,48 @@ def decidir_entrada(
         .replace("+00:00", "Z"),
     }
 
+    model_prob = None
     if modelo_historico and risk > 0:
-        side_ind = 1 if decision == "BUY" else 0
-        X_new = pd.DataFrame(
-            [[risk_reward, prob_success, side_ind]],
-            columns=["risk_reward", "orig_prob", "side"],
+        side_label = "long" if decision == "BUY" else "short"
+        features = {
+            "risk_reward": risk_reward,
+            "orig_prob": prob_heuristic,
+            "side": side_label,
+            "rsi": rsi_val,
+            "atr": atr_val,
+            "sentiment": senti,
+            "order_book_imbalance": ob_imb,
+            "volume_factor": volume_factor,
+        }
+        X_new = pd.DataFrame([features])
+        try:
+            with measure_latency("feature_to_prediction"):
+                X_validated = predictive_model.ensure_feature_schema(
+                    modelo_historico, X_new
+                )
+                model_prob = float(
+                    predictive_model.predict_proba(
+                        modelo_historico, X_validated
+                    )[0]
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("[%s] modelo_historico.predict_proba failed: %s", symbol, exc)
+        else:
+            signal["model_prob"] = model_prob
+
+    blended_prob = blend_probabilities(prob_heuristic, model_prob)
+    signal["prob_success"] = blended_prob
+    final_prob = signal["prob_success"]
+    threshold = probability_threshold(risk_reward)
+    signal["prob_threshold"] = threshold
+    if not passes_probability_threshold(final_prob, risk_reward):
+        logger.debug(
+            "[%s] señal descartada por probabilidad %.2f < %.2f",
+            symbol,
+            final_prob,
+            threshold,
         )
-        pred_hist = modelo_historico.predict_proba(X_new)[0, 1]
-        signal["prob_success"] = (prob_success + pred_hist) / 2
+        return None
 
     log_signal_details(
         symbol,
@@ -253,8 +360,11 @@ def decidir_entrada(
         entry_price,
         take_profit,
         stop_loss,
-        signal["prob_success"],
+        final_prob,
         modelo_historico,
+        orig_prob=prob_heuristic,
+        model_prob=model_prob,
+        prob_threshold=threshold,
     )
     return signal
 

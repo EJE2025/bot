@@ -1,4 +1,8 @@
+import argparse
 import os
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
@@ -6,7 +10,9 @@ load_dotenv(env_path)
 
 import logging
 import time
-from threading import Thread
+from collections import deque
+from statistics import mean
+from threading import Thread, RLock
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -22,6 +28,9 @@ from . import (
     optimizer,
     permissions,
     trade_manager,
+    shadow,
+    shutdown,
+    mode as bot_mode,
 )
 from .trade_manager import (
     add_trade,
@@ -36,7 +45,12 @@ from .trade_manager import (
     set_trade_state,
 )
 from .state_machine import TradeState
-from .metrics import start_metrics_server, update_trade_metrics
+from .metrics import (
+    start_metrics_server,
+    update_trade_metrics,
+    record_model_performance,
+    maybe_alert,
+)
 from .monitor import monitor_system
 from .utils import normalize_symbol
 
@@ -51,10 +65,227 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class ModelPerformanceMonitor:
+    """Track predictive performance and adjust model weight when degraded."""
+
+    def __init__(
+        self,
+        window: int,
+        min_samples: int,
+        min_win_rate: float,
+        max_drift: float,
+    ) -> None:
+        self.samples: deque[tuple[float, int]] = deque(maxlen=window)
+        self.min_samples = min_samples
+        self.min_win_rate = min_win_rate
+        self.max_drift = max_drift
+        self._lock = RLock()
+        self._degraded = False
+
+    def reset(self) -> None:
+        with self._lock:
+            self.samples.clear()
+            self._degraded = False
+
+    def record_trade(self, trade: dict | None) -> None:
+        if not trade:
+            return
+        prob = trade.get("model_prob")
+        if prob is None:
+            return
+        outcome = 1 if float(trade.get("profit", 0.0)) > 0 else 0
+        with self._lock:
+            self.samples.append((float(prob), outcome))
+            self._evaluate_locked()
+
+    def _evaluate_locked(self) -> None:
+        if len(self.samples) < max(self.min_samples, 1):
+            return
+        avg_prob = mean(p for p, _ in self.samples)
+        win_rate = mean(outcome for _, outcome in self.samples)
+        drift = abs(avg_prob - win_rate)
+        record_model_performance(win_rate, avg_prob, drift)
+
+        current_weight = strategy.get_model_weight()
+        if (
+            (win_rate < self.min_win_rate or drift > self.max_drift)
+            and current_weight > config.MODEL_WEIGHT_FLOOR
+        ):
+            new_weight = max(
+                config.MODEL_WEIGHT * config.MODEL_WEIGHT_DEGRADATION,
+                config.MODEL_WEIGHT_FLOOR,
+            )
+            strategy.set_model_weight_override(new_weight)
+            self._degraded = True
+            logger.warning(
+                "Model weight degraded to %.2f due to drift (win_rate=%.2f avg_prob=%.2f drift=%.2f)",
+                new_weight,
+                win_rate,
+                avg_prob,
+                drift,
+            )
+            self.samples.clear()
+            return
+
+        if self._degraded and win_rate >= self.min_win_rate and drift <= self.max_drift:
+            strategy.set_model_weight_override(None)
+            self._degraded = False
+            logger.info(
+                "Model performance recovered (win_rate=%.2f avg_prob=%.2f); restoring weight %.2f",
+                win_rate,
+                avg_prob,
+                config.MODEL_WEIGHT,
+            )
+            self.samples.clear()
+
+
+_model_lock = RLock()
+_cached_model = None
+_cached_model_mtime: float | None = None
+_model_missing_logged = False
+
+
+def _set_cached_model(model) -> None:
+    global _cached_model
+    with _model_lock:
+        _cached_model = model
+
+
+def _model_manifest_timestamp(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def maybe_reload_model(force: bool = False) -> None:
+    """Reload the predictive model if the file changed."""
+
+    global _cached_model_mtime, _model_missing_logged
+    model_path = config.MODEL_PATH
+    mtime = _model_manifest_timestamp(model_path)
+    if mtime is None:
+        if force or (_cached_model is not None):
+            logger.warning("Modelo no disponible en %s", model_path)
+        _set_cached_model(None)
+        _cached_model_mtime = None
+        _model_missing_logged = True
+        return
+
+    if not force and _cached_model_mtime is not None and mtime <= _cached_model_mtime:
+        return
+
+    model = optimizer.load_model(model_path)
+    if model is None:
+        if not _model_missing_logged:
+            logger.warning(
+                "No se encontró el modelo histórico en %s; las señales se generarán sin ajuste.",
+                model_path,
+            )
+            _model_missing_logged = True
+        _set_cached_model(None)
+        _cached_model_mtime = None
+        return
+
+    _set_cached_model(model)
+    _cached_model_mtime = mtime
+    _model_missing_logged = False
+    strategy.set_model_weight_override(None)
+    MODEL_MONITOR.reset()
+    logger.info("Modelo predictivo recargado desde %s", model_path)
+
+
+def current_model():
+    with _model_lock:
+        return _cached_model
+
+
+MODEL_MONITOR = ModelPerformanceMonitor(
+    config.MODEL_PERFORMANCE_WINDOW,
+    config.MODEL_MIN_SAMPLES_FOR_MONITOR,
+    config.MODEL_MIN_WIN_RATE,
+    config.MODEL_MAX_CALIBRATION_DRIFT,
+)
+
+
+def parse_args():
+    """Parse CLI options controlling runtime mode selection."""
+
+    parser = argparse.ArgumentParser(description="Trading bot runner")
+    parser.add_argument(
+        "--mode",
+        choices=sorted(bot_mode.MODES.keys()),
+        help="Selecciona modo de ejecución (override de ENV/menú)",
+    )
+    parser.add_argument(
+        "--no-interactive-menu",
+        action="store_true",
+        help="Desactiva el menú interactivo incluso si hay TTY",
+    )
+    parser.add_argument(
+        "--backtest-config",
+        type=str,
+        help="Ruta al YAML de configuración del backtest (modo backtest)",
+    )
+    parser.add_argument(
+        "--backtest-data",
+        type=str,
+        help="Ruta al CSV con datos para el backtest (modo backtest)",
+    )
+    return parser.parse_args()
+
+
+def _run_backtest_startup(args) -> None:
+    """Execute the backtest runner when the selected mode requests it."""
+
+    from . import backtest
+
+    cfg_path_str = (
+        args.backtest_config
+        or config.BACKTEST_CONFIG_PATH
+        or os.getenv("BACKTEST_CONFIG_PATH")
+        or "backtest.yml"
+    )
+    data_path_str = (
+        args.backtest_data
+        or config.BACKTEST_DATA_PATH
+        or os.getenv("BACKTEST_DATA_PATH")
+        or "backtest.csv"
+    )
+    cfg_path = Path(cfg_path_str)
+    data_path = Path(data_path_str)
+
+    if not cfg_path.exists():
+        logger.error("Backtest config not found: %s", cfg_path)
+        return
+    if not data_path.exists():
+        logger.error("Backtest dataset not found: %s", data_path)
+        return
+
+    try:
+        cfg = backtest._load_config(cfg_path)
+        dataset = backtest._load_dataset(data_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Unable to load backtest resources: %s", exc)
+        return
+
+    kpis = backtest.run_backtest(cfg, dataset)
+    logger.info("Backtest KPIs: %s", kpis)
+
 def open_new_trade(signal: dict):
     """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
     raw = normalize_symbol(symbol).replace("_", "")
+
+    if config.SHADOW_MODE:
+        hybrid_payload = dict(signal)
+        heuristic_payload = dict(signal)
+        if "orig_prob" in heuristic_payload:
+            heuristic_payload["prob_success"] = heuristic_payload["orig_prob"]
+        shadow.record_shadow_signal(symbol, "heuristic", heuristic_payload)
+        shadow.record_shadow_signal(symbol, "hybrid", hybrid_payload)
+        return None
 
     # Register trade in pending state first
     trade = add_trade(signal)
@@ -90,6 +321,22 @@ def open_new_trade(signal: dict):
             set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
         # else: remain in PENDING
 
+        if status in {"filled", "partial"}:
+            details = execution.get_order_fill_details(order_id, symbol)
+            if details:
+                updates: dict[str, float] = {}
+                filled_qty = details.get("filled")
+                if filled_qty is not None and filled_qty > 0:
+                    updates["quantity"] = filled_qty
+                remaining_qty = details.get("remaining")
+                if remaining_qty is not None:
+                    updates["remaining_quantity"] = max(remaining_qty, 0.0)
+                avg_exec = details.get("average")
+                if avg_exec:
+                    updates.setdefault("entry_price", avg_exec)
+                if updates:
+                    update_trade(trade["trade_id"], **updates)
+
         save_trades()
         return find_trade(trade_id=trade["trade_id"])
 
@@ -105,32 +352,93 @@ def open_new_trade(signal: dict):
     return None
 
 
-def close_existing_trade(trade: dict, exit_price: float, profit: float, reason: str) -> None:
-    """Close a trade enforcing state transitions."""
+def close_existing_trade(
+    trade: dict, reason: str
+) -> tuple[dict | None, float | None, float | None]:
+    """Close a trade enforcing state transitions and return results."""
+
     trade_id = trade.get("trade_id")
     symbol = trade.get("symbol")
-    qty = trade.get("quantity", 0)
+    qty = float(trade.get("quantity", 0.0))
     close_side = "close_short" if trade.get("side") == "SELL" else "close_long"
 
     set_trade_state(trade_id, TradeState.CLOSING)
-    order = execution.close_position(symbol, close_side, qty, order_type="market")
-    status = execution.fetch_order_status(order.get("id"), symbol)
-
-    if status in ("filled", "partial"):
-        close_trade(
-            trade_id=trade_id,
-            reason=reason,
-            exit_price=exit_price,
-            profit=profit,
-        )
-    else:
+    try:
+        order = execution.close_position(symbol, close_side, qty, order_type="market")
+    except execution.OrderSubmitError:
+        logger.error("Order submission failed when closing %s", symbol)
         set_trade_state(trade_id, TradeState.FAILED)
+        save_trades()
+        return None, None, None
 
+    order_id = order.get("id")
+    exec_price = float(order.get("average") or order.get("price") or trade.get("entry_price", 0.0))
+
+    if order_id:
+        attempts = max(1, config.API_RETRY_ATTEMPTS)
+        for attempt in range(attempts):
+            status = execution.fetch_order_status(order_id, symbol)
+            if status == "filled":
+                break
+            if status == "partial":
+                details = execution.get_order_fill_details(order_id, symbol)
+                remaining_qty = 0.0
+                if details:
+                    remaining_qty = max(details.get("remaining", 0.0) or 0.0, 0.0)
+                    if details.get("average"):
+                        exec_price = float(details["average"])
+                if remaining_qty <= config.CLOSE_REMAINING_TOLERANCE:
+                    break
+                logger.warning(
+                    "Partial close for %s (remaining %.6f); reattempting", symbol, remaining_qty
+                )
+                try:
+                    order = execution.close_position(
+                        symbol, close_side, remaining_qty, order_type="market"
+                    )
+                    order_id = order.get("id", order_id)
+                    if order.get("average"):
+                        exec_price = float(order.get("average"))
+                except execution.OrderSubmitError:
+                    logger.error("Failed to close remaining %.6f for %s", remaining_qty, symbol)
+                    break
+            else:
+                break
+            time.sleep(0.5 * (attempt + 1))
+
+    remaining = execution.fetch_position_size(symbol)
+    if remaining > config.CLOSE_REMAINING_TOLERANCE:
+        logger.warning(
+            "Remanente %.6f detectado tras cierre de %s; trade marcado como parcial",
+            remaining,
+            symbol,
+        )
+        update_trade(trade_id, quantity=remaining)
+        set_trade_state(trade_id, TradeState.PARTIALLY_FILLED)
+        save_trades()
+        return None, exec_price, None
+
+    entry_price = float(trade.get("entry_price", exec_price))
+    if trade.get("side") == "BUY":
+        realized = (exec_price - entry_price) * qty
+    else:
+        realized = (entry_price - exec_price) * qty
+
+    closed = close_trade(
+        trade_id=trade_id,
+        reason=reason,
+        exit_price=exec_price,
+        profit=realized,
+    )
+    MODEL_MONITOR.record_trade(closed)
     save_trades()
+    return closed, exec_price, realized
 
 
 def run_one_iteration_open(model=None):
     """Execute a single iteration of the opening logic."""
+    if model is None:
+        model = current_model()
     execution.cleanup_old_orders()
     if count_open_trades() >= config.MAX_OPEN_TRADES:
         return
@@ -239,14 +547,17 @@ def run():
 
     strategy.start_liquidity()
 
-    model = optimizer.load_model(config.MODEL_PATH)
-    if model is None:
-        logger.warning(
-            "No se encontró el modelo histórico en %s; las señales se generarán sin ajuste.",
-            config.MODEL_PATH,
-        )
+    shutdown.install_signal_handlers()
+    shutdown.register_callback(save_trades)
+    shutdown.register_callback(execution.cancel_all_orders)
+
+    maybe_reload_model(force=True)
     daily_profit = 0.0
-    trading_active = True
+    trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+    current_day = datetime.now(timezone.utc).date()
+    loss_limit = -abs(config.DAILY_RISK_LIMIT)
+    standby_notified = False
+    shutdown_handled = False
 
     # Initial metric update
     update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
@@ -257,85 +568,116 @@ def run():
         try:
 
             execution.cleanup_old_orders()
+
+            maybe_reload_model()
+            model = current_model()
+
+            if shutdown.shutdown_requested() and not shutdown_handled:
+                logger.info("Shutdown requested; stopping trading loop")
+                trading_active = False
+                shutdown_handled = True
+                shutdown.execute_callbacks()
+                break
+
+            now = datetime.now(timezone.utc)
+            if now.date() != current_day:
+                current_day = now.date()
+                daily_profit = 0.0
+                trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+                standby_notified = False
+                logger.info("New trading day detected; counters reset")
+
             # Detener nuevas entradas cuando la pérdida diaria alcanza el límite
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
             # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
             # el valor negativo correspondiente.
-            loss_limit = -abs(config.DAILY_RISK_LIMIT)
             if daily_profit <= loss_limit and trading_active:
                 trading_active = False
+                standby_notified = False
                 logger.error("Daily loss limit reached %.2f", daily_profit)
+                maybe_alert(True, f"Daily loss limit reached {daily_profit:.2f} USDT")
 
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
-            if (
+            allow_candidates = (
                 trading_active
+                and not config.MAINTENANCE
+                and (config.ENABLE_TRADING or config.SHADOW_MODE)
                 and count_open_trades() < config.MAX_OPEN_TRADES
-                and permissions.can_open_trade(execution.exchange)
-            ):
-                if config.TEST_MODE and config.TEST_SYMBOLS:
-                    symbols = [s.replace("/", "_").replace("-", "_")
-                               for s in config.TEST_SYMBOLS]
-                else:
-                    symbols = data.get_common_top_symbols(execution.exchange, 15)
-                candidates = []
-                seen = set()
-                for symbol in symbols:
-                    # enforce per-symbol trade limit
-                    if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
-                        continue
-                    raw = normalize_symbol(symbol).replace("_", "")
-                    bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
-                    unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
-                    if raw in bl or raw in unsup:
-                        continue
-                    if trade_manager.in_cooldown(symbol):
-                        logger.info("Cooldown activo para %s; se omite nueva entrada", symbol)
-                        continue
-                    sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if not sig:
-                        continue
-                    if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
-                        logger.debug(
-                            "Skip %s: RR=%.2f < %.2f",
-                            symbol,
-                            sig.get("risk_reward", 0),
-                            config.MIN_RISK_REWARD,
-                        )
-                        continue
-                    if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
-                        logger.debug(
-                            "Skip %s: qty=%.8f < min=%.8f",
-                            symbol,
-                            sig.get("quantity", 0),
-                            config.MIN_POSITION_SIZE,
-                        )
-                        continue
-                    candidates.append(sig)
+            )
 
-                candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
-                for sig in candidates:
-                    if count_open_trades() >= config.MAX_OPEN_TRADES:
-                        break
-                    symbol = sig["symbol"]
-                    raw = normalize_symbol(symbol).replace("_", "")
-                    try:
-                        trade = open_new_trade(sig)
-                        if not trade:
+            if allow_candidates:
+                if not config.SHADOW_MODE and not permissions.can_open_trade(execution.exchange):
+                    logger.debug("Skipping entries: live trading permissions not granted")
+                else:
+                    if config.TEST_MODE and config.TEST_SYMBOLS:
+                        symbols = [s.replace("/", "_").replace("-", "_")
+                                   for s in config.TEST_SYMBOLS]
+                    else:
+                        symbols = data.get_common_top_symbols(execution.exchange, 15)
+                    candidates = []
+                    seen = set()
+                    for symbol in symbols:
+                        # enforce per-symbol trade limit
+                        if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                             continue
-                        notify.send_telegram(
-                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
-                        )
-                        notify.send_discord(
-                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
-                        )
-                        logger.info("Opened trade: %s", trade)
-                    except permissions.PermissionError as exc:
-                        logger.error("Permission denied for %s: %s", symbol, exc)
-                        break
-                    except Exception as exc:
-                        logger.error("Error processing %s: %s", symbol, exc)
-            elif trading_active and not permissions.can_open_trade(execution.exchange):
+                        raw = normalize_symbol(symbol).replace("_", "")
+                        bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
+                        unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
+                        if raw in bl or raw in unsup:
+                            continue
+                        if trade_manager.in_cooldown(symbol):
+                            logger.info("Cooldown activo para %s; se omite nueva entrada", symbol)
+                            continue
+                        sig = strategy.decidir_entrada(symbol, modelo_historico=model)
+                        if not sig:
+                            continue
+                        if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                            logger.debug(
+                                "Skip %s: RR=%.2f < %.2f",
+                                symbol,
+                                sig.get("risk_reward", 0),
+                                config.MIN_RISK_REWARD,
+                            )
+                            continue
+                        if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
+                            logger.debug(
+                                "Skip %s: qty=%.8f < min=%.8f",
+                                symbol,
+                                sig.get("quantity", 0),
+                                config.MIN_POSITION_SIZE,
+                            )
+                            continue
+                        candidates.append(sig)
+
+                    candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
+                    for sig in candidates:
+                        if count_open_trades() >= config.MAX_OPEN_TRADES:
+                            break
+                        symbol = sig["symbol"]
+                        raw = normalize_symbol(symbol).replace("_", "")
+                        try:
+                            trade = open_new_trade(sig)
+                            if not trade:
+                                continue
+                            notify.send_telegram(
+                                f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
+                            )
+                            notify.send_discord(
+                                f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
+                            )
+                            logger.info("Opened trade: %s", trade)
+                        except permissions.PermissionError as exc:
+                            logger.error("Permission denied for %s: %s", symbol, exc)
+                            break
+                        except Exception as exc:
+                            logger.error("Error processing %s: %s", symbol, exc)
+            elif (
+                trading_active
+                and config.ENABLE_TRADING
+                and not config.SHADOW_MODE
+                and not permissions.can_open_trade(execution.exchange)
+            ):
                 logger.debug("Skipping entries: live trading permissions not granted")
 
             # MONITOREAR OPERACIONES ABIERTAS
@@ -360,25 +702,17 @@ def run():
                     reason = "MAX_DURATION"
 
                 if close:
-                    try:
-
-                        order = execution.close_position(op["symbol"], side_close, op["quantity"])
-                        if not isinstance(order, dict):
-                            logger.warning("Close response unexpected for %s: %s", op["symbol"], order)
-                            continue
-                        order_id = order.get("id")
-                        if not execution.check_order_filled(order_id, op["symbol"]):
-                            logger.warning("Close order not filled for %s", op["symbol"])
-                            execution.cancel_order(order_id, op["symbol"])
-                            continue
-                        exec_price = float(order.get("average") or price)
-                    except execution.OrderSubmitError:
-                        logger.error("Failed closing %s", op["symbol"])
-                        continue
                     expected = op["take_profit"] if (
                         (op["side"] == "BUY" and price >= op["take_profit"]) or
                         (op["side"] == "SELL" and price <= op["take_profit"])
                     ) else op["stop_loss"]
+                    close_label = reason or ("TP" if profit >= 0 else "SL")
+                    closed, exec_price, realized = close_existing_trade(
+                        op,
+                        close_label,
+                    )
+                    if not closed or exec_price is None or realized is None:
+                        continue
                     slippage = exec_price - expected
                     logger.info(
                         "Closed %s at %.4f (target %.4f) slippage %.4f",
@@ -386,18 +720,12 @@ def run():
                     )
                     if abs(slippage) > config.MAX_SLIPPAGE:
                         logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-                    close_existing_trade(
-                        op,
-                        exec_price,
-                        profit,
-                        reason or ("TP" if profit >= 0 else "SL"),
-                    )
-                    daily_profit += profit
+                    daily_profit += realized
 
-                    outcome = reason or ("TP" if profit >= 0 else "SL")
+                    outcome = close_label
                     note = (
                         f"Closed {op['symbol']} {outcome} "
-                        f"PnL {profit:.2f} Slippage {slippage:.4f}"
+                        f"PnL {realized:.2f} Slippage {slippage:.4f}"
                     )
                     notify.send_telegram(note)
                     notify.send_discord(note)
@@ -405,10 +733,10 @@ def run():
             save_trades()  # Guarda el estado periódicamente
             update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
 
-            if not trading_active and count_open_trades() == 0:
+            if not trading_active and count_open_trades() == 0 and not standby_notified:
                 logger.info("All positions closed after reaching daily limit")
                 save_trades()
-                break
+                standby_notified = True
             time.sleep(60)
         except KeyboardInterrupt:
 
@@ -423,5 +751,28 @@ def run():
             logger.error("Loop error: %s", exc)
             time.sleep(10)
 
-if __name__ == "__main__":
+    logger.info("Trading loop exited")
+
+def main() -> None:
+    """Entry point that selects runtime mode and starts the bot."""
+
+    args = parse_args()
+    env_mode = config.BOT_MODE
+    if args.mode:
+        chosen = bot_mode.resolve_mode(args.mode, None)
+    elif not args.no_interactive_menu and sys.stdin.isatty() and not env_mode:
+        chosen = bot_mode.interactive_pick()
+    else:
+        chosen = bot_mode.resolve_mode(None, env_mode)
+
+    bot_mode.apply_mode_to_config(chosen, config)
+
+    if config.RUN_BACKTEST_ON_START:
+        _run_backtest_startup(args)
+        return
+
     run()
+
+
+if __name__ == "__main__":
+    main()
