@@ -83,6 +83,15 @@ DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Trading mode and permissions -------------------------------------------------
+BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or None
+ENABLE_TRADING = True
+ENABLE_MODEL = True
+MAINTENANCE = False
+DRY_RUN = _bool_env("DRY_RUN", False)
+RUN_BACKTEST_ON_START = False
+BACKTEST_CONFIG_PATH = os.getenv("BACKTEST_CONFIG_PATH")
+BACKTEST_DATA_PATH = os.getenv("BACKTEST_DATA_PATH")
+
 TRADING_MODE = os.getenv("TRADING_MODE", "paper").strip().lower()
 ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "0") == "1"
 LIVE_TRADING_TOKEN_PATH = os.getenv("LIVE_TRADING_TOKEN_PATH", "")

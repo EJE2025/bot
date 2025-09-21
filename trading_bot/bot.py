@@ -1,4 +1,8 @@
+import argparse
 import os
+import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
@@ -27,6 +31,8 @@ from . import (
     trade_manager,
     shadow,
     shutdown,
+    mode as bot_mode,
+
 )
 from .trade_manager import (
     add_trade,
@@ -204,6 +210,72 @@ MODEL_MONITOR = ModelPerformanceMonitor(
     config.MODEL_MAX_CALIBRATION_DRIFT,
 )
 
+
+def parse_args():
+    """Parse CLI options controlling runtime mode selection."""
+
+    parser = argparse.ArgumentParser(description="Trading bot runner")
+    parser.add_argument(
+        "--mode",
+        choices=sorted(bot_mode.MODES.keys()),
+        help="Selecciona modo de ejecución (override de ENV/menú)",
+    )
+    parser.add_argument(
+        "--no-interactive-menu",
+        action="store_true",
+        help="Desactiva el menú interactivo incluso si hay TTY",
+    )
+    parser.add_argument(
+        "--backtest-config",
+        type=str,
+        help="Ruta al YAML de configuración del backtest (modo backtest)",
+    )
+    parser.add_argument(
+        "--backtest-data",
+        type=str,
+        help="Ruta al CSV con datos para el backtest (modo backtest)",
+    )
+    return parser.parse_args()
+
+
+def _run_backtest_startup(args) -> None:
+    """Execute the backtest runner when the selected mode requests it."""
+
+    from . import backtest
+
+    cfg_path_str = (
+        args.backtest_config
+        or config.BACKTEST_CONFIG_PATH
+        or os.getenv("BACKTEST_CONFIG_PATH")
+        or "backtest.yml"
+    )
+    data_path_str = (
+        args.backtest_data
+        or config.BACKTEST_DATA_PATH
+        or os.getenv("BACKTEST_DATA_PATH")
+        or "backtest.csv"
+    )
+    cfg_path = Path(cfg_path_str)
+    data_path = Path(data_path_str)
+
+    if not cfg_path.exists():
+        logger.error("Backtest config not found: %s", cfg_path)
+        return
+    if not data_path.exists():
+        logger.error("Backtest dataset not found: %s", data_path)
+        return
+
+    try:
+        cfg = backtest._load_config(cfg_path)
+        dataset = backtest._load_dataset(data_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Unable to load backtest resources: %s", exc)
+        return
+
+    kpis = backtest.run_backtest(cfg, dataset)
+    logger.info("Backtest KPIs: %s", kpis)
+
+
 def open_new_trade(signal: dict):
     """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
@@ -301,6 +373,7 @@ def close_existing_trade(
         set_trade_state(trade_id, TradeState.FAILED)
         save_trades()
         return None, None, None
+
 
     order_id = order.get("id")
     exec_price = float(order.get("average") or order.get("price") or trade.get("entry_price", 0.0))
@@ -484,7 +557,8 @@ def run():
 
     maybe_reload_model(force=True)
     daily_profit = 0.0
-    trading_active = True
+    trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+
     current_day = datetime.now(timezone.utc).date()
     loss_limit = -abs(config.DAILY_RISK_LIMIT)
     standby_notified = False
@@ -514,7 +588,8 @@ def run():
             if now.date() != current_day:
                 current_day = now.date()
                 daily_profit = 0.0
-                trading_active = True
+                trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+
                 standby_notified = False
                 logger.info("New trading day detected; counters reset")
 
@@ -530,74 +605,85 @@ def run():
 
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
-            if (
+            allow_candidates = (
                 trading_active
+                and not config.MAINTENANCE
+                and (config.ENABLE_TRADING or config.SHADOW_MODE)
                 and count_open_trades() < config.MAX_OPEN_TRADES
-                and permissions.can_open_trade(execution.exchange)
-            ):
-                if config.TEST_MODE and config.TEST_SYMBOLS:
-                    symbols = [s.replace("/", "_").replace("-", "_")
-                               for s in config.TEST_SYMBOLS]
-                else:
-                    symbols = data.get_common_top_symbols(execution.exchange, 15)
-                candidates = []
-                seen = set()
-                for symbol in symbols:
-                    # enforce per-symbol trade limit
-                    if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
-                        continue
-                    raw = normalize_symbol(symbol).replace("_", "")
-                    bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
-                    unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
-                    if raw in bl or raw in unsup:
-                        continue
-                    if trade_manager.in_cooldown(symbol):
-                        logger.info("Cooldown activo para %s; se omite nueva entrada", symbol)
-                        continue
-                    sig = strategy.decidir_entrada(symbol, modelo_historico=model)
-                    if not sig:
-                        continue
-                    if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
-                        logger.debug(
-                            "Skip %s: RR=%.2f < %.2f",
-                            symbol,
-                            sig.get("risk_reward", 0),
-                            config.MIN_RISK_REWARD,
-                        )
-                        continue
-                    if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
-                        logger.debug(
-                            "Skip %s: qty=%.8f < min=%.8f",
-                            symbol,
-                            sig.get("quantity", 0),
-                            config.MIN_POSITION_SIZE,
-                        )
-                        continue
-                    candidates.append(sig)
+            )
 
-                candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
-                for sig in candidates:
-                    if count_open_trades() >= config.MAX_OPEN_TRADES:
-                        break
-                    symbol = sig["symbol"]
-                    raw = normalize_symbol(symbol).replace("_", "")
-                    try:
-                        trade = open_new_trade(sig)
-                        if not trade:
+            if allow_candidates:
+                if not config.SHADOW_MODE and not permissions.can_open_trade(execution.exchange):
+                    logger.debug("Skipping entries: live trading permissions not granted")
+                else:
+                    if config.TEST_MODE and config.TEST_SYMBOLS:
+                        symbols = [s.replace("/", "_").replace("-", "_")
+                                   for s in config.TEST_SYMBOLS]
+                    else:
+                        symbols = data.get_common_top_symbols(execution.exchange, 15)
+                    candidates = []
+                    seen = set()
+                    for symbol in symbols:
+                        # enforce per-symbol trade limit
+                        if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                             continue
-                        notify.send_telegram(
-                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
-                        )
-                        notify.send_discord(
-                            f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
-                        )
-                        logger.info("Opened trade: %s", trade)
-                    except permissions.PermissionError as exc:
-                        logger.error("Permission denied for %s: %s", symbol, exc)
-                        break
-                    except Exception as exc:
-                        logger.error("Error processing %s: %s", symbol, exc)
-            elif trading_active and not permissions.can_open_trade(execution.exchange):
+                        raw = normalize_symbol(symbol).replace("_", "")
+                        bl = {normalize_symbol(s).replace("_", "") for s in config.BLACKLIST_SYMBOLS}
+                        unsup = {normalize_symbol(s).replace("_", "") for s in config.UNSUPPORTED_SYMBOLS}
+                        if raw in bl or raw in unsup:
+                            continue
+                        if trade_manager.in_cooldown(symbol):
+                            logger.info("Cooldown activo para %s; se omite nueva entrada", symbol)
+                            continue
+                        sig = strategy.decidir_entrada(symbol, modelo_historico=model)
+                        if not sig:
+                            continue
+                        if sig.get("risk_reward", 0) < config.MIN_RISK_REWARD:
+                            logger.debug(
+                                "Skip %s: RR=%.2f < %.2f",
+                                symbol,
+                                sig.get("risk_reward", 0),
+                                config.MIN_RISK_REWARD,
+                            )
+                            continue
+                        if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
+                            logger.debug(
+                                "Skip %s: qty=%.8f < min=%.8f",
+                                symbol,
+                                sig.get("quantity", 0),
+                                config.MIN_POSITION_SIZE,
+                            )
+                            continue
+                        candidates.append(sig)
+
+                    candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
+                    for sig in candidates:
+                        if count_open_trades() >= config.MAX_OPEN_TRADES:
+                            break
+                        symbol = sig["symbol"]
+                        raw = normalize_symbol(symbol).replace("_", "")
+                        try:
+                            trade = open_new_trade(sig)
+                            if not trade:
+                                continue
+                            notify.send_telegram(
+                                f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
+                            )
+                            notify.send_discord(
+                                f"Opened {symbol} {trade['side']} @ {trade['entry_price']}"
+                            )
+                            logger.info("Opened trade: %s", trade)
+                        except permissions.PermissionError as exc:
+                            logger.error("Permission denied for %s: %s", symbol, exc)
+                            break
+                        except Exception as exc:
+                            logger.error("Error processing %s: %s", symbol, exc)
+            elif (
+                trading_active
+                and config.ENABLE_TRADING
+                and not config.SHADOW_MODE
+                and not permissions.can_open_trade(execution.exchange)
+            ):
                 logger.debug("Skipping entries: live trading permissions not granted")
 
             # MONITOREAR OPERACIONES ABIERTAS
@@ -673,5 +759,27 @@ def run():
 
     logger.info("Trading loop exited")
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point that selects runtime mode and starts the bot."""
+
+    args = parse_args()
+    env_mode = config.BOT_MODE
+    if args.mode:
+        chosen = bot_mode.resolve_mode(args.mode, None)
+    elif not args.no_interactive_menu and sys.stdin.isatty() and not env_mode:
+        chosen = bot_mode.interactive_pick()
+    else:
+        chosen = bot_mode.resolve_mode(None, env_mode)
+
+    bot_mode.apply_mode_to_config(chosen, config)
+
+    if config.RUN_BACKTEST_ON_START:
+        _run_backtest_startup(args)
+        return
+
+
     run()
+
+
+if __name__ == "__main__":
+    main()
