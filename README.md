@@ -138,6 +138,7 @@ graph TD
 
 El bot incluye utilidades pensadas para operar en producción con resiliencia:
 
+
 ### Selector de modo de arranque
 
 * Ejecuta `python -m trading_bot.bot --mode {normal,shadow,heuristic,hybrid,testnet,backtest,maintenance}` para seleccionar el comportamiento en CLI.
@@ -152,6 +153,7 @@ El bot incluye utilidades pensadas para operar en producción con resiliencia:
 | `testnet` | Dry-run o testnet con envío simulado | `ENABLE_TRADING=1`, `DRY_RUN=1` |
 | `backtest` | Ejecuta el runner de backtest al arrancar y termina | `RUN_BACKTEST_ON_START=1` |
 | `maintenance` | Mantiene métricas sin abrir nuevas operaciones | `ENABLE_TRADING=0`, `MAINTENANCE=1` |
+
 
 ### Backtest walk-forward
 
@@ -181,10 +183,12 @@ El bot incluye utilidades pensadas para operar en producción con resiliencia:
 | `MIN_PROB_SUCCESS` | Probabilidad mínima aceptada tras fees y blending. | `0.55` |
 | `FEE_EST` | Estimación de fees+slippage para los filtros de probabilidad. | `0.0006` |
 | `SHADOW_MODE` | Si es `1`, habilita el modo sombra (sin órdenes reales). | `0` |
+
 | `BOT_MODE` | Define el modo de arranque si no se pasa `--mode`. | _vacío_ |
 | `DRY_RUN` | Fuerza el envío simulado de órdenes. | `0` |
 | `BACKTEST_REPORT_DIR` | Carpeta raíz donde se guardan los reportes de backtest. | `reports` |
 | `BACKTEST_CONFIG_PATH` / `BACKTEST_DATA_PATH` | Rutas usadas al iniciar en modo `backtest`. | `backtest.yml` / `backtest.csv` |
+
 | `MAX_API_RETRIES` | Reintentos máximos al contactar con el exchange. | `5` |
 | `API_BACKOFF_BASE` | Backoff base (segundos) para reintentos exponenciales. | `0.2` |
 | `LATENCY_SLO_MS` | Límite de latencia (ms) que dispara alertas automáticas. | `1000` |

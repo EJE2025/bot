@@ -9,6 +9,7 @@ env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"
 load_dotenv(env_path)
 
 import logging
+import os
 import time
 from collections import deque
 from statistics import mean
@@ -31,6 +32,7 @@ from . import (
     shadow,
     shutdown,
     mode as bot_mode,
+
 )
 from .trade_manager import (
     add_trade,
@@ -273,6 +275,7 @@ def _run_backtest_startup(args) -> None:
     kpis = backtest.run_backtest(cfg, dataset)
     logger.info("Backtest KPIs: %s", kpis)
 
+
 def open_new_trade(signal: dict):
     """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
@@ -370,6 +373,7 @@ def close_existing_trade(
         set_trade_state(trade_id, TradeState.FAILED)
         save_trades()
         return None, None, None
+
 
     order_id = order.get("id")
     exec_price = float(order.get("average") or order.get("price") or trade.get("entry_price", 0.0))
@@ -554,6 +558,7 @@ def run():
     maybe_reload_model(force=True)
     daily_profit = 0.0
     trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+
     current_day = datetime.now(timezone.utc).date()
     loss_limit = -abs(config.DAILY_RISK_LIMIT)
     standby_notified = False
@@ -584,6 +589,7 @@ def run():
                 current_day = now.date()
                 daily_profit = 0.0
                 trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+
                 standby_notified = False
                 logger.info("New trading day detected; counters reset")
 
@@ -770,6 +776,7 @@ def main() -> None:
     if config.RUN_BACKTEST_ON_START:
         _run_backtest_startup(args)
         return
+
 
     run()
 
