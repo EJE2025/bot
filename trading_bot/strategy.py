@@ -64,7 +64,11 @@ def probability_threshold(risk_reward: float) -> float:
         return 1.0
     fee = config.FEE_EST
     breakeven = fee / max(risk_reward + fee, 1e-9)
-    floor = max(config.MIN_PROB_SUCCESS, breakeven + config.PROBABILITY_MARGIN)
+    fee_margin = getattr(config, "FEE_AWARE_MARGIN_BPS", 0) / 10000.0
+    floor = max(
+        config.MIN_PROB_SUCCESS,
+        breakeven + config.PROBABILITY_MARGIN + fee_margin,
+    )
     return min(floor, 0.995)
 
 
@@ -161,6 +165,10 @@ def calcular_tamano_posicion(
     if qty < config.MIN_POSITION_SIZE:
         if atr_value < entry_price * 0.0001:
             return config.MIN_POSITION_SIZE
+        return None
+
+    notional = qty * entry_price
+    if notional < getattr(config, "MIN_POSITION_SIZE_USDT", 0.0):
         return None
 
     return qty
@@ -370,15 +378,17 @@ def decidir_entrada(
 
 
 # Liquidity monitoring helper
-SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+SYMBOLS = config.SYMBOLS or ["BTC/USDT", "ETH/USDT"]
 
 
 def start_liquidity(symbols=None):
     """Start the liquidity websocket listeners when running the bot."""
     if symbols is None:
-        liquidity_ws.start()
-    else:
+        symbols = config.SYMBOLS or None
+    if symbols:
         liquidity_ws.start(symbols)
+    else:
+        liquidity_ws.start()
 
 
 def print_liquidity():

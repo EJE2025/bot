@@ -1,9 +1,7 @@
 import logging
 import time
 import asyncio
-import logging
 import random
-import time
 from typing import Any, Callable
 
 import ccxt

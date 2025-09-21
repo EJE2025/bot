@@ -1,24 +1,20 @@
 import argparse
-import os
-import sys
-import uuid
-from dataclasses import dataclass
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
-load_dotenv(env_path)
-
 import logging
 import os
+import sys
 import time
+import uuid
 from collections import deque
-from statistics import mean
-from threading import Thread, RLock
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from statistics import mean
+from threading import RLock, Thread
 
-import pandas as pd
+try:
+    from scipy.stats import binomtest
+except Exception:  # pragma: no cover - optional dependency
+    binomtest = None
 
 from . import (
     config,
@@ -27,7 +23,6 @@ from . import (
     strategy,
     webapp,
     notify,
-    history,
     optimizer,
     permissions,
     trade_manager,
@@ -73,6 +68,15 @@ logger = logging.getLogger(__name__)
 class ModelPerformanceMonitor:
     """Track predictive performance and adjust model weight when degraded."""
 
+    def _empty_metrics(self) -> dict[str, float | int | None]:
+        return {
+            "count": 0,
+            "hit_rate": None,
+            "avg_prob": None,
+            "drift": None,
+            "p_value": None,
+        }
+
     def __init__(
         self,
         window: int,
@@ -86,11 +90,13 @@ class ModelPerformanceMonitor:
         self.max_drift = max_drift
         self._lock = RLock()
         self._degraded = False
+        self._latest_metrics: dict[str, float | int | None] = self._empty_metrics()
 
     def reset(self) -> None:
         with self._lock:
             self.samples.clear()
             self._degraded = False
+            self._latest_metrics = self._empty_metrics()
 
     def record_trade(self, trade: dict | None) -> None:
         if not trade:
@@ -103,17 +109,63 @@ class ModelPerformanceMonitor:
             self.samples.append((float(prob), outcome))
             self._evaluate_locked()
 
+    def _compute_metrics_locked(self) -> dict[str, float | int | None]:
+        if not self.samples:
+            return self._empty_metrics()
+        total = len(self.samples)
+        hits = sum(outcome for _, outcome in self.samples)
+        hit_rate = hits / total if total else None
+        avg_prob = mean(prob for prob, _ in self.samples) if total else None
+        drift = (
+            abs(avg_prob - hit_rate)
+            if avg_prob is not None and hit_rate is not None
+            else None
+        )
+        p_value: float | None = None
+        if (
+            binomtest is not None
+            and hit_rate is not None
+            and avg_prob is not None
+            and 0.0 < avg_prob < 1.0
+        ):
+            try:
+                base = min(max(avg_prob, 1e-6), 1 - 1e-6)
+                p_value = float(binomtest(hits, total, base).pvalue)
+            except Exception:  # pragma: no cover - defensive
+                p_value = None
+        return {
+            "count": total,
+            "hit_rate": hit_rate,
+            "avg_prob": avg_prob,
+            "drift": drift,
+            "p_value": p_value,
+        }
+
     def _evaluate_locked(self) -> None:
-        if len(self.samples) < max(self.min_samples, 1):
+        metrics = self._compute_metrics_locked()
+        self._latest_metrics = metrics
+
+        count = int(metrics["count"]) if metrics["count"] is not None else 0
+        hit_rate = metrics["hit_rate"]
+        avg_prob = metrics["avg_prob"]
+        drift = metrics["drift"]
+
+        if (
+            count == 0
+            or hit_rate is None
+            or avg_prob is None
+            or drift is None
+        ):
             return
-        avg_prob = mean(p for p, _ in self.samples)
-        win_rate = mean(outcome for _, outcome in self.samples)
-        drift = abs(avg_prob - win_rate)
-        record_model_performance(win_rate, avg_prob, drift)
+
+        record_model_performance(hit_rate, avg_prob, drift)
+
+        if count < max(self.min_samples, 1):
+            return
 
         current_weight = strategy.get_model_weight()
         if (
-            (win_rate < self.min_win_rate or drift > self.max_drift)
+            (hit_rate < self.min_win_rate or drift > self.max_drift)
             and current_weight > config.MODEL_WEIGHT_FLOOR
         ):
             new_weight = max(
@@ -123,25 +175,29 @@ class ModelPerformanceMonitor:
             strategy.set_model_weight_override(new_weight)
             self._degraded = True
             logger.warning(
-                "Model weight degraded to %.2f due to drift (win_rate=%.2f avg_prob=%.2f drift=%.2f)",
+                "Model weight degraded to %.2f due to drift (hit_rate=%.2f avg_prob=%.2f drift=%.2f)",
                 new_weight,
-                win_rate,
+                hit_rate,
                 avg_prob,
                 drift,
             )
             self.samples.clear()
             return
 
-        if self._degraded and win_rate >= self.min_win_rate and drift <= self.max_drift:
+        if self._degraded and hit_rate >= self.min_win_rate and drift <= self.max_drift:
             strategy.set_model_weight_override(None)
             self._degraded = False
             logger.info(
-                "Model performance recovered (win_rate=%.2f avg_prob=%.2f); restoring weight %.2f",
-                win_rate,
+                "Model performance recovered (hit_rate=%.2f avg_prob=%.2f); restoring weight %.2f",
+                hit_rate,
                 avg_prob,
                 config.MODEL_WEIGHT,
             )
             self.samples.clear()
+
+    def metrics(self) -> dict[str, float | int | None]:
+        with self._lock:
+            return dict(self._latest_metrics)
 
 
 @dataclass
@@ -716,7 +772,7 @@ def run():
     ).start()
 
     # Expose Prometheus metrics and start system monitor
-    Thread(target=start_metrics_server, args=(8001,), daemon=True).start()
+    Thread(target=start_metrics_server, args=(config.METRICS_PORT,), daemon=True).start()
     Thread(target=monitor_system, daemon=True).start()
 
     strategy.start_liquidity()
@@ -730,14 +786,30 @@ def run():
     trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
 
     current_day = datetime.now(timezone.utc).date()
-    loss_limit = -abs(config.DAILY_RISK_LIMIT)
+    loss_limit = -abs(config.MAX_DAILY_LOSS_USDT)
     standby_notified = False
     shutdown_handled = False
+    drift_warning_sent = False
+    drift_notified = False
 
     # Initial metric update
     update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
 
     logger.info("Starting trading loop...")
+    logger.info(
+        "Autonomy: AUTO_TRADE=%s | KillSwitch drift=%s (p_crit=%.3f warn=%.2f crit=%.2f)",
+        config.AUTO_TRADE,
+        config.KILL_SWITCH_ON_DRIFT,
+        config.DRIFT_PVALUE_CRIT,
+        config.HIT_RATE_ROLLING_WARN,
+        config.HIT_RATE_ROLLING_CRIT,
+    )
+    logger.info(
+        "Risk limits: max_daily_loss=%.2f USDT | min_notional=%.2f | max_positions=%d",
+        config.MAX_DAILY_LOSS_USDT,
+        config.MIN_POSITION_SIZE_USDT,
+        config.MAX_OPEN_TRADES,
+    )
 
     while True:
         try:
@@ -759,6 +831,7 @@ def run():
                 current_day = now.date()
                 daily_profit = 0.0
                 trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
+                loss_limit = -abs(config.MAX_DAILY_LOSS_USDT)
 
                 standby_notified = False
                 logger.info("New trading day detected; counters reset")
@@ -773,12 +846,77 @@ def run():
                 logger.error("Daily loss limit reached %.2f", daily_profit)
                 maybe_alert(True, f"Daily loss limit reached {daily_profit:.2f} USDT")
 
+            drift_blocked = False
+            metrics_snapshot = MODEL_MONITOR.metrics()
+            drift_hit_rate = metrics_snapshot.get("hit_rate")
+            drift_p_value = metrics_snapshot.get("p_value")
+            drift_count = int(metrics_snapshot.get("count") or 0)
+
+            if (
+                config.KILL_SWITCH_ON_DRIFT
+                and drift_count >= config.MODEL_MIN_SAMPLES_FOR_MONITOR
+            ):
+                if (
+                    drift_p_value is not None
+                    and drift_p_value <= config.DRIFT_PVALUE_CRIT
+                ):
+                    drift_blocked = True
+                if (
+                    drift_hit_rate is not None
+                    and drift_hit_rate <= config.HIT_RATE_ROLLING_CRIT
+                ):
+                    drift_blocked = True
+                if (
+                    not drift_blocked
+                    and drift_hit_rate is not None
+                    and drift_hit_rate <= config.HIT_RATE_ROLLING_WARN
+                ):
+                    if not drift_warning_sent:
+                        warning_msg = (
+                            "Model hit rate warning: "
+                            f"{drift_hit_rate:.2%} <= {config.HIT_RATE_ROLLING_WARN:.2%}"
+                        )
+                        logger.warning(warning_msg)
+                        maybe_alert(True, warning_msg, cooldown=900)
+                        drift_warning_sent = True
+                elif (
+                    drift_hit_rate is not None
+                    and drift_hit_rate > config.HIT_RATE_ROLLING_WARN
+                ):
+                    drift_warning_sent = False
+            else:
+                if not config.KILL_SWITCH_ON_DRIFT:
+                    drift_notified = False
+                drift_warning_sent = False
+
+            if drift_blocked:
+                if not drift_notified:
+                    hit_rate_str = (
+                        f"{drift_hit_rate:.2%}" if drift_hit_rate is not None else "n/a"
+                    )
+                    p_value_str = (
+                        f"{drift_p_value:.4f}" if drift_p_value is not None else "n/a"
+                    )
+                    kill_msg = (
+                        "Kill switch engaged due to drift "
+                        f"(hit_rate={hit_rate_str}, p_value={p_value_str})"
+                    )
+                    logger.error(kill_msg)
+                    maybe_alert(True, kill_msg, cooldown=900)
+                    drift_notified = True
+            elif drift_notified and config.KILL_SWITCH_ON_DRIFT:
+                recovery_msg = "Drift kill switch cleared; autonomy restored"
+                logger.info(recovery_msg)
+                maybe_alert(True, recovery_msg, cooldown=900)
+                drift_notified = False
 
             # ABRIR NUEVAS OPERACIONES (solo si hay hueco y permitido)
             allow_candidates = (
                 trading_active
                 and not config.MAINTENANCE
                 and (config.ENABLE_TRADING or config.SHADOW_MODE)
+                and config.AUTO_TRADE
+                and not drift_blocked
                 and count_open_trades() < config.MAX_OPEN_TRADES
             )
 
@@ -794,6 +932,10 @@ def run():
                     candidates = []
                     seen = set()
                     for symbol in symbols:
+                        norm_symbol = trade_manager.normalize_symbol(symbol)
+                        if norm_symbol in seen:
+                            continue
+                        seen.add(norm_symbol)
                         # enforce per-symbol trade limit
                         if count_trades_for_symbol(symbol) >= config.MAX_TRADES_PER_SYMBOL:
                             continue
@@ -824,6 +966,17 @@ def run():
                                 config.MIN_POSITION_SIZE,
                             )
                             continue
+                        notional = float(sig.get("quantity", 0.0)) * float(
+                            sig.get("entry_price", 0.0)
+                        )
+                        if notional < config.MIN_POSITION_SIZE_USDT:
+                            logger.debug(
+                                "Skip %s: notional %.2f < min_usdt=%.2f",
+                                symbol,
+                                notional,
+                                config.MIN_POSITION_SIZE_USDT,
+                            )
+                            continue
                         candidates.append(sig)
 
                     candidates.sort(key=lambda s: s.get("prob_success", 0), reverse=True)
@@ -848,13 +1001,20 @@ def run():
                             break
                         except Exception as exc:
                             logger.error("Error processing %s: %s", symbol, exc)
-            elif (
-                trading_active
-                and config.ENABLE_TRADING
-                and not config.SHADOW_MODE
-                and not permissions.can_open_trade(execution.exchange)
-            ):
-                logger.debug("Skipping entries: live trading permissions not granted")
+            else:
+                if not config.AUTO_TRADE:
+                    logger.debug("Skipping entries: AUTO_TRADE disabled")
+                elif drift_blocked:
+                    logger.warning("Skipping entries: drift kill switch active")
+                elif (
+                    trading_active
+                    and config.ENABLE_TRADING
+                    and not config.SHADOW_MODE
+                    and not permissions.can_open_trade(execution.exchange)
+                ):
+                    logger.debug(
+                        "Skipping entries: live trading permissions not granted"
+                    )
 
             # MONITOREAR OPERACIONES ABIERTAS
             if config.SHADOW_MODE:

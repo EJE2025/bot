@@ -59,6 +59,17 @@ def _str_env(name: str, default: str) -> str:
     value = os.getenv(name)
     return value if value is not None else default
 
+
+def _parse_symbols(value: str) -> list[str]:
+    symbols: list[str] = []
+    for raw in value.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        token = token.upper().replace("-", "/").replace("_", "/")
+        symbols.append(token)
+    return symbols
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
@@ -79,6 +90,13 @@ MEXC_API_KEY = get_secret("MEXC_API_KEY") or ""
 MEXC_API_SECRET = get_secret("MEXC_API_SECRET") or ""
 
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
+
+PRIMARY_EXCHANGE = _str_env("PRIMARY_EXCHANGE", DEFAULT_EXCHANGE or "bitget")
+DATA_EXCHANGE = _str_env("DATA_EXCHANGE", PRIMARY_EXCHANGE)
+WS_EXCHANGE = _str_env("WS_EXCHANGE", PRIMARY_EXCHANGE)
+ENABLE_BITGET = _bool_env("ENABLE_BITGET", True)
+ENABLE_BINANCE = _bool_env("ENABLE_BINANCE", False)
+SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
@@ -111,23 +129,51 @@ try:
     MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "10"))
 except (TypeError, ValueError):
     MAX_OPEN_TRADES = 10
+
+MAX_CONCURRENT_POS = _int_env("MAX_CONCURRENT_POS", MAX_OPEN_TRADES, clamp=(1, 1000))
+MAX_OPEN_TRADES = MAX_CONCURRENT_POS
+
 # Maximum simultaneous trades per symbol
 try:
     MAX_TRADES_PER_SYMBOL = int(os.getenv("MAX_TRADES_PER_SYMBOL", "1"))
 except (TypeError, ValueError):
     MAX_TRADES_PER_SYMBOL = 1
+
+MAX_POS_PER_SYMBOL = _int_env(
+    "MAX_POS_PER_SYMBOL", MAX_TRADES_PER_SYMBOL, clamp=(1, MAX_CONCURRENT_POS)
+)
+MAX_TRADES_PER_SYMBOL = MAX_POS_PER_SYMBOL
+
 # Cooldown in minutes between trades on the same symbol
 try:
     COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "5"))
 except (TypeError, ValueError):
     COOLDOWN_MINUTES = 5
+
 # Seconds to wait before reopening a trade on the same symbol
 TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", str(COOLDOWN_MINUTES * 60)))
-# Maximum daily loss before trading stops (configurable via DAILY_RISK_LIMIT env var)
-try:
-    DAILY_RISK_LIMIT = float(os.getenv("DAILY_RISK_LIMIT", "-50"))
-except (TypeError, ValueError):
-    DAILY_RISK_LIMIT = -50.0
+ENTRY_COOLDOWN_SECONDS = _int_env(
+    "ENTRY_COOLDOWN_SECONDS", TRADE_COOLDOWN, clamp=(0, 24 * 60 * 60)
+)
+TRADE_COOLDOWN = ENTRY_COOLDOWN_SECONDS
+
+# Maximum daily loss before trading stops
+_default_daily_limit = abs(_coerce_float(os.getenv("DAILY_RISK_LIMIT"), -100.0))
+if _default_daily_limit <= 0:
+    _default_daily_limit = 100.0
+MAX_DAILY_LOSS_USDT = _positive_float_env(
+    "MAX_DAILY_LOSS_USDT", _default_daily_limit, minimum=0.0
+)
+DAILY_RISK_LIMIT = -abs(MAX_DAILY_LOSS_USDT)
+
+AUTO_TRADE = _bool_env("AUTO_TRADE", True)
+KILL_SWITCH_ON_DRIFT = _bool_env("KILL_SWITCH_ON_DRIFT", True)
+DRIFT_PVALUE_CRIT = _float_env("DRIFT_PVALUE_CRIT", 0.01, clamp=(0.0, 1.0))
+HIT_RATE_ROLLING_WARN = _float_env("HIT_RATE_ROLLING_WARN", 0.45, clamp=(0.0, 1.0))
+HIT_RATE_ROLLING_CRIT = _float_env("HIT_RATE_ROLLING_CRIT", 0.40, clamp=(0.0, 1.0))
+MIN_POSITION_SIZE_USDT = _positive_float_env(
+    "MIN_POSITION_SIZE_USDT", 10.0, minimum=0.0
+)
 
 BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}
 UNSUPPORTED_SYMBOLS = {"AGIXTUSDT", "WHITEUSDT", "MAVIAUSDT", "PEPEUSDT"}
@@ -149,6 +195,7 @@ MODEL_WEIGHT = _float_env("MODEL_WEIGHT", 0.5, clamp=(0.0, 1.0))
 MIN_PROB_SUCCESS = _float_env("MIN_PROB_SUCCESS", 0.55, clamp=(0.5, 0.99))
 # Additional margin applied over breakeven probability when filtering signals
 PROBABILITY_MARGIN = _clamp(_float_env("PROBABILITY_MARGIN", 0.05), 0.0, 0.25)
+FEE_AWARE_MARGIN_BPS = _int_env("FEE_AWARE_MARGIN_BPS", 2, clamp=(0, 1000))
 # Estimated round-trip trading cost (fees + slippage) expressed as fraction of risk
 FEE_EST = _positive_float_env("FEE_EST", 0.0006, minimum=0.0)
 
@@ -178,6 +225,7 @@ ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "60"))
 # Web dashboard configuration
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", "8000"))
+METRICS_PORT = _int_env("METRICS_PORT", 8001, clamp=(1024, 65535))
 
 
 # Maximum acceptable slippage when closing a position
@@ -218,6 +266,13 @@ MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "5"))
 API_RETRY_ATTEMPTS = int(os.getenv("API_RETRY_ATTEMPTS", "4"))
 API_RETRY_BACKOFF = _positive_float_env("API_RETRY_BACKOFF", 0.5, minimum=0.0)
 API_RETRY_JITTER = _positive_float_env("API_RETRY_JITTER", 0.25, minimum=0.0)
+API_MAX_RETRIES = _int_env("API_MAX_RETRIES", API_RETRY_ATTEMPTS, clamp=(0, 10))
+API_RETRY_ATTEMPTS = API_MAX_RETRIES
+API_BACKOFF_BASE_MS = _int_env(
+    "API_BACKOFF_BASE_MS", int(API_RETRY_BACKOFF * 1000), clamp=(0, 60000)
+)
+if os.getenv("API_BACKOFF_BASE_MS") is not None:
+    API_RETRY_BACKOFF = API_BACKOFF_BASE_MS / 1000.0
 
 # Thresholds for system monitoring alerts
 CPU_THRESHOLD = float(os.getenv("CPU_THRESHOLD", "0.8"))  # 80%
