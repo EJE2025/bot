@@ -8,9 +8,6 @@ from typing import Optional
 
 from . import config
 
-if False:  # pragma: no cover - typing helpers
-    from ccxt import Exchange  # type: ignore
-
 logger = logging.getLogger(__name__)
 
 
