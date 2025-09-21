@@ -797,7 +797,7 @@ def run():
 
     logger.info("Starting trading loop...")
     logger.info(
-        "Autonomy: AUTO_TRADE=%s | KillSwitch drift=%s (p_crit=%.3f warn=%.2f crit=%.2f)",
+        "Autonomía: AUTO_TRADE=%s | KillSwitch drift=%s (p_crit=%.3f, hit_warn=%.2f, hit_crit=%.2f)",
         config.AUTO_TRADE,
         config.KILL_SWITCH_ON_DRIFT,
         config.DRIFT_PVALUE_CRIT,

@@ -103,7 +103,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # Trading mode and permissions -------------------------------------------------
 BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or None
 ENABLE_TRADING = True
-ENABLE_MODEL = True
+ENABLE_MODEL = _bool_env("ENABLE_MODEL", True)
 MAINTENANCE = False
 DRY_RUN = _bool_env("DRY_RUN", False)
 RUN_BACKTEST_ON_START = False
@@ -187,12 +187,26 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 
 # Path to ML model used by the strategy
-MODEL_PATH = os.getenv("MODEL_PATH", "model.pkl")
+MODEL_PATH = _str_env("MODEL_PATH", "models/model.pkl")
 
 # Weight assigned to the predictive model when combining with heuristics
 MODEL_WEIGHT = _float_env("MODEL_WEIGHT", 0.5, clamp=(0.0, 1.0))
 # Minimum blended probability required to keep a signal
-MIN_PROB_SUCCESS = _float_env("MIN_PROB_SUCCESS", 0.55, clamp=(0.5, 0.99))
+MIN_PROB_SUCCESS = _float_env("MIN_PROB_SUCCESS", 0.55, clamp=(0.0, 0.99))
+_prob_threshold_raw = os.getenv("PROB_THRESHOLD")
+if _prob_threshold_raw is not None:
+    try:
+        _prob_threshold_value = float(_prob_threshold_raw)
+    except (TypeError, ValueError):
+        _prob_threshold_value = MIN_PROB_SUCCESS
+    _prob_threshold_value = _clamp(_prob_threshold_value, 0.0, 0.99)
+else:
+    _prob_threshold_value = None
+PROB_THRESHOLD = (
+    max(MIN_PROB_SUCCESS, _prob_threshold_value)
+    if _prob_threshold_value is not None
+    else None
+)
 # Additional margin applied over breakeven probability when filtering signals
 PROBABILITY_MARGIN = _clamp(_float_env("PROBABILITY_MARGIN", 0.05), 0.0, 0.25)
 FEE_AWARE_MARGIN_BPS = _int_env("FEE_AWARE_MARGIN_BPS", 2, clamp=(0, 1000))
