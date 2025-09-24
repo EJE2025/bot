@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 _MODEL_WEIGHT_OVERRIDE: Optional[float] = None
+_NOTIFIED_NO_MODEL = False
+
+
+def _is_dummy_model(model: object) -> bool:
+    return bool(getattr(model, "_is_dummy_model", False))
 
 
 def set_model_weight_override(weight: Optional[float]) -> None:
@@ -94,9 +99,16 @@ def log_signal_details(
     prob_threshold: float | None = None,
 ) -> None:
     """Log detailed signal information and model status."""
+    global _NOTIFIED_NO_MODEL
     if modelo_historico is None:
-        logger.info("Modelo histórico no cargado; prob_success sin ajuste")
+        if not _NOTIFIED_NO_MODEL:
+            logger.info(
+                "Modelo histórico no cargado; se usará probabilidad heurística sin ajuste"
+            )
+            _NOTIFIED_NO_MODEL = True
     else:
+        if _NOTIFIED_NO_MODEL:
+            _NOTIFIED_NO_MODEL = False
         logger.debug("Modelo histórico cargado correctamente")
 
     logger.debug(
@@ -382,8 +394,14 @@ def decidir_entrada(
         .replace("+00:00", "Z"),
     }
 
-    model_prob = None
-    if modelo_historico and risk > 0:
+    modelo_activo = (
+        None
+        if modelo_historico is None or _is_dummy_model(modelo_historico)
+        else modelo_historico
+    )
+
+    model_prob: float | None = None
+    if modelo_activo is not None and risk > 0:
         side_label = "long" if decision == "BUY" else "short"
         features = {
             "risk_reward": risk_reward,
@@ -399,17 +417,16 @@ def decidir_entrada(
         try:
             with measure_latency("feature_to_prediction"):
                 X_validated = predictive_model.ensure_feature_schema(
-                    modelo_historico, X_new
+                    modelo_activo, X_new
                 )
                 model_prob = float(
-                    predictive_model.predict_proba(
-                        modelo_historico, X_validated
-                    )[0]
+                    predictive_model.predict_proba(modelo_activo, X_validated)[0]
                 )
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("[%s] modelo_historico.predict_proba failed: %s", symbol, exc)
         else:
-            signal["model_prob"] = model_prob
+            if model_prob is not None:
+                signal["model_prob"] = model_prob
 
     blended_prob = blend_probabilities(prob_heuristic, model_prob)
     signal["prob_success"] = blended_prob
@@ -432,7 +449,7 @@ def decidir_entrada(
         take_profit,
         stop_loss,
         final_prob,
-        modelo_historico,
+        modelo_activo,
         orig_prob=prob_heuristic,
         model_prob=model_prob,
         prob_threshold=threshold,

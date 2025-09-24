@@ -21,6 +21,7 @@ from . import (
     data,
     execution,
     strategy,
+    predictive_model,
     webapp,
     notify,
     optimizer,
@@ -223,12 +224,14 @@ _model_lock = RLock()
 _cached_model = None
 _cached_model_mtime: float | None = None
 _model_missing_logged = False
+_cached_model_is_dummy = False
 
 
 def _set_cached_model(model) -> None:
-    global _cached_model
+    global _cached_model, _cached_model_is_dummy
     with _model_lock:
         _cached_model = model
+        _cached_model_is_dummy = bool(getattr(model, "_is_dummy_model", False))
 
 
 def _model_manifest_timestamp(path: str) -> float | None:
@@ -241,15 +244,33 @@ def _model_manifest_timestamp(path: str) -> float | None:
 def maybe_reload_model(force: bool = False) -> None:
     """Reload the predictive model if the file changed."""
 
-    global _cached_model_mtime, _model_missing_logged
+    global _cached_model_mtime, _model_missing_logged, _cached_model_is_dummy
     model_path = config.MODEL_PATH
+
+    if not os.path.exists(model_path):
+        if not _model_missing_logged or force:
+            logger.warning(
+                "Modelo no encontrado en %s; se usará modelo de respaldo",
+                model_path,
+            )
+            _model_missing_logged = True
+        if force or not _cached_model_is_dummy or _cached_model is None:
+            dummy_model = predictive_model.load_dummy_model()
+            _set_cached_model(dummy_model)
+            MODEL_MONITOR.reset()
+        _cached_model_mtime = None
+        return
+
     mtime = _model_manifest_timestamp(model_path)
     if mtime is None:
-        if force or (_cached_model is not None):
+        if force or not _model_missing_logged:
             logger.warning("Modelo no disponible en %s", model_path)
-        _set_cached_model(None)
+            _model_missing_logged = True
+        if force or not _cached_model_is_dummy or _cached_model is None:
+            dummy_model = predictive_model.load_dummy_model()
+            _set_cached_model(dummy_model)
+            MODEL_MONITOR.reset()
         _cached_model_mtime = None
-        _model_missing_logged = True
         return
 
     if not force and _cached_model_mtime is not None and mtime <= _cached_model_mtime:
@@ -257,13 +278,15 @@ def maybe_reload_model(force: bool = False) -> None:
 
     model = optimizer.load_model(model_path)
     if model is None:
-        if not _model_missing_logged:
+        if not _model_missing_logged or force:
             logger.warning(
                 "No se encontró el modelo histórico en %s; las señales se generarán sin ajuste.",
                 model_path,
             )
             _model_missing_logged = True
-        _set_cached_model(None)
+        dummy_model = predictive_model.load_dummy_model()
+        _set_cached_model(dummy_model)
+        MODEL_MONITOR.reset()
         _cached_model_mtime = None
         return
 
