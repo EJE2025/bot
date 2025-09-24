@@ -127,6 +127,16 @@ class DualExchangeLiquidityStream:
         self._ws_binance: websockets.WebSocketClientProtocol | None = None
         self._ws_bitget: websockets.WebSocketClientProtocol | None = None
 
+    def _ws_targets(self) -> list[str]:
+        mode = (config.WS_EXCHANGE or config.PRIMARY_EXCHANGE).lower()
+        targets: list[str] = []
+        if mode in {"bitget", "both"} or (mode not in {"binance", "bitget"} and not config.ENABLE_BINANCE):
+            if config.ENABLE_BITGET:
+                targets.append("bitget")
+        if mode in {"binance", "both"} and config.ENABLE_BINANCE:
+            targets.append("binance")
+        return targets
+
     async def _binance_listener(self, symbols: Iterable[str]):
         streams = "/".join(format_binance_stream_symbol(s) for s in symbols)
         url = f"wss://fstream.binance.com/stream?streams={streams}"
@@ -203,10 +213,15 @@ class DualExchangeLiquidityStream:
         self._ws_bitget = None
 
     async def _run(self, symbols: Iterable[str]):
-        tasks = [
-            asyncio.create_task(self._binance_listener(symbols)),
-            asyncio.create_task(self._bitget_listener(symbols)),
-        ]
+        tasks: list[asyncio.Task] = []
+        targets = self._ws_targets()
+        if "binance" in targets:
+            tasks.append(asyncio.create_task(self._binance_listener(symbols)))
+        if "bitget" in targets:
+            tasks.append(asyncio.create_task(self._bitget_listener(symbols)))
+        if not tasks:
+            logger.warning("No websocket targets enabled; liquidity stream idle")
+            return
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
@@ -227,7 +242,10 @@ class DualExchangeLiquidityStream:
             logger.info("Liquidity WS already running")
             return
         if symbols is None:
-            symbols = get_top_15_symbols()
+            if config.BOT_MODE == "shadow" and config.SYMBOLS:
+                symbols = config.SYMBOLS
+            else:
+                symbols = get_top_15_symbols()
         self._stop_event.clear()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(

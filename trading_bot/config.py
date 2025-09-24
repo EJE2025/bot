@@ -91,20 +91,28 @@ MEXC_API_SECRET = get_secret("MEXC_API_SECRET") or ""
 
 DEFAULT_EXCHANGE = os.getenv("DEFAULT_EXCHANGE", "bitget")
 
+# Primary venue used for live trading and as default for data services.
 PRIMARY_EXCHANGE = _str_env("PRIMARY_EXCHANGE", DEFAULT_EXCHANGE or "bitget")
+# Exchange used by the historical/data fetcher (defaults to :data:`PRIMARY_EXCHANGE`).
 DATA_EXCHANGE = _str_env("DATA_EXCHANGE", PRIMARY_EXCHANGE)
+# Exchange powering websocket liquidity streams (defaults to :data:`PRIMARY_EXCHANGE`).
 WS_EXCHANGE = _str_env("WS_EXCHANGE", PRIMARY_EXCHANGE)
+# Toggle Bitget connectivity (set to ``False`` when disabling any Bitget calls).
 ENABLE_BITGET = _bool_env("ENABLE_BITGET", True)
+# Toggle Binance connectivity (``False`` avoids reaching Binance endpoints).
 ENABLE_BINANCE = _bool_env("ENABLE_BINANCE", False)
 SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Trading mode and permissions -------------------------------------------------
+# Trading mode (``shadow`` performs simulated execution without touching the exchange).
 BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or None
-ENABLE_TRADING = True
+# Global flag to allow placing real orders on the exchange.
+ENABLE_TRADING = _bool_env("ENABLE_TRADING", True)
 ENABLE_MODEL = _bool_env("ENABLE_MODEL", True)
 MAINTENANCE = False
+# When ``True`` the bot avoids settlement (paper trading / dry-run mode).
 DRY_RUN = _bool_env("DRY_RUN", False)
 RUN_BACKTEST_ON_START = False
 BACKTEST_CONFIG_PATH = os.getenv("BACKTEST_CONFIG_PATH")
@@ -171,8 +179,19 @@ KILL_SWITCH_ON_DRIFT = _bool_env("KILL_SWITCH_ON_DRIFT", True)
 DRIFT_PVALUE_CRIT = _float_env("DRIFT_PVALUE_CRIT", 0.01, clamp=(0.0, 1.0))
 HIT_RATE_ROLLING_WARN = _float_env("HIT_RATE_ROLLING_WARN", 0.45, clamp=(0.0, 1.0))
 HIT_RATE_ROLLING_CRIT = _float_env("HIT_RATE_ROLLING_CRIT", 0.40, clamp=(0.0, 1.0))
+# Minimum notional enforced by the strategy regardless of exchange rules.
 MIN_POSITION_SIZE_USDT = _positive_float_env(
     "MIN_POSITION_SIZE_USDT", 10.0, minimum=0.0
+)
+# Use a constant position size expressed in USDT when ``True``.
+USE_FIXED_POSITION_SIZE = _bool_env("USE_FIXED_POSITION_SIZE", False)
+# Fixed position notional in USDT when :data:`USE_FIXED_POSITION_SIZE` is enabled.
+FIXED_POSITION_SIZE_USDT = _positive_float_env(
+    "FIXED_POSITION_SIZE_USDT", 10.0, minimum=0.0
+)
+# Whether to honour the exchange ``minNotional``/minimum order size constraints.
+ENFORCE_EXCHANGE_MIN_NOTIONAL = _bool_env(
+    "ENFORCE_EXCHANGE_MIN_NOTIONAL", True
 )
 
 BLACKLIST_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"}

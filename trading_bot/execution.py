@@ -1,7 +1,7 @@
-import logging
-import time
 import asyncio
+import logging
 import random
+import time
 from typing import Any, Callable
 
 import ccxt
@@ -293,6 +293,18 @@ def open_position(
     keys ``id``, ``status`` and ``average``. Temporary errors are retried up to
     ``ORDER_SUBMIT_ATTEMPTS`` times with exponential backoff.
     """
+    if config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+        logger.info(
+            "Mock order: %s %s amount=%.8f price=%.4f", symbol, side, amount, price
+        )
+        return {
+            "status": "shadow",
+            "symbol": symbol,
+            "side": side,
+            "amount": amount,
+            "price": price,
+        }
+
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
 

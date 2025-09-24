@@ -182,6 +182,59 @@ def calcular_tamano_posicion(
     return qty
 
 
+def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> float:
+    """Return the desired position notional in USDT for ``symbol``.
+
+    When :data:`config.USE_FIXED_POSITION_SIZE` is enabled the function
+    short-circuits and returns :data:`config.FIXED_POSITION_SIZE_USDT` without
+    consulting balances or exchange limits. In ``shadow`` mode the value is
+    clamped to :data:`config.MIN_POSITION_SIZE_USDT` to keep paper trades above
+    the configured minimum notional.
+    """
+
+    ctx = ctx or {}
+    entry_price = float(features.get("entry_price", 0.0) or 0.0)
+    atr_value = float(features.get("atr", 0.0) or 0.0)
+    atr_multiplier = float(
+        features.get("atr_multiplier", config.STOP_ATR_MULT)
+    )
+
+    if entry_price <= 0:
+        return 0.0
+
+    if config.USE_FIXED_POSITION_SIZE:
+        fixed_size = float(config.FIXED_POSITION_SIZE_USDT)
+        if (config.BOT_MODE or "") == "shadow":
+            return max(fixed_size, config.MIN_POSITION_SIZE_USDT)
+        return fixed_size
+
+    balance = ctx.get("balance")
+    if balance is None:
+        balance = execution.fetch_balance()
+
+    risk_usd = ctx.get("risk_usd")
+    if risk_usd is None:
+        if config.RISK_PER_TRADE < 1:
+            risk_usd = balance * config.RISK_PER_TRADE
+        else:
+            risk_usd = config.RISK_PER_TRADE
+
+    qty = calcular_tamano_posicion(
+        balance,
+        entry_price,
+        atr_value,
+        atr_multiplier,
+        risk_usd,
+    )
+    if qty is None:
+        return 0.0
+
+    notional = qty * entry_price
+    if (config.BOT_MODE or "") == "shadow":
+        return max(notional, config.MIN_POSITION_SIZE_USDT)
+    return notional
+
+
 def risk_reward_ratio(
     entry_price: float,
     take_profit: float,
@@ -296,16 +349,18 @@ def decidir_entrada(
         risk_usd = balance * config.RISK_PER_TRADE
     else:
         risk_usd = config.RISK_PER_TRADE
-    quantity = calcular_tamano_posicion(
-        balance,
-        entry_price,
-        atr_val,
-        atr_mult,
-        risk_usd,
-    )
-    if quantity is None:
+
+    sizing_features = {
+        "entry_price": entry_price,
+        "atr": atr_val,
+        "atr_multiplier": atr_mult,
+    }
+    sizing_ctx = {"balance": balance, "risk_usd": risk_usd}
+    position_size_usdt = position_sizer(symbol, sizing_features, sizing_ctx)
+    if position_size_usdt <= 0:
         logger.error("[%s] position size below minimum", symbol)
         return None
+    quantity = position_size_usdt / entry_price
 
     risk = abs(entry_price - stop_loss)
     risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
