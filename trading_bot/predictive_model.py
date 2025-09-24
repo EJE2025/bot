@@ -71,7 +71,13 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures, StandardScaler
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    OneHotEncoder,
+    PolynomialFeatures,
+    StandardScaler,
+)
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.calibration import CalibratedClassifierCV
@@ -443,6 +449,44 @@ def save_model(model: BaseEstimator, path: str) -> None:
         LOGGER.info("Feature manifest saved to %s", manifest_path)
 
 
+def _dummy_feature_extractor(X: Any) -> np.ndarray:
+    """Return an array of zeros matching the number of samples in ``X``."""
+
+    if isinstance(X, pd.DataFrame):
+        n_samples = len(X)
+    elif isinstance(X, dict):
+        n_samples = 1
+    elif isinstance(X, Sequence) and not isinstance(X, (str, bytes)):
+        n_samples = len(list(X))
+    else:
+        array = np.asarray(X)
+        if array.ndim == 0:
+            n_samples = 1
+        else:
+            n_samples = array.shape[0]
+    return np.zeros((n_samples, 1), dtype=float)
+
+
+def load_dummy_model() -> Pipeline:
+    """Return a fitted dummy model that yields uniform probabilities."""
+
+    transformer = FunctionTransformer(_dummy_feature_extractor, validate=False)
+    classifier = DummyClassifier(strategy="uniform", random_state=42)
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", transformer),
+            ("classifier", classifier),
+        ]
+    )
+
+    placeholder_X = pd.DataFrame({"_constant": [0.0, 1.0]})
+    placeholder_y = np.array([0, 1], dtype=int)
+    pipeline.fit(placeholder_X, placeholder_y)
+    setattr(pipeline, "_is_dummy_model", True)
+    LOGGER.info("Loaded dummy predictive model with uniform probabilities")
+    return pipeline
+
+
 def load_model(path: str) -> Optional[BaseEstimator]:
     """Load a previously saved model from disk.
 
@@ -574,6 +618,7 @@ __all__ = [
     "evaluate_model",
     "save_model",
     "load_model",
+    "load_dummy_model",
     "ensure_feature_schema",
     "predict_proba",
 ]
