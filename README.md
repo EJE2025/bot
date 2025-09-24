@@ -165,6 +165,10 @@ El bot incluye utilidades pensadas para operar en producción con resiliencia:
 
 * Actívalo con `SHADOW_MODE=1` para comparar heurística vs. blending ML sin enviar órdenes reales.
 * Los resultados se almacenan en `shadow_trades/` (`signals.jsonl`, `results.jsonl`) y permiten calcular KPIs de ambos enfoques antes de desplegar.
+* Para ejecutar shadow con tamaño fijo y datos exclusivos de Bitget configura tu `.env` con:
+  * `BOT_MODE=shadow`, `ENABLE_TRADING=false`, `DRY_RUN=true`.
+  * `USE_FIXED_POSITION_SIZE=true`, `FIXED_POSITION_SIZE_USDT=20`, `MIN_POSITION_SIZE_USDT=5`, `ENFORCE_EXCHANGE_MIN_NOTIONAL=false`.
+  * `PRIMARY_EXCHANGE=bitget`, `DATA_EXCHANGE=bitget`, `WS_EXCHANGE=bitget`, `ENABLE_BITGET=true`, `ENABLE_BINANCE=false`.
 
 ### Latencia y alertas
 

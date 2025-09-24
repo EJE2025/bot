@@ -8,6 +8,8 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from . import config
+
 
 class ValidationError(Exception):
     """Raised when an order violates exchange constraints."""
@@ -76,6 +78,14 @@ def quantize_qty(qty: float, step: float) -> float:
     return math.floor(qty / step) * step
 
 
+def min_notional_usdt(symbol: str, rules: SymbolRules) -> float:
+    """Return the minimum notional enforced for ``symbol`` in USDT."""
+
+    if not config.ENFORCE_EXCHANGE_MIN_NOTIONAL:
+        return 0.0
+    return float(rules.min_notional or 0.0)
+
+
 def validate_order(symbol: str, side: str, price: float | None, qty: float, rules: SymbolRules) -> None:
     if qty <= 0:
         raise ValidationError("quantity must be positive")
@@ -83,10 +93,13 @@ def validate_order(symbol: str, side: str, price: float | None, qty: float, rule
         raise ValidationError(f"quantity {qty} below minimum {rules.min_qty}")
     if price is not None and price <= 0:
         raise ValidationError("price must be positive")
-    if rules.min_notional and price is not None:
+    min_notional = min_notional_usdt(symbol, rules)
+    if min_notional and price is not None:
         notional = price * qty
-        if notional < rules.min_notional:
-            raise ValidationError(f"notional {notional:.8f} below minimum {rules.min_notional}")
+        if notional < min_notional:
+            raise ValidationError(
+                f"notional {notional:.8f} below minimum {min_notional}"
+            )
 
 
 __all__ = [
@@ -95,5 +108,6 @@ __all__ = [
     "get_symbol_rules",
     "quantize_price",
     "quantize_qty",
+    "min_notional_usdt",
     "validate_order",
 ]

@@ -925,8 +925,15 @@ def run():
                     logger.debug("Skipping entries: live trading permissions not granted")
                 else:
                     if config.TEST_MODE and config.TEST_SYMBOLS:
-                        symbols = [s.replace("/", "_").replace("-", "_")
-                                   for s in config.TEST_SYMBOLS]
+                        symbols = [
+                            s.replace("/", "_").replace("-", "_")
+                            for s in config.TEST_SYMBOLS
+                        ]
+                    elif config.BOT_MODE == "shadow" and config.SYMBOLS:
+                        symbols = [
+                            s.replace("/", "_").replace("-", "_")
+                            for s in config.SYMBOLS
+                        ]
                     else:
                         symbols = data.get_common_top_symbols(execution.exchange, 15)
                     candidates = []

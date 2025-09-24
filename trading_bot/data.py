@@ -32,6 +32,13 @@ def display_symbol(sym: str) -> str:
     return norm
 
 
+def _bitget_symbol(sym: str) -> str:
+    cleaned = normalize_symbol(sym)
+    if not cleaned.endswith("USDT"):
+        cleaned = f"{cleaned}USDT"
+    return f"{cleaned}_UMCBL"
+
+
 def _generic_cache_path(prefix: str, *parts: str) -> str:
     name = "_".join((prefix, *parts)) + ".json"
     return os.path.join(CACHE_DIR, name)
@@ -48,9 +55,21 @@ def _to_binance_interval(interval: str) -> str:
     return interval
 
 
+def _to_bitget_granularity(interval: str) -> int:
+    if interval.startswith("Min"):
+        mins = int(interval[3:])
+        return max(1, mins) * 60
+    mapping = {
+        "Hour1": 3600,
+        "Hour4": 14_400,
+        "Day1": 86_400,
+    }
+    return mapping.get(interval, 900)
+
+
 @circuit_breaker(fallback=None, max_failures=3, reset_timeout=30)
 def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict | None:
-    """Return OHLCV data from Binance futures.
+    """Return OHLCV data from the configured futures exchange.
 
     If the request fails ``MAX_ATTEMPTS`` times it falls back to cached data
     stored under ``cache/``. ``None`` is returned when no cache is available.
@@ -83,36 +102,97 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
             "vol": vol.tolist(),
         }
 
-    url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
-    params = {"symbol": symbol_raw, "interval": _to_binance_interval(interval), "limit": limit}
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-            if not isinstance(data, list):
-                raise RuntimeError("API error")
-            parsed = {
-                "close": [x[4] for x in data],
-                "high": [x[2] for x in data],
-                "low": [x[3] for x in data],
-                "vol": [x[5] for x in data],
-            }
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(_cache_path(symbol_raw, interval, limit), "w", encoding="utf-8") as fh:
-                json.dump(parsed, fh)
-            return parsed
-        except Exception as exc:
-            logger.warning(
-                "Network error fetching %s (attempt %d/%d): %s",
-                symbol,
-                attempt + 1,
-                MAX_ATTEMPTS,
-                exc,
-            )
-            time.sleep(2 ** attempt)
+    data_source = (config.DATA_EXCHANGE or config.PRIMARY_EXCHANGE).lower()
 
-    path = _cache_path(symbol_raw, interval, limit)
+    if data_source == "bitget" or not config.ENABLE_BINANCE:
+        endpoint = "/api/mix/v1/market/history-candles"
+        granularity = _to_bitget_granularity(interval)
+        now_ms = int(time.time() * 1000)
+        window_ms = granularity * limit * 1000
+        start_ms = max(0, now_ms - window_ms)
+        params = {
+            "symbol": _bitget_symbol(symbol),
+            "granularity": granularity,
+            "startTime": start_ms,
+            "endTime": now_ms,
+        }
+        cache_file = _generic_cache_path("bitget_ohlcv", symbol_raw, interval, str(limit))
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(
+                    config.BASE_URL_BITGET + endpoint, params=params, timeout=30
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                if isinstance(payload, dict):
+                    candles = payload.get("data") or []
+                else:
+                    candles = payload or []
+                if not candles:
+                    raise RuntimeError("no data")
+                ordered = sorted(candles, key=lambda x: float(x[0]))
+                parsed = {
+                    "close": [float(x[4]) for x in ordered],
+                    "high": [float(x[2]) for x in ordered],
+                    "low": [float(x[3]) for x in ordered],
+                    "vol": [float(x[5]) for x in ordered],
+                }
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump(parsed, fh)
+                return parsed
+            except Exception as exc:
+                logger.warning(
+                    "Bitget error fetching %s (attempt %d/%d): %s",
+                    symbol,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(2 ** attempt)
+        path = cache_file
+    elif config.ENABLE_BINANCE:
+        url = f"{config.BASE_URL_BINANCE}/fapi/v1/klines"
+        params = {
+            "symbol": symbol_raw,
+            "interval": _to_binance_interval(interval),
+            "limit": limit,
+        }
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, list):
+                    raise RuntimeError("API error")
+                parsed = {
+                    "close": [x[4] for x in data],
+                    "high": [x[2] for x in data],
+                    "low": [x[3] for x in data],
+                    "vol": [x[5] for x in data],
+                }
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(
+                    _cache_path(symbol_raw, interval, limit),
+                    "w",
+                    encoding="utf-8",
+                ) as fh:
+                    json.dump(parsed, fh)
+                return parsed
+            except Exception as exc:
+                logger.warning(
+                    "Network error fetching %s (attempt %d/%d): %s",
+                    symbol,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(2 ** attempt)
+        path = _cache_path(symbol_raw, interval, limit)
+    else:
+        logger.error("No data exchange enabled for market data")
+        return None
+
     if os.path.exists(path):
         logger.info("Using cached data for %s", symbol)
         with open(path, "r", encoding="utf-8") as fh:
@@ -121,32 +201,61 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
 
 
 def get_ticker(symbol: str) -> Dict | None:
-    """Return last price and bid/ask data for a Binance futures symbol.
+    """Return last price and bid/ask data for the configured data exchange.
 
     Falls back to cached data when the request repeatedly fails. ``None`` is
     returned if no cache exists.
     """
-    url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/bookTicker"
-    params = {"symbol": symbol.replace("_", "")}
-    cache_file = _generic_cache_path("ticker", symbol)
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            resp = requests.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            return data
-        except Exception as exc:
-            logger.warning(
-                "Ticker network error for %s attempt %d/%d: %s",
-                symbol,
-                attempt + 1,
-                MAX_ATTEMPTS,
-                exc,
-            )
-            time.sleep(2 ** attempt)
+
+    source = (config.DATA_EXCHANGE or config.PRIMARY_EXCHANGE).lower()
+    cache_file = _generic_cache_path(f"{source}_ticker", symbol)
+
+    if source == "bitget" or not config.ENABLE_BINANCE:
+        params = {"symbol": _bitget_symbol(symbol), "productType": "USDT-FUTURES"}
+        url = config.BASE_URL_BITGET + "/api/mix/v1/market/ticker"
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                payload = resp.json()
+                if payload.get("code") != "00000":
+                    raise RuntimeError(payload.get("msg") or "API error")
+                data = payload.get("data", {})
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+                return data
+            except Exception as exc:
+                logger.warning(
+                    "Bitget ticker error for %s attempt %d/%d: %s",
+                    symbol,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(2 ** attempt)
+    elif config.ENABLE_BINANCE:
+        url = f"{config.BASE_URL_BINANCE}/fapi/v1/ticker/bookTicker"
+        params = {"symbol": symbol.replace("_", "")}
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+                return data
+            except Exception as exc:
+                logger.warning(
+                    "Ticker network error for %s attempt %d/%d: %s",
+                    symbol,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(2 ** attempt)
+
     if os.path.exists(cache_file):
         with open(cache_file, "r", encoding="utf-8") as fh:
             logger.info("Using cached ticker for %s", symbol)
@@ -257,39 +366,72 @@ def get_current_price_ticker(symbol: str) -> float | None:
 
 def get_order_book(symbol: str, limit: int = 50) -> Dict | None:
 
-    """Fetch order book data from Binance for a given symbol.
+    """Fetch order book data from the configured exchange for ``symbol``.
 
     On repeated failures the cached order book is returned when available.
     """
-    url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
-    params = {"symbol": symbol.replace("_", ""), "limit": limit}
-    cache_file = _generic_cache_path("book", f"{symbol}_{limit}")
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            resp = requests.get(url, params=params, timeout=10)
-            if resp.status_code == 400:
-                logger.error(
-                    "Símbolo no válido para order book %s: %s",
+
+    source = (config.DATA_EXCHANGE or config.PRIMARY_EXCHANGE).lower()
+    cache_file = _generic_cache_path(f"{source}_book", f"{symbol}_{limit}")
+
+    if source == "bitget" or not config.ENABLE_BINANCE:
+        url = config.BASE_URL_BITGET + "/api/mix/v1/market/depth"
+        params = {"symbol": _bitget_symbol(symbol), "limit": limit}
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                payload = resp.json()
+                if payload.get("code") != "00000":
+                    raise RuntimeError(payload.get("msg") or "API error")
+                data = payload.get("data", {})
+                book = {
+                    "bids": data.get("bids", []),
+                    "asks": data.get("asks", []),
+                }
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump(book, fh)
+                return book
+            except Exception as exc:
+                logger.warning(
+                    "Bitget order book error for %s attempt %d/%d: %s",
                     symbol,
-                    resp.text,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
                 )
-                return None
-            resp.raise_for_status()
-            data = resp.json()
-            book = {"bids": data.get("bids", []), "asks": data.get("asks", [])}
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as fh:
-                json.dump(book, fh)
-            return book
-        except Exception as exc:
-            logger.warning(
-                "Order book network error for %s attempt %d/%d: %s",
-                symbol,
-                attempt + 1,
-                MAX_ATTEMPTS,
-                exc,
-            )
-            time.sleep(2 ** attempt)
+                time.sleep(2 ** attempt)
+    elif config.ENABLE_BINANCE:
+        url = f"{config.BASE_URL_BINANCE}/fapi/v1/depth"
+        params = {"symbol": symbol.replace("_", ""), "limit": limit}
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                if resp.status_code == 400:
+                    logger.error(
+                        "Símbolo no válido para order book %s: %s",
+                        symbol,
+                        resp.text,
+                    )
+                    return None
+                resp.raise_for_status()
+                data = resp.json()
+                book = {"bids": data.get("bids", []), "asks": data.get("asks", [])}
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(cache_file, "w", encoding="utf-8") as fh:
+                    json.dump(book, fh)
+                return book
+            except Exception as exc:
+                logger.warning(
+                    "Order book network error for %s attempt %d/%d: %s",
+                    symbol,
+                    attempt + 1,
+                    MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(2 ** attempt)
+
     if os.path.exists(cache_file):
         with open(cache_file, "r", encoding="utf-8") as fh:
             logger.info("Using cached order book for %s", symbol)
