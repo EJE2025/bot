@@ -119,6 +119,16 @@ RUN_BACKTEST_ON_START = False
 BACKTEST_CONFIG_PATH = os.getenv("BACKTEST_CONFIG_PATH")
 BACKTEST_DATA_PATH = os.getenv("BACKTEST_DATA_PATH")
 
+# ===== Order lifecycle & timeouts =====
+PENDING_FILL_TIMEOUT_S = _int_env("PENDING_FILL_TIMEOUT_S", 30, clamp=(1, 600))
+RECONCILE_INTERVAL_S = _int_env("RECONCILE_INTERVAL_S", 5, clamp=(1, 300))
+
+# ===== WebSocket resilience =====
+WS_PING_INTERVAL_S = _int_env("WS_PING_INTERVAL_S", 25, clamp=(5, 120))
+WS_PONG_TIMEOUT_S = _int_env("WS_PONG_TIMEOUT_S", 10, clamp=(3, 60))
+WS_BACKOFF_MIN_S = _int_env("WS_BACKOFF_MIN_S", 2, clamp=(1, 60))
+WS_BACKOFF_MAX_S = _int_env("WS_BACKOFF_MAX_S", 60, clamp=(WS_BACKOFF_MIN_S, 600))
+
 TRADING_MODE = os.getenv("TRADING_MODE", "paper").strip().lower()
 ALLOW_LIVE_TRADING = os.getenv("ALLOW_LIVE_TRADING", "0") == "1"
 LIVE_TRADING_TOKEN_PATH = os.getenv("LIVE_TRADING_TOKEN_PATH", "")

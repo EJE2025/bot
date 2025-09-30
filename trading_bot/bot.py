@@ -47,6 +47,7 @@ from .trade_manager import (
     count_trades_for_symbol,
     set_trade_state,
 )
+from .reconcile import reconcile_pending_trades
 from .state_machine import TradeState
 from .metrics import (
     start_metrics_server,
@@ -647,7 +648,10 @@ def open_new_trade(signal: dict):
     # Register trade in pending state first
     trade = add_trade(signal)
     try:
-        execution.setup_leverage(execution.exchange, raw, signal["leverage"])
+        if not config.DRY_RUN:
+            execution.setup_leverage(execution.exchange, raw, signal["leverage"])
+        else:
+            logger.info("Skip leverage setup for %s (dry-run)", symbol)
         order = execution.open_position(
             symbol,
             signal["side"],
@@ -667,9 +671,17 @@ def open_new_trade(signal: dict):
             order_id=order_id,
             entry_price=avg_price,
             status="active",
+            created_ts=time.time(),
         )
 
-        status = execution.fetch_order_status(order_id, symbol)
+        if config.DRY_RUN:
+            opened_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            update_trade(trade["trade_id"], open_time=opened_at)
+            set_trade_state(trade["trade_id"], TradeState.OPEN)
+            save_trades()
+            return find_trade(trade_id=trade["trade_id"])
+
+        status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
         if status == "filled":
             set_trade_state(trade["trade_id"], TradeState.OPEN)
         elif status == "partial":
@@ -678,7 +690,7 @@ def open_new_trade(signal: dict):
             set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
         # else: remain in PENDING
 
-        if status in {"filled", "partial"}:
+        if status in {"filled", "partial"} and order_id:
             details = execution.get_order_fill_details(order_id, symbol)
             if details:
                 updates: dict[str, float] = {}
@@ -966,11 +978,17 @@ def run():
     _snapshot_ai_state()
     _snapshot_ops_state()
     _last_excel_snapshot = time.time()
+    last_reconcile = 0.0
 
     while True:
         try:
 
             execution.cleanup_old_orders()
+
+            now_ts = time.time()
+            if now_ts - last_reconcile >= config.RECONCILE_INTERVAL_S:
+                reconcile_pending_trades()
+                last_reconcile = now_ts
 
             maybe_reload_model()
             model = current_model()
@@ -1195,6 +1213,12 @@ def run():
                 for op in list(all_open_trades()):
                     price = data.get_current_price_ticker(op["symbol"])
                     if not price:
+                        continue
+                    try:
+                        op_state = TradeState(op.get("state"))
+                    except ValueError:
+                        op_state = TradeState.PENDING
+                    if op_state not in {TradeState.OPEN, TradeState.PARTIALLY_FILLED}:
                         continue
                     if op["side"] == "BUY":
                         profit = (price - op["entry_price"]) * op["quantity"]

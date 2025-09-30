@@ -10,7 +10,7 @@ import logging
 import uuid
 from . import config
 from .utils import normalize_symbol
-from .state_machine import TradeState, StatefulTrade, InvalidStateTransition
+from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ def add_trade(trade):
         trade.setdefault("state", TradeState.PENDING.value)
         trade.setdefault("timeframe", "short_term")
         trade.setdefault("max_duration_minutes", config.MAX_TRADE_DURATION_MINUTES)
+        trade.setdefault("created_ts", time.time())
         open_trades.append(trade)
         log_history("open", trade)
         return trade
@@ -97,7 +98,7 @@ def update_trade(trade_id, **kwargs):
     return False
 
 
-def set_trade_state(trade_id: str, new_state: TradeState) -> None:
+def set_trade_state(trade_id: str, new_state: TradeState) -> bool:
     t = None
     with LOCK:
         for trade in open_trades:
@@ -105,13 +106,27 @@ def set_trade_state(trade_id: str, new_state: TradeState) -> None:
                 t = trade
                 break
         if t is None:
-            raise ValueError("Trade no encontrado")
-        st = StatefulTrade(trade_id=trade_id, state=TradeState(t["state"]))
-        if not st.can_transition_to(new_state):
-            msg = f"{st.state} → {new_state} no permitido"
-            raise InvalidStateTransition(msg)
-        st.transition_to(new_state)
-        t["state"] = st.state.value
+            logger.warning("Trade %s no encontrado para cambiar a %s", trade_id, new_state)
+            return False
+        raw_state = t.get("state")
+        try:
+            current_state = TradeState(raw_state)
+        except ValueError:
+            current_state = TradeState.PENDING
+        if current_state == new_state:
+            return True
+        if not is_valid_transition(current_state, new_state):
+            logger.warning(
+                "Transición inválida ignorada: %s → %s (trade_id=%s)",
+                current_state,
+                new_state,
+                trade_id,
+            )
+            return False
+        t["state"] = new_state.value
+        log_history("state", t)
+        logger.info("Estado %s: %s → %s", trade_id, current_state.value, new_state.value)
+        return True
 
 
 def close_trade(
@@ -134,9 +149,8 @@ def close_trade(
     cur = TradeState(trade["state"])
     if cur in (TradeState.OPEN, TradeState.PARTIALLY_FILLED):
         set_trade_state(tid, TradeState.CLOSING)
-    try:
-        set_trade_state(tid, TradeState.CLOSED)
-    except InvalidStateTransition:
+    transitioned = set_trade_state(tid, TradeState.CLOSED)
+    if not transitioned:
         logger.debug(
             "Forcing trade %s to CLOSED from %s", trade.get("trade_id"), cur
         )
@@ -162,6 +176,42 @@ def close_trade(
         closed_trades.append(trade)
         log_history("close", trade)
         return trade
+
+
+def cancel_pending_trade(trade_id: str, reason: str = "pending_timeout") -> dict | None:
+    """Cancel a pending trade due to timeout or websocket desync."""
+
+    with LOCK:
+        for idx, trade in enumerate(open_trades):
+            if trade.get("trade_id") != trade_id:
+                continue
+            try:
+                state = TradeState(trade.get("state"))
+            except ValueError:
+                state = TradeState.PENDING
+            if state != TradeState.PENDING:
+                logger.debug(
+                    "Skip cancel %s: estado actual %s", trade_id, trade.get("state")
+                )
+                return None
+            cancelled = open_trades.pop(idx)
+            cancelled["state"] = TradeState.FAILED.value
+            cancelled["status"] = "cancelled"
+            cancelled["close_reason"] = reason
+            cancelled["close_time"] = (
+                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            )
+            cancelled.setdefault("profit", 0.0)
+            cancelled.setdefault("pnl", 0.0)
+            if cancelled.get("exit_price") is None:
+                cancelled["exit_price"] = cancelled.get("entry_price")
+            symbol_norm = normalize_symbol(cancelled.get("symbol", ""))
+            _last_closed[symbol_norm] = time.time()
+            closed_trades.append(cancelled)
+            log_history("cancel", cancelled)
+            return cancelled
+    logger.debug("Trade %s no encontrado para cancelar", trade_id)
+    return None
 
 
 def all_open_trades():
