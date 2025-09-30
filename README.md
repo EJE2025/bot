@@ -111,9 +111,10 @@ modelo predictivo en caliente. Para activarlo:
 1. Ajusta tu `.env` con los nuevos parámetros:
 
    ```env
+   ENABLE_MODEL=1
    AUTO_TRAIN_ENABLED=1
-   AUTO_TRAIN_POLL_SECONDS=60
-   MIN_TRAIN_SAMPLE_SIZE=2000
+   AUTO_TRAIN_POLL_SECONDS=30
+   MIN_TRAIN_SAMPLE_SIZE=50
    RETRAIN_INTERVAL_TRADES=300
    DATASET_PATH=./data/auto_train_data.csv
    MODEL_DIR=./models
@@ -129,7 +130,9 @@ modelo predictivo en caliente. Para activarlo:
 2. Cada cierre de trade añade una fila etiquetada en `DATASET_PATH` usando un
    *file lock* para evitar corrupciones. El hilo `auto_trainer` valida el
    esquema (con winsorization ligera) antes de entrenar y usa *class
-   weighting* balanceado.
+   weighting* balanceado. El repositorio incluye un dataset semilla en
+   `data/auto_train_data.csv` con 60 ejemplos para que el primer entrenamiento
+   pueda ejecutarse nada más arrancar.
 
 3. Cuando hay suficientes muestras, el modelo se entrena de nuevo. Si supera
    los umbrales offline (`MODEL_MIN_WIN_RATE` y `MODEL_MAX_CALIBRATION_DRIFT`),
