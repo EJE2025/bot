@@ -400,6 +400,17 @@ def close_position(
     """Close an existing position with validation and retries."""
     if config.DRY_RUN or config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
         mock_id = f"MOCK-CLOSE-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
+        market_price = None
+        try:
+            from .data import get_current_price_ticker  # Local import to avoid cycle
+
+            market_price = get_current_price_ticker(symbol)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Failed to retrieve market price for dry-run close of %s: %s",
+                symbol,
+                exc,
+            )
         logger.info(
             "Mock close: %s %s amount=%.8f id=%s",
             symbol,
@@ -413,8 +424,8 @@ def close_position(
             "symbol": symbol,
             "side": side,
             "amount": amount,
-            "average": None,
-            "price": None,
+            "average": market_price,
+            "price": market_price,
         }
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
