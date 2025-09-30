@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Tuple
 
 from .secret_manager import get_secret
@@ -206,7 +207,24 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 
 # Path to ML model used by the strategy
-MODEL_PATH = _str_env("MODEL_PATH", "models/model.pkl")
+_MODEL_PATH_DEFAULT = "models/model.pkl"
+MODEL_PATH = _str_env("MODEL_PATH", _MODEL_PATH_DEFAULT)
+MODEL_DIR = _str_env("MODEL_DIR", str(Path(MODEL_PATH).parent))
+
+_DATASET_DEFAULT = os.getenv("AUTO_TRAIN_DATA_PATH", "data/auto_train_data.csv")
+DATASET_PATH = _str_env("DATASET_PATH", _DATASET_DEFAULT)
+# Backwards compatibility: keep old name pointing to the same path
+AUTO_TRAIN_DATA_PATH = DATASET_PATH
+
+# Automatic retraining configuration
+AUTO_TRAIN_ENABLED = _bool_env("AUTO_TRAIN_ENABLED", False)
+AUTO_TRAIN_POLL_SECONDS = _int_env("AUTO_TRAIN_POLL_SECONDS", 60, clamp=(5, 3600))
+RETRAIN_INTERVAL_TRADES = _int_env("RETRAIN_INTERVAL_TRADES", 300, clamp=(1, 1000000))
+MIN_TRAIN_SAMPLE_SIZE = _int_env("MIN_TRAIN_SAMPLE_SIZE", 2000, clamp=(10, 1000000))
+AUTO_TRAIN_MAX_SAMPLES = _int_env("AUTO_TRAIN_MAX_SAMPLES", 20000, clamp=(100, 1000000))
+POST_DEPLOY_MIN_SAMPLES = _int_env("POST_DEPLOY_MIN_SAMPLES", 50, clamp=(1, 100000))
+POST_DEPLOY_MIN_HIT_RATE = _float_env("POST_DEPLOY_MIN_HIT_RATE", 0.52, clamp=(0.0, 1.0))
+POST_DEPLOY_MAX_DRIFT = _float_env("POST_DEPLOY_MAX_DRIFT", 0.08, clamp=(0.0, 1.0))
 
 # Weight assigned to the predictive model when combining with heuristics
 MODEL_WEIGHT = _float_env("MODEL_WEIGHT", 0.5, clamp=(0.0, 1.0))
@@ -231,6 +249,12 @@ PROBABILITY_MARGIN = _clamp(_float_env("PROBABILITY_MARGIN", 0.05), 0.0, 0.25)
 FEE_AWARE_MARGIN_BPS = _int_env("FEE_AWARE_MARGIN_BPS", 2, clamp=(0, 1000))
 # Estimated round-trip trading cost (fees + slippage) expressed as fraction of risk
 FEE_EST = _positive_float_env("FEE_EST", 0.0006, minimum=0.0)
+
+# Noise filtering and volatility gating
+NOISE_FILTER_METHOD = _str_env("NOISE_FILTER_METHOD", "ema").strip().lower() or "ema"
+NOISE_FILTER_SPAN = _int_env("NOISE_FILTER_SPAN", 12, clamp=(1, 1000))
+VOL_HIGH_TH = _float_env("VOL_HIGH_TH", 0.015, clamp=(0.0, 1.0))
+VOL_MARGIN_BPS = _float_env("VOL_MARGIN_BPS", 10.0, clamp=(0.0, 1000.0))
 
 SHADOW_MODE = _bool_env("SHADOW_MODE", False)
 BACKTEST_REPORT_DIR = _str_env("BACKTEST_REPORT_DIR", "reports")
@@ -324,8 +348,8 @@ if MIN_PROB_SUCCESS < 0 or MIN_PROB_SUCCESS >= 1:
 # Model performance monitoring and drift handling
 MODEL_PERFORMANCE_WINDOW = int(os.getenv("MODEL_PERFORMANCE_WINDOW", "50"))
 MODEL_MIN_SAMPLES_FOR_MONITOR = int(os.getenv("MODEL_MIN_SAMPLES_FOR_MONITOR", "20"))
-MODEL_MIN_WIN_RATE = _clamp(_float_env("MODEL_MIN_WIN_RATE", 0.45), 0.0, 1.0)
-MODEL_MAX_CALIBRATION_DRIFT = _clamp(_float_env("MODEL_MAX_CALIBRATION_DRIFT", 0.15), 0.0, 0.5)
+MODEL_MIN_WIN_RATE = _clamp(_float_env("MODEL_MIN_WIN_RATE", 0.52), 0.0, 1.0)
+MODEL_MAX_CALIBRATION_DRIFT = _clamp(_float_env("MODEL_MAX_CALIBRATION_DRIFT", 0.08), 0.0, 0.5)
 MODEL_WEIGHT_FLOOR = _clamp(_float_env("MODEL_WEIGHT_FLOOR", 0.1), 0.0, 1.0)
 MODEL_WEIGHT_DEGRADATION = _clamp(_float_env("MODEL_WEIGHT_DEGRADATION", 0.5), 0.0, 1.0)
 

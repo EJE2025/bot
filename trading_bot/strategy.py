@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -22,6 +22,24 @@ logger = logging.getLogger(__name__)
 
 _MODEL_WEIGHT_OVERRIDE: Optional[float] = None
 _NOTIFIED_NO_MODEL = False
+
+
+def smooth_series(values: Sequence[float]) -> np.ndarray:
+    """Return a smoothed numpy array based on configuration."""
+
+    method = (getattr(config, "NOISE_FILTER_METHOD", "ema") or "ema").lower()
+    span = max(getattr(config, "NOISE_FILTER_SPAN", 1), 1)
+    series = pd.Series(list(values), dtype=float)
+
+    if method in {"off", "none"} or span <= 1:
+        return series.to_numpy()
+    if method == "median":
+        smoothed = series.rolling(window=span, min_periods=1).median()
+    elif method == "sma":
+        smoothed = series.rolling(window=span, min_periods=1).mean()
+    else:
+        smoothed = series.ewm(span=span, adjust=False).mean()
+    return smoothed.to_numpy()
 
 
 def _is_dummy_model(model: object) -> bool:
@@ -58,12 +76,14 @@ def blend_probabilities(
     return max(0.0, min(1.0, blended))
 
 
-def passes_probability_threshold(prob: float, risk_reward: float) -> bool:
-    threshold = probability_threshold(risk_reward)
+def passes_probability_threshold(
+    prob: float, risk_reward: float, volatility: float | None = None
+) -> bool:
+    threshold = probability_threshold(risk_reward, volatility=volatility)
     return prob >= threshold
 
 
-def probability_threshold(risk_reward: float) -> float:
+def probability_threshold(risk_reward: float, *, volatility: float | None = None) -> float:
     """Compute the minimum probability required to keep a signal."""
     if risk_reward <= 0:
         return 1.0
@@ -81,6 +101,13 @@ def probability_threshold(risk_reward: float) -> float:
     fee = config.FEE_EST
     breakeven = fee / max(risk_reward + fee, 1e-9)
     dynamic_threshold = breakeven + config.PROBABILITY_MARGIN + fee_margin
+
+    if volatility is not None:
+        vol_threshold = max(getattr(config, "VOL_HIGH_TH", 0.0), 0.0)
+        extra_margin_bps = getattr(config, "VOL_MARGIN_BPS", 0.0)
+        if volatility >= vol_threshold and extra_margin_bps > 0:
+            dynamic_threshold += extra_margin_bps / 10000.0
+
     threshold = max(base_with_margin, dynamic_threshold)
     return min(threshold, 0.995)
 
@@ -278,19 +305,25 @@ def decidir_entrada(
 
     entry_price = closes[-1]
     support, resistance = calculate_support_resistance(closes)
-    rsi_arr = compute_rsi(closes, config.RSI_PERIOD)
+    smoothed_closes = smooth_series(closes)
+    smoothed_highs = smooth_series(highs)
+    smoothed_lows = smooth_series(lows)
+
+    rsi_arr = compute_rsi(smoothed_closes.tolist(), config.RSI_PERIOD)
     if rsi_arr.size == 0 or np.isnan(rsi_arr[-1]):
         logger.error("[%s] invalid RSI", symbol)
         return None
     rsi_val = rsi_arr[-1]
 
-    macd_line, _, _ = compute_macd(closes)
+    macd_line, _, _ = compute_macd(smoothed_closes.tolist())
     if macd_line.size == 0 or np.isnan(macd_line[-1]):
         logger.error("[%s] invalid MACD", symbol)
         return None
     macd_val = macd_line[-1]
 
-    atr_val = calculate_atr(highs, lows, closes)
+    atr_val = calculate_atr(
+        smoothed_highs.tolist(), smoothed_lows.tolist(), smoothed_closes.tolist()
+    )
     if atr_val is None or np.isnan(atr_val):
         logger.error("[%s] invalid ATR", symbol)
         return None
@@ -376,6 +409,22 @@ def decidir_entrada(
 
     risk = abs(entry_price - stop_loss)
     risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
+    volatility_ratio = atr_val / entry_price if entry_price > 0 else 0.0
+
+    side_label = "long" if decision == "BUY" else "short"
+    feature_snapshot = {
+        "risk_reward": risk_reward,
+        "orig_prob": prob_heuristic,
+        "side": side_label,
+        "rsi": float(rsi_val),
+        "macd": float(macd_val),
+        "atr": float(atr_val),
+        "sentiment": float(senti),
+        "order_book_imbalance": float(ob_imb),
+        "volume_factor": float(volume_factor),
+        "volatility": float(volatility_ratio),
+    }
+
     signal = {
         "symbol": symbol,
         "side": decision,
@@ -387,11 +436,13 @@ def decidir_entrada(
         "prob_success": prob_heuristic,
         "orig_prob": prob_heuristic,
         "risk_reward": risk_reward,
+        "volatility": volatility_ratio,
         "timeframe": "short_term",
         "max_duration_minutes": config.MAX_TRADE_DURATION_MINUTES,
         "open_time": datetime.now(timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
+        "feature_snapshot": feature_snapshot,
     }
 
     modelo_activo = (
@@ -402,18 +453,7 @@ def decidir_entrada(
 
     model_prob: float | None = None
     if modelo_activo is not None and risk > 0:
-        side_label = "long" if decision == "BUY" else "short"
-        features = {
-            "risk_reward": risk_reward,
-            "orig_prob": prob_heuristic,
-            "side": side_label,
-            "rsi": rsi_val,
-            "atr": atr_val,
-            "sentiment": senti,
-            "order_book_imbalance": ob_imb,
-            "volume_factor": volume_factor,
-        }
-        X_new = pd.DataFrame([features])
+        X_new = pd.DataFrame([feature_snapshot])
         try:
             with measure_latency("feature_to_prediction"):
                 X_validated = predictive_model.ensure_feature_schema(
@@ -431,9 +471,9 @@ def decidir_entrada(
     blended_prob = blend_probabilities(prob_heuristic, model_prob)
     signal["prob_success"] = blended_prob
     final_prob = signal["prob_success"]
-    threshold = probability_threshold(risk_reward)
+    threshold = probability_threshold(risk_reward, volatility=volatility_ratio)
     signal["prob_threshold"] = threshold
-    if not passes_probability_threshold(final_prob, risk_reward):
+    if not passes_probability_threshold(final_prob, risk_reward, volatility_ratio):
         logger.debug(
             "[%s] señal descartada por probabilidad %.2f < %.2f",
             symbol,
