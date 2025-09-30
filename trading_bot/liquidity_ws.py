@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import json
 import logging
+import random
 import threading
 from collections import defaultdict
 from typing import Iterable, Dict, Any
@@ -13,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 DEPTH = 10
 BINANCE_INTERVAL_MS = 500
-RECONNECT_DELAY = 5
 
 DEFAULT_TOP_15_SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT",
@@ -137,79 +138,146 @@ class DualExchangeLiquidityStream:
             targets.append("binance")
         return targets
 
+    async def _ping_loop(self, ws: websockets.WebSocketClientProtocol) -> None:
+        try:
+            while not self._stop_event.is_set():
+                pong_waiter = ws.ping()
+                try:
+                    await asyncio.wait_for(
+                        pong_waiter, timeout=config.WS_PONG_TIMEOUT_S
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("WS pong timeout; closing connection")
+                    await ws.close()
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), timeout=config.WS_PING_INTERVAL_S
+                    )
+                except asyncio.TimeoutError:
+                    continue
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            logger.debug("Ping loop terminated: %s", exc)
+
     async def _binance_listener(self, symbols: Iterable[str]):
         streams = "/".join(format_binance_stream_symbol(s) for s in symbols)
         url = f"wss://fstream.binance.com/stream?streams={streams}"
+        backoff = config.WS_BACKOFF_MIN_S
         while not self._stop_event.is_set():
             try:
                 logger.info("Connecting to Binance WS: %s", url)
                 async with websockets.connect(url, ping_interval=None) as ws:
                     self._ws_binance = ws
                     logger.info("Binance WS connected")
-                    async for message in ws:
-                        if self._stop_event.is_set():
-                            break
-                        data = json.loads(message)
-                        content = data.get("data")
-                        if not content or "bids" not in content:
-                            continue
-                        sym_raw = content.get("s")
-                        if not sym_raw:
-                            continue
-                        sym = format_binance_symbol(sym_raw)
-                        async with self._lock:
-                            book = self._orderbook[sym]
-                            book["bids"] = {float(p): float(q) for p, q in content.get("bids", [])}
-                            book["asks"] = {float(p): float(q) for p, q in content.get("asks", [])}
-            except (websockets.ConnectionClosed, asyncio.TimeoutError) as exc:
+                    ping_task = asyncio.create_task(self._ping_loop(ws))
+                    backoff = config.WS_BACKOFF_MIN_S
+                    try:
+                        async for message in ws:
+                            if self._stop_event.is_set():
+                                break
+                            data = json.loads(message)
+                            content = data.get("data")
+                            if not content or "bids" not in content:
+                                continue
+                            sym_raw = content.get("s")
+                            if not sym_raw:
+                                continue
+                            sym = format_binance_symbol(sym_raw)
+                            async with self._lock:
+                                book = self._orderbook[sym]
+                                book["bids"] = {float(p): float(q) for p, q in content.get("bids", [])}
+                                book["asks"] = {float(p): float(q) for p, q in content.get("asks", [])}
+                    finally:
+                        ping_task.cancel()
+                        with contextlib.suppress(Exception):
+                            await ping_task
+            except (websockets.ConnectionClosed, asyncio.TimeoutError, RuntimeError) as exc:
                 if self._stop_event.is_set():
                     break
-                logger.warning("Binance WS disconnected: %s. Reconnecting in %ss...", exc, RECONNECT_DELAY)
-                await asyncio.sleep(RECONNECT_DELAY)
+                sleep_s = min(config.WS_BACKOFF_MAX_S, backoff) + random.uniform(0, 1.0)
+                logger.warning(
+                    "Binance WS disconnected: %s. Reconnecting in %.1fs...",
+                    exc,
+                    sleep_s,
+                )
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(config.WS_BACKOFF_MAX_S, max(backoff * 2, config.WS_BACKOFF_MIN_S))
             except Exception as exc:
                 logger.error("Unexpected error in Binance listener: %s", exc, exc_info=True)
-                if not self._stop_event.is_set():
-                    await asyncio.sleep(RECONNECT_DELAY)
+                if self._stop_event.is_set():
+                    break
+                sleep_s = min(config.WS_BACKOFF_MAX_S, backoff) + random.uniform(0, 1.0)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(config.WS_BACKOFF_MAX_S, max(backoff * 2, config.WS_BACKOFF_MIN_S))
         self._ws_binance = None
 
     async def _bitget_listener(self, symbols: Iterable[str]):
         subs = [{"op": "subscribe", "args": [f"books{DEPTH}:{format_bitget_stream_symbol(s)}"]} for s in symbols]
         url = "wss://ws.bitget.com/mix/v1/stream"
+        backoff = config.WS_BACKOFF_MIN_S
         while not self._stop_event.is_set():
             try:
                 logger.info("Connecting to Bitget WS: %s", url)
                 async with websockets.connect(url, ping_interval=None) as ws:
                     self._ws_bitget = ws
                     logger.info("Bitget WS connected")
+                    ping_task = asyncio.create_task(self._ping_loop(ws))
+                    backoff = config.WS_BACKOFF_MIN_S
                     for sub in subs:
                         await ws.send(json.dumps(sub))
-                    async for message in ws:
-                        if self._stop_event.is_set():
-                            break
-                        data = json.loads(message)
-                        if "data" not in data:
-                            continue
-                        for item in data["data"]:
-                            if not isinstance(item, dict):
-                                logger.warning("Unexpected Bitget payload: %s", data)
+                    try:
+                        async for message in ws:
+                            if self._stop_event.is_set():
+                                break
+                            data = json.loads(message)
+                            if "data" not in data:
                                 continue
-                            sym = item.get("symbol") or item.get("instId")
-                            if not sym:
-                                continue
-                            sym_fmt = format_bitget_symbol(sym)
-                            async with self._lock:
-                                book = self._orderbook[sym_fmt]
-                                book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
-                                book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
-            except (websockets.ConnectionClosed, asyncio.TimeoutError) as exc:
+                            for item in data["data"]:
+                                if not isinstance(item, dict):
+                                    logger.warning("Unexpected Bitget payload: %s", data)
+                                    continue
+                                sym = item.get("symbol") or item.get("instId")
+                                if not sym:
+                                    continue
+                                sym_fmt = format_bitget_symbol(sym)
+                                async with self._lock:
+                                    book = self._orderbook[sym_fmt]
+                                    book["bids"] = {float(b[0]): float(b[1]) for b in item.get("bids", [])}
+                                    book["asks"] = {float(a[0]): float(a[1]) for a in item.get("asks", [])}
+                    finally:
+                        ping_task.cancel()
+                        with contextlib.suppress(Exception):
+                            await ping_task
+            except (websockets.ConnectionClosed, asyncio.TimeoutError, RuntimeError) as exc:
                 if self._stop_event.is_set():
                     break
-                logger.warning("Bitget WS disconnected: %s. Reconnecting in %ss...", exc, RECONNECT_DELAY)
-                await asyncio.sleep(RECONNECT_DELAY)
+                sleep_s = min(config.WS_BACKOFF_MAX_S, backoff) + random.uniform(0, 1.0)
+                logger.warning(
+                    "Bitget WS disconnected: %s. Reconnecting in %.1fs...",
+                    exc,
+                    sleep_s,
+                )
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(config.WS_BACKOFF_MAX_S, max(backoff * 2, config.WS_BACKOFF_MIN_S))
             except Exception as exc:
                 logger.error("Unexpected error in Bitget listener: %s", exc, exc_info=True)
-                if not self._stop_event.is_set():
-                    await asyncio.sleep(RECONNECT_DELAY)
+                if self._stop_event.is_set():
+                    break
+                sleep_s = min(config.WS_BACKOFF_MAX_S, backoff) + random.uniform(0, 1.0)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(config.WS_BACKOFF_MAX_S, max(backoff * 2, config.WS_BACKOFF_MIN_S))
         self._ws_bitget = None
 
     async def _run(self, symbols: Iterable[str]):

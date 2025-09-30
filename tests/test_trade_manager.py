@@ -8,7 +8,7 @@ import pytest
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import trading_bot.config as config
 import trading_bot.trade_manager as tm
-from trading_bot.state_machine import TradeState, InvalidStateTransition
+from trading_bot.state_machine import TradeState
 
 tm.reset_state()
 
@@ -44,8 +44,8 @@ def test_set_trade_state(monkeypatch):
     tid = t["trade_id"]
     tm.set_trade_state(tid, TradeState.OPEN)
     assert t["state"] == TradeState.OPEN.value
-    with pytest.raises(InvalidStateTransition):
-        tm.set_trade_state(tid, TradeState.PENDING)
+    assert not tm.set_trade_state(tid, TradeState.PENDING)
+    assert t["state"] == TradeState.OPEN.value
 
 
 def test_close_trade_forces_closing(monkeypatch):

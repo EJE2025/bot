@@ -1,6 +1,6 @@
 import unittest
 from trading_bot import trade_manager as tm
-from trading_bot.state_machine import TradeState, InvalidStateTransition
+from trading_bot.state_machine import TradeState
 
 
 class TestTradeManagerWithState(unittest.TestCase):
@@ -30,8 +30,11 @@ class TestTradeManagerWithState(unittest.TestCase):
 
     def test_invalid_transition(self):
         tm.add_trade({"trade_id": "T2", "symbol": "ETH_USDT"})
-        with self.assertRaises(InvalidStateTransition):
-            tm.set_trade_state("T2", TradeState.CLOSED)
+        result = tm.set_trade_state("T2", TradeState.CLOSED)
+        self.assertFalse(result)
+        self.assertEqual(
+            tm.find_trade(trade_id="T2")["state"], TradeState.PENDING.value
+        )
 
 
 if __name__ == "__main__":

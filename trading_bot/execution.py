@@ -226,6 +226,9 @@ def check_order_filled(order_id: str, symbol: str, timeout: int = config.ORDER_F
 
 def setup_leverage(exchange, symbol: str, leverage: int = 10):
     """Configure leverage for a symbol and confirm on Bitget."""
+    if config.DRY_RUN:
+        logger.info("Mock leverage setup for %s (dry-run)", symbol)
+        return {"success": True, "symbol": symbol, "result": "dry_run"}
     if exchange is None:
         logger.error("Exchange not initialized")
         return {"success": False, "error": "exchange not initialized"}
@@ -293,16 +296,24 @@ def open_position(
     keys ``id``, ``status`` and ``average``. Temporary errors are retried up to
     ``ORDER_SUBMIT_ATTEMPTS`` times with exponential backoff.
     """
-    if config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+    if config.DRY_RUN or config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+        mock_id = f"MOCK-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
         logger.info(
-            "Mock order: %s %s amount=%.8f price=%.4f", symbol, side, amount, price
+            "Mock order: %s %s amount=%.8f price=%.4f id=%s",
+            symbol,
+            side,
+            amount,
+            price,
+            mock_id,
         )
         return {
-            "status": "shadow",
+            "id": mock_id,
+            "status": "filled" if config.DRY_RUN else "shadow",
             "symbol": symbol,
             "side": side,
             "amount": amount,
             "price": price,
+            "average": price,
         }
 
     if exchange is None:
@@ -387,6 +398,24 @@ def close_position(
     idempotency_key: str | None = None,
 ):
     """Close an existing position with validation and retries."""
+    if config.DRY_RUN or config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+        mock_id = f"MOCK-CLOSE-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
+        logger.info(
+            "Mock close: %s %s amount=%.8f id=%s",
+            symbol,
+            side,
+            amount,
+            mock_id,
+        )
+        return {
+            "id": mock_id,
+            "status": "filled",
+            "symbol": symbol,
+            "side": side,
+            "amount": amount,
+            "average": None,
+            "price": None,
+        }
     if exchange is None:
         raise OrderSubmitError("Exchange not initialized")
     bitget_sym = symbol.replace("_", "/") + ":USDT"
