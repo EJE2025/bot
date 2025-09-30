@@ -193,10 +193,16 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
         logger.error("No data exchange enabled for market data")
         return None
 
-    if os.path.exists(path):
-        logger.info("Using cached data for %s", symbol)
-        with open(path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+    fallback_paths = [path]
+    legacy_cache = _cache_path(symbol_raw, interval, limit)
+    if legacy_cache not in fallback_paths:
+        fallback_paths.append(legacy_cache)
+
+    for candidate in fallback_paths:
+        if os.path.exists(candidate):
+            logger.info("Using cached data for %s", symbol)
+            with open(candidate, "r", encoding="utf-8") as fh:
+                return json.load(fh)
     return None
 
 

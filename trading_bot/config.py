@@ -216,6 +216,12 @@ DATASET_PATH = _str_env("DATASET_PATH", _DATASET_DEFAULT)
 # Backwards compatibility: keep old name pointing to the same path
 AUTO_TRAIN_DATA_PATH = DATASET_PATH
 
+# Excel exports configuration -------------------------------------------------
+EXPORTS_DIR = _str_env("EXPORTS_DIR", "./exports")
+EXCEL_TRADES = _str_env("EXCEL_TRADES", "trades_closed.xlsx")
+EXCEL_AI = _str_env("EXCEL_AI", "ai_status.xlsx")
+EXCEL_OPS = _str_env("EXCEL_OPS", "ops.xlsx")
+
 # Automatic retraining configuration
 AUTO_TRAIN_ENABLED = _bool_env("AUTO_TRAIN_ENABLED", False)
 AUTO_TRAIN_POLL_SECONDS = _int_env("AUTO_TRAIN_POLL_SECONDS", 60, clamp=(5, 3600))
