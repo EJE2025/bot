@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import sys
@@ -10,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from threading import RLock, Thread
+from typing import Any
 
 try:
     from scipy.stats import binomtest
@@ -31,7 +33,7 @@ from . import (
     shadow,
     shutdown,
     mode as bot_mode,
-
+    exporter,
 )
 from .trade_manager import (
     add_trade,
@@ -65,6 +67,20 @@ logging.basicConfig(
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _parse_snapshot_interval(raw: str | None) -> int:
+    try:
+        value = int(raw) if raw is not None else 60
+    except (TypeError, ValueError):
+        return 60
+    return max(value, 0)
+
+
+_EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
+    os.getenv("EXCEL_SNAPSHOT_INTERVAL")
+)
+_last_excel_snapshot = 0.0
 
 
 class ModelPerformanceMonitor:
@@ -310,6 +326,94 @@ MODEL_MONITOR = ModelPerformanceMonitor(
     config.MODEL_MIN_WIN_RATE,
     config.MODEL_MAX_CALIBRATION_DRIFT,
 )
+
+
+def _snapshot_ai_state() -> None:
+    """Persist the latest AI state snapshot to Excel."""
+
+    try:
+        model_path = Path(getattr(config, "MODEL_PATH", "models/model.pkl"))
+        if not model_path.is_absolute():
+            model_path = Path.cwd() / model_path
+        try:
+            stat = model_path.stat()
+        except FileNotFoundError:
+            stat = None
+
+        model_info = {
+            "model_path": str(model_path),
+            "exists": stat is not None,
+            "size_bytes": stat.st_size if stat else None,
+            "modified_at": (
+                datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+                if stat
+                else None
+            ),
+            "model_weight": getattr(config, "MODEL_WEIGHT", None),
+            "current_weight": strategy.get_model_weight(),
+            "mode": getattr(config, "BOT_MODE", None)
+            or getattr(config, "TRADING_MODE", None),
+        }
+
+        manifest_path = Path(getattr(config, "MODEL_DIR", model_path.parent)) / "manifest.json"
+        if not manifest_path.is_absolute():
+            manifest_path = Path.cwd() / manifest_path
+        manifest: dict[str, Any] = {}
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+        training_metrics = {
+            "samples": manifest.get("samples"),
+            "duration_s": manifest.get("duration_s"),
+            "version": manifest.get("version"),
+        }
+        training_metrics.update(manifest.get("metrics", {}))
+
+        runtime_metrics = MODEL_MONITOR.metrics()
+        runtime_metrics.update(
+            {
+                "auto_trade": getattr(config, "AUTO_TRADE", None),
+                "enable_trading": getattr(config, "ENABLE_TRADING", None),
+            }
+        )
+
+        exporter.write_ai_status(
+            model_info=model_info,
+            training_metrics=training_metrics,
+            runtime_metrics=runtime_metrics,
+        )
+    except Exception as exc:  # pragma: no cover - defensive snapshot
+        logger.debug("Failed to export AI snapshot: %s", exc, exc_info=exc)
+
+
+def _snapshot_ops_state() -> None:
+    """Persist operational telemetry to Excel."""
+
+    try:
+        positions = all_open_trades()
+        risk_limits = {
+            "max_daily_loss_usdt": getattr(config, "MAX_DAILY_LOSS_USDT", None),
+            "min_position_size_usdt": getattr(config, "MIN_POSITION_SIZE_USDT", None),
+            "max_open_trades": getattr(config, "MAX_OPEN_TRADES", None),
+        }
+        ws_client = globals().get("WS_CLIENT")
+        ws_status = {
+            "connected": getattr(ws_client, "is_connected", None)
+            if ws_client is not None
+            else None,
+            "last_heartbeat": getattr(ws_client, "last_ping", None)
+            if ws_client is not None
+            else None,
+        }
+        exporter.write_ops_snapshot(
+            positions=positions,
+            risk_limits=risk_limits,
+            ws_status=ws_status,
+        )
+    except Exception as exc:  # pragma: no cover - defensive snapshot
+        logger.debug("Failed to export OPS snapshot: %s", exc, exc_info=exc)
 
 
 def _reset_shadow_positions() -> None:
@@ -685,6 +789,18 @@ def close_existing_trade(
         profit=realized,
     )
     MODEL_MONITOR.record_trade(closed)
+    if closed:
+        try:
+            trade_copy = dict(closed)
+            if exec_price is not None and trade_copy.get("exit_price") is None:
+                trade_copy["exit_price"] = exec_price
+            if realized is not None:
+                trade_copy.setdefault("pnl", realized)
+                trade_copy.setdefault("profit", realized)
+            path = exporter.append_trade_closed(trade_copy)
+            logger.info("Trade exportado a Excel: %s", path)
+        except Exception as exc:  # pragma: no cover - defensive export
+            logger.warning("No se pudo exportar trade a Excel: %s", exc)
     auto_trainer.record_completed_trade(closed)
     save_trades()
     return closed, exec_price, realized
@@ -738,6 +854,7 @@ def run_one_iteration_open(model=None):
             logger.error("Error processing %s: %s", sig.get("symbol"), exc)
 
 def run():
+    global _last_excel_snapshot
     load_trades()  # Restaurar operaciones guardadas
     permissions.audit_environment(execution.exchange)
 
@@ -846,6 +963,10 @@ def run():
         config.MAX_OPEN_TRADES,
     )
 
+    _snapshot_ai_state()
+    _snapshot_ops_state()
+    _last_excel_snapshot = time.time()
+
     while True:
         try:
 
@@ -853,6 +974,13 @@ def run():
 
             maybe_reload_model()
             model = current_model()
+
+            if _EXCEL_SNAPSHOT_INTERVAL > 0:
+                ts_now = time.time()
+                if ts_now - _last_excel_snapshot >= _EXCEL_SNAPSHOT_INTERVAL:
+                    _snapshot_ai_state()
+                    _snapshot_ops_state()
+                    _last_excel_snapshot = ts_now
 
             if shutdown.shutdown_requested() and not shutdown_handled:
                 logger.info("Shutdown requested; stopping trading loop")
