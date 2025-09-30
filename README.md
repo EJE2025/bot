@@ -102,6 +102,54 @@ variables definidas en `trading_bot/config.py`:
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
+
+## Auto-Training y filtro de ruido
+
+El bot puede registrar automáticamente operaciones cerradas para re-entrenar el
+modelo predictivo en caliente. Para activarlo:
+
+1. Ajusta tu `.env` con los nuevos parámetros:
+
+   ```env
+   AUTO_TRAIN_ENABLED=1
+   AUTO_TRAIN_POLL_SECONDS=60
+   MIN_TRAIN_SAMPLE_SIZE=2000
+   RETRAIN_INTERVAL_TRADES=300
+   DATASET_PATH=./data/auto_train_data.csv
+   MODEL_DIR=./models
+   POST_DEPLOY_MIN_SAMPLES=50
+   POST_DEPLOY_MIN_HIT_RATE=0.52
+   POST_DEPLOY_MAX_DRIFT=0.08
+   NOISE_FILTER_METHOD=ema
+   NOISE_FILTER_SPAN=12
+   VOL_HIGH_TH=0.015
+   VOL_MARGIN_BPS=10
+   ```
+
+2. Cada cierre de trade añade una fila etiquetada en `DATASET_PATH` usando un
+   *file lock* para evitar corrupciones. El hilo `auto_trainer` valida el
+   esquema (con winsorization ligera) antes de entrenar y usa *class
+   weighting* balanceado.
+
+3. Cuando hay suficientes muestras, el modelo se entrena de nuevo. Si supera
+   los umbrales offline (`MODEL_MIN_WIN_RATE` y `MODEL_MAX_CALIBRATION_DRIFT`),
+   se despliega con swap atómico escribiendo primero `model.pkl.tmp` y luego
+   `os.replace`. Cada versión se guarda como `models/model-YYYYMMDD_HHMMSS.pkl`
+   y el symlink `models/latest` apunta al modelo activo.
+
+4. Tras desplegar, el bot monitorea una ventana corta de operaciones vivas. Si
+   el `MODEL_MONITOR` detecta que el hit-rate cae por debajo de los mínimos o
+   el *drift* excede el umbral, se hace **rollback** inmediato al artefacto
+   `good_model.pkl` sin interrumpir el proceso.
+
+5. Las nuevas métricas Prometheus (`auto_train_last_duration_seconds`,
+   `auto_train_last_status`, `auto_train_samples_total`, `model_version_info`)
+   permiten vigilar el pipeline de entrenamiento en Grafana/Alertmanager.
+
+El filtro de ruido aplica un suavizado configurable (EMA o mediana) antes de
+calcular indicadores y aumenta automáticamente el umbral de probabilidad cuando
+la volatilidad (ATR/precio) supera `VOL_HIGH_TH`. Ajusta `VOL_MARGIN_BPS` para
+controlar el margen adicional expresado en *basis points*.
 ## Dependencias opcionales
 
 Para acelerar el cálculo de indicadores se puede instalar [TA-Lib](https://ta-lib.org).

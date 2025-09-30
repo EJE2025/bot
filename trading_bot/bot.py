@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 from . import (
     config,
+    auto_trainer,
     data,
     execution,
     strategy,
@@ -684,6 +685,7 @@ def close_existing_trade(
         profit=realized,
     )
     MODEL_MONITOR.record_trade(closed)
+    auto_trainer.record_completed_trade(closed)
     save_trades()
     return closed, exec_price, realized
 
@@ -800,9 +802,19 @@ def run():
 
     strategy.start_liquidity()
 
+    stop_event = shutdown.get_stop_event()
+    stop_event.clear()
+    trainer = auto_trainer.start_auto_trainer(stop_event)
+
     shutdown.install_signal_handlers()
     shutdown.register_callback(save_trades)
     shutdown.register_callback(execution.cancel_all_orders)
+    if trainer is not None:
+        def _stop_trainer() -> None:
+            stop_event.set()
+            trainer.join(timeout=10)
+
+        shutdown.register_callback(_stop_trainer)
 
     maybe_reload_model(force=True)
     daily_profit = 0.0
@@ -871,6 +883,7 @@ def run():
 
             drift_blocked = False
             metrics_snapshot = MODEL_MONITOR.metrics()
+            auto_trainer.observe_live_metrics(metrics_snapshot)
             drift_hit_rate = metrics_snapshot.get("hit_rate")
             drift_p_value = metrics_snapshot.get("p_value")
             drift_count = int(metrics_snapshot.get("count") or 0)

@@ -1,5 +1,4 @@
 """Graceful shutdown helpers for the trading bot."""
-
 from __future__ import annotations
 
 import signal
@@ -9,6 +8,7 @@ from typing import Callable, List
 _lock = threading.RLock()
 _shutdown_requested = False
 _callbacks: List[Callable[[], None]] = []
+_STOP_EVENT = threading.Event()
 
 
 def _handler(signum, frame):  # pragma: no cover - signal module passes frame
@@ -28,11 +28,18 @@ def request_shutdown() -> None:
     global _shutdown_requested
     with _lock:
         _shutdown_requested = True
+    _STOP_EVENT.set()
 
 
 def shutdown_requested() -> bool:
     with _lock:
         return _shutdown_requested
+
+
+def get_stop_event() -> threading.Event:
+    """Return the event toggled when a shutdown has been requested."""
+
+    return _STOP_EVENT
 
 
 def register_callback(callback: Callable[[], None]) -> None:
@@ -58,3 +65,4 @@ def reset_for_tests() -> None:
     with _lock:
         _shutdown_requested = False
         _callbacks.clear()
+    _STOP_EVENT.clear()
