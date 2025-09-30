@@ -1,0 +1,219 @@
+:root {
+    --brand-primary: #3f51b5;
+    --brand-secondary: #00bcd4;
+    --surface: rgba(255, 255, 255, 0.92);
+    --surface-dark: #12172a;
+    --success: #1abc9c;
+    --danger: #e74c3c;
+}
+
+body {
+    background: radial-gradient(circle at top left, #182848, #060b23 65%);
+    min-height: 100vh;
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    color: #f8f9ff;
+}
+
+.navbar {
+    background: linear-gradient(120deg, rgba(41, 72, 189, 0.95), rgba(11, 191, 189, 0.9));
+    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(8px);
+}
+
+.navbar-brand span {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+main.container-fluid {
+    max-width: 1400px;
+}
+
+.card {
+    background: var(--surface);
+    color: #1b243b;
+    border: none;
+    border-radius: 18px;
+    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.24);
+    overflow: hidden;
+}
+
+.card-header {
+    background: rgba(15, 23, 42, 0.04);
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.metric-card .metric-label {
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(16, 24, 40, 0.6);
+}
+
+.metric-card .metric-value {
+    font-size: 2.2rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.metric-card .metric-delta {
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.badge-status {
+    font-size: 0.7rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+.table thead th {
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    border-bottom: none;
+    background: rgba(15, 23, 42, 0.85);
+    color: #fff;
+    vertical-align: middle;
+}
+
+.table tbody td {
+    vertical-align: middle;
+}
+
+.table tbody tr:hover {
+    background-color: rgba(33, 150, 243, 0.08);
+}
+
+.trade-side {
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+.trade-side.buy {
+    color: var(--success);
+}
+
+.trade-side.sell {
+    color: var(--danger);
+}
+
+.pnl-positive {
+    color: var(--success);
+    font-weight: 600;
+}
+
+.pnl-negative {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+.symbol-badge {
+    font-weight: 700;
+    color: #0b1736;
+    background: linear-gradient(135deg, rgba(63, 81, 181, 0.18), rgba(63, 81, 181, 0.45));
+    border-radius: 999px;
+    padding: 0.25rem 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.symbol-badge i {
+    font-size: 0.75rem;
+    color: rgba(14, 36, 75, 0.7);
+}
+
+.symbol-breakdown .list-group-item {
+    border: none;
+    background: rgba(63, 81, 181, 0.08);
+    border-radius: 12px;
+    margin-bottom: 0.6rem;
+    padding: 0.9rem 1rem;
+    color: #19233f;
+}
+
+.symbol-breakdown .list-group-item:last-child {
+    margin-bottom: 0;
+}
+
+.symbol-breakdown .badge {
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.liquidity-grid {
+    display: grid;
+    gap: 1rem;
+}
+
+.liquidity-grid .orderbook-card {
+    background: rgba(15, 23, 42, 0.05);
+    border-radius: 16px;
+    padding: 1rem;
+}
+
+.orderbook-card table {
+    font-size: 0.85rem;
+}
+
+.orderbook-card thead {
+    background: rgba(15, 23, 42, 0.05);
+}
+
+.orderbook-card tbody tr td:first-child {
+    font-weight: 600;
+}
+
+.history-list {
+    max-height: 320px;
+    overflow-y: auto;
+    display: grid;
+    gap: 0.8rem;
+}
+
+.history-item {
+    background: rgba(63, 81, 181, 0.08);
+    border-radius: 14px;
+    padding: 0.8rem 1rem;
+    color: #16213e;
+    display: grid;
+    gap: 0.25rem;
+}
+
+.history-item .side-buy {
+    color: var(--success);
+    font-weight: 600;
+}
+
+.history-item .side-sell {
+    color: var(--danger);
+    font-weight: 600;
+}
+
+#globalAlerts .alert {
+    border-radius: 14px;
+}
+
+.footer {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+@media (max-width: 992px) {
+    .metric-card .metric-value {
+        font-size: 1.8rem;
+    }
+
+    .liquidity-grid {
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+}
+
+@media (min-width: 993px) {
+    .liquidity-grid {
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+}
