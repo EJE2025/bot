@@ -1,3 +1,8 @@
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 import pytest
 
 from trading_bot import permissions, config
@@ -24,6 +29,16 @@ def test_mock_exchange_bypasses_live_checks(monkeypatch):
     monkeypatch.setattr(config, "TRADING_MODE", "live", raising=False)
     monkeypatch.setattr(config, "ALLOW_LIVE_TRADING", False, raising=False)
     permissions.ensure_open_trade_allowed(MockExchange())
+
+
+def test_missing_credentials_with_uppercase_default_exchange(monkeypatch):
+    monkeypatch.setattr(config, "DEFAULT_EXCHANGE", "BINANCE", raising=False)
+    monkeypatch.setattr(config, "BINANCE_API_KEY", "", raising=False)
+    monkeypatch.setattr(config, "BINANCE_API_SECRET", "", raising=False)
+
+    missing = permissions._missing_credentials()
+
+    assert missing == ["BINANCE_API_KEY", "BINANCE_API_SECRET"]
 
 
 def test_token_permissions(tmp_path, monkeypatch):

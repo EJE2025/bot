@@ -33,7 +33,8 @@ def _is_paper_trading(exchange: Optional[object]) -> bool:
 def _missing_credentials() -> list[str]:
     """Return a list of missing API credential names."""
     required: list[tuple[str, str]] = []
-    if config.DEFAULT_EXCHANGE == "bitget":
+    exchange = (config.DEFAULT_EXCHANGE or "").strip().lower()
+    if exchange == "bitget":
         required.extend(
             [
                 ("BITGET_API_KEY", config.BITGET_API_KEY),
@@ -41,14 +42,14 @@ def _missing_credentials() -> list[str]:
                 ("BITGET_PASSPHRASE", config.BITGET_PASSPHRASE),
             ]
         )
-    elif config.DEFAULT_EXCHANGE == "binance":
+    elif exchange == "binance":
         required.extend(
             [
                 ("BINANCE_API_KEY", config.BINANCE_API_KEY),
                 ("BINANCE_API_SECRET", config.BINANCE_API_SECRET),
             ]
         )
-    elif config.DEFAULT_EXCHANGE == "mexc":
+    elif exchange == "mexc":
         required.extend(
             [
                 ("MEXC_API_KEY", config.MEXC_API_KEY),
