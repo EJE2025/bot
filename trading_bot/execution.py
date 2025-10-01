@@ -343,8 +343,8 @@ def open_position(
             raise OrderSubmitError("Insufficient balance")
     max_attempts = config.ORDER_SUBMIT_ATTEMPTS
     ord_price = price
-    ord_type = order_type.lower()
-    if ord_type != "market":
+    normalized_type = order_type.lower()
+    if normalized_type != "market":
         ord_price = exchange_rules.quantize_price(price, rules.price_tick)
     else:
         ord_price = None
@@ -362,24 +362,23 @@ def open_position(
             raise OrderSubmitError("Duplicate order suppressed")
     for attempt in range(max_attempts):
         try:
+            current_type = normalized_type
             params = {
                 "timeInForce": "GTC",
                 "holdSide": "long" if side_normalized == "BUY" else "short",
             }
-            if ord_type == "market":
-                ord_type = "market"
-            elif ord_type == "stop":
+            request_price = ord_price
+            if current_type == "market":
+                request_price = None
+            elif current_type == "stop":
                 params["stopPrice"] = stop_price or price
-                ord_type = "limit"
-            else:
-                ord_type = "limit"
             with measure_latency("submit_to_ack"):
                 order = exchange.create_order(
                     symbol=bitget_sym,
-                    type=ord_type,
+                    type=current_type,
                     side="buy" if side_normalized == "BUY" else "sell",
                     amount=quantized_amount,
-                    price=ord_price,
+                    price=request_price,
                     params=params,
                 )
             if not isinstance(order, dict) or not {"id", "status", "average"}.issubset(order.keys()):
