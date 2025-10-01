@@ -296,21 +296,31 @@ def open_position(
     keys ``id``, ``status`` and ``average``. Temporary errors are retried up to
     ``ORDER_SUBMIT_ATTEMPTS`` times with exponential backoff.
     """
-    if config.DRY_RUN or config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+    side_normalized = side.upper()
+    side_lower = side_normalized.lower()
+
+    dry_mode = (
+        config.BOT_MODE == "shadow"
+        or not config.ENABLE_TRADING
+        or (config.DRY_RUN and not config.ENABLE_TRADING)
+    )
+    if dry_mode:
         mock_id = f"MOCK-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
         logger.info(
             "Mock order: %s %s amount=%.8f price=%.4f id=%s",
             symbol,
-            side,
+            side_normalized,
             amount,
             price,
             mock_id,
         )
+        status = "shadow" if config.BOT_MODE == "shadow" else "filled"
+        side_value = side_normalized if status == "shadow" else side_lower
         return {
             "id": mock_id,
-            "status": "filled" if config.DRY_RUN else "shadow",
+            "status": status,
             "symbol": symbol,
-            "side": side,
+            "side": side_value,
             "amount": amount,
             "price": price,
             "average": price,
@@ -338,12 +348,12 @@ def open_position(
         ord_price = exchange_rules.quantize_price(price, rules.price_tick)
     else:
         ord_price = None
-    exchange_rules.validate_order(symbol, side, ord_price, quantized_amount, rules)
+    exchange_rules.validate_order(symbol, side_normalized, ord_price, quantized_amount, rules)
     use_idempotency = not isinstance(exchange, MockExchange)
     key = None
     if use_idempotency:
         key = idempotency_key or idempotency.build_idempotency_key(
-            symbol, side, ord_price or price, quantized_amount
+            symbol, side_normalized, ord_price or price, quantized_amount
         )
         if not idempotency.should_submit(key):
             cached = idempotency.get_cached_result(key)
@@ -352,7 +362,10 @@ def open_position(
             raise OrderSubmitError("Duplicate order suppressed")
     for attempt in range(max_attempts):
         try:
-            params = {"timeInForce": "GTC", "holdSide": "long" if side == "BUY" else "short"}
+            params = {
+                "timeInForce": "GTC",
+                "holdSide": "long" if side_normalized == "BUY" else "short",
+            }
             if ord_type == "market":
                 ord_type = "market"
             elif ord_type == "stop":
@@ -364,7 +377,7 @@ def open_position(
                 order = exchange.create_order(
                     symbol=bitget_sym,
                     type=ord_type,
-                    side="buy" if side == "BUY" else "sell",
+                    side="buy" if side_normalized == "BUY" else "sell",
                     amount=quantized_amount,
                     price=ord_price,
                     params=params,
@@ -398,7 +411,14 @@ def close_position(
     idempotency_key: str | None = None,
 ):
     """Close an existing position with validation and retries."""
-    if config.DRY_RUN or config.BOT_MODE == "shadow" or not config.ENABLE_TRADING:
+    side_lower = side.lower()
+    execution_side = "buy" if side_lower in {"close_short", "buy"} else "sell"
+    dry_mode = (
+        config.BOT_MODE == "shadow"
+        or not config.ENABLE_TRADING
+        or (config.DRY_RUN and not config.ENABLE_TRADING)
+    )
+    if dry_mode:
         mock_id = f"MOCK-CLOSE-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
         market_price = None
         try:
@@ -418,11 +438,12 @@ def close_position(
             amount,
             mock_id,
         )
+        status = "shadow" if config.BOT_MODE == "shadow" else "filled"
         return {
             "id": mock_id,
-            "status": "filled",
+            "status": status,
             "symbol": symbol,
-            "side": side,
+            "side": execution_side,
             "amount": amount,
             "average": market_price,
             "price": market_price,
@@ -441,7 +462,9 @@ def close_position(
     key = None
     if use_idempotency:
         key = idempotency_key or idempotency.build_idempotency_key(
-            symbol, side, 0.0, quantized_amount
+            symbol, side_lower,
+            0.0,
+            quantized_amount,
         )
         if not idempotency.should_submit(key):
             cached = idempotency.get_cached_result(key)
@@ -459,7 +482,7 @@ def close_position(
                 order = exchange.create_order(
                     symbol=bitget_sym,
                     type=ord_type,
-                    side="buy" if side == "close_short" else "sell",
+                    side=execution_side,
                     amount=quantized_amount,
                     price=ord_price,
                     params=params,

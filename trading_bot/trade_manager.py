@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 import time
 import logging
 import uuid
-from . import config
+from typing import Optional
+
+from . import config, data
 from .utils import normalize_symbol
 from .state_machine import TradeState, is_valid_transition
 
@@ -68,6 +70,9 @@ def add_trade(trade):
         trade.setdefault("timeframe", "short_term")
         trade.setdefault("max_duration_minutes", config.MAX_TRADE_DURATION_MINUTES)
         trade.setdefault("created_ts", time.time())
+        trade.setdefault("quantity_remaining", trade.get("quantity"))
+        trade.setdefault("realized_pnl", 0.0)
+        trade.setdefault("closing", False)
         open_trades.append(trade)
         log_history("open", trade)
         return trade
@@ -85,6 +90,60 @@ def find_trade(symbol=None, trade_id=None):
             if trade_id and trade.get("trade_id") == trade_id:
                 return trade
     return None
+
+
+def get_open_trade(trade_id: str) -> Optional[dict]:
+    """Return a reference to the open trade with the given ``trade_id``."""
+    with LOCK:
+        for trade in open_trades:
+            if trade.get("trade_id") == trade_id:
+                return trade
+    return None
+
+
+def get_closed_trade(trade_id: str) -> Optional[dict]:
+    with LOCK:
+        for trade in closed_trades:
+            if trade.get("trade_id") == trade_id:
+                return trade
+    return None
+
+
+def _resolve_exit_price(trade: dict, exit_price: float | None) -> float:
+    if exit_price is not None:
+        try:
+            return float(exit_price)
+        except (TypeError, ValueError):
+            logger.debug("Exit price inválido para trade %s", trade.get("trade_id"))
+    symbol = trade.get("symbol")
+    market_price = data.get_current_price_ticker(symbol)
+    if market_price:
+        try:
+            return float(market_price)
+        except (TypeError, ValueError):
+            logger.debug("Precio de mercado inválido para %s", symbol)
+    try:
+        return float(trade.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _calculate_realized_pnl(trade: dict, quantity: float, exit_price: float) -> float:
+    try:
+        entry_price = float(trade.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    side = str(trade.get("side", "buy")).lower()
+    if side == "buy":
+        return (exit_price - entry_price) * quantity
+    return (entry_price - exit_price) * quantity
+
+
+def _ensure_realized_pnl(trade: dict) -> float:
+    try:
+        return float(trade.get("realized_pnl", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def update_trade(trade_id, **kwargs):
@@ -170,9 +229,17 @@ def close_trade(
         trade["close_reason"] = reason
         if exit_price is not None:
             trade["exit_price"] = exit_price
+        realized = _ensure_realized_pnl(trade)
         if profit is not None:
             trade["profit"] = profit
+            trade["realized_pnl"] = profit
+        else:
+            trade.setdefault("profit", realized)
+            trade["realized_pnl"] = realized
         trade["status"] = "closed"
+        trade["closing"] = False
+        trade.setdefault("quantity_remaining", 0.0)
+        trade["quantity"] = trade.get("quantity_remaining", 0.0)
         closed_trades.append(trade)
         log_history("close", trade)
         return trade
@@ -375,3 +442,114 @@ def exceeded_max_duration(
     if age is None:
         return False
     return age >= max_minutes
+
+
+def close_trade_full(
+    trade_id: str,
+    reason: str = "manual_close",
+    exit_price: float | None = None,
+) -> Optional[dict]:
+    """Close the full remaining quantity of a trade in an idempotent manner."""
+
+    trade = get_open_trade(trade_id)
+    if not trade:
+        return get_closed_trade(trade_id)
+
+    exit_p = exit_price
+    realized_total = 0.0
+    with LOCK:
+        if trade.get("closing") or trade.get("status") == "closed":
+            return trade.copy()
+        trade["closing"] = True
+        qty_remaining = trade.get("quantity_remaining")
+        if qty_remaining is None:
+            qty_remaining = trade.get("quantity")
+        try:
+            qty_remaining = float(qty_remaining or 0.0)
+        except (TypeError, ValueError):
+            qty_remaining = 0.0
+        if qty_remaining > 0:
+            exit_p = _resolve_exit_price(trade, exit_price)
+            realized = _calculate_realized_pnl(trade, qty_remaining, exit_p)
+            trade["realized_pnl"] = _ensure_realized_pnl(trade) + realized
+        else:
+            exit_p = _resolve_exit_price(trade, exit_price)
+        trade["quantity_remaining"] = 0.0
+        trade["quantity"] = 0.0
+        realized_total = _ensure_realized_pnl(trade)
+    closed = close_trade(
+        trade_id=trade_id,
+        reason=reason,
+        exit_price=exit_p,
+        profit=realized_total,
+    )
+    return closed or get_closed_trade(trade_id)
+
+
+def close_trade_partial(
+    trade_id: str,
+    quantity: float,
+    reason: str = "manual_partial",
+    exit_price: float | None = None,
+) -> Optional[dict]:
+    """Partially close a trade reducing its remaining quantity."""
+
+    if quantity <= 0:
+        raise ValueError("quantity must be positive")
+
+    exit_p = exit_price
+    realized_total = 0.0
+    result_snapshot: Optional[dict] = None
+    with LOCK:
+        trade = get_open_trade(trade_id)
+        if not trade or trade.get("status") == "closed":
+            closed = get_closed_trade(trade_id)
+            if closed:
+                return closed.copy()
+            return None
+
+        remaining = trade.get("quantity_remaining")
+        if remaining is None:
+            remaining = trade.get("quantity")
+        try:
+            remaining = float(remaining or 0.0)
+        except (TypeError, ValueError):
+            remaining = 0.0
+        if quantity > remaining + 1e-12:
+            raise ValueError("quantity exceeds remaining size")
+
+        exit_p = _resolve_exit_price(trade, exit_price)
+        pnl_delta = _calculate_realized_pnl(trade, quantity, exit_p)
+        trade["realized_pnl"] = _ensure_realized_pnl(trade) + pnl_delta
+        new_remaining = remaining - quantity
+        if new_remaining < 1e-12:
+            new_remaining = 0.0
+        trade["quantity_remaining"] = new_remaining
+        trade["quantity"] = new_remaining
+        trade["last_partial_close"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        trade.setdefault("partial_closures", []).append(
+            {
+                "timestamp": trade["last_partial_close"],
+                "quantity": quantity,
+                "exit_price": exit_p,
+                "reason": reason,
+            }
+        )
+        if new_remaining == 0.0:
+            trade["closing"] = True
+        else:
+            trade["closing"] = False
+            trade["status"] = "open"
+        log_history("partial_close", trade)
+        realized_total = _ensure_realized_pnl(trade)
+        result_snapshot = trade.copy()
+
+    if new_remaining == 0.0:
+        closed = close_trade(
+            trade_id=trade_id,
+            reason=reason,
+            exit_price=exit_p,
+            profit=realized_total,
+        )
+        return closed or get_closed_trade(trade_id)
+    return result_snapshot

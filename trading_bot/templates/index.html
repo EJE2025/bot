@@ -109,7 +109,7 @@
                         </div>
                     </div>
                     <div class="table-responsive">
-                        <table class="table table-hover align-middle mb-0 text-center">
+                        <table class="table table-hover align-middle mb-0 text-center" id="tradesTable">
                             <thead>
                                 <tr>
                                     <th>Símbolo</th>
@@ -120,12 +120,14 @@
                                     <th>Take Profit</th>
                                     <th>Stop Loss</th>
                                     <th>PnL</th>
+                                    <th>PnL Realizado</th>
                                     <th>Abierta</th>
+                                    <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody id="tradesTableBody">
                                 <tr>
-                                    <td colspan="9" class="text-muted py-4">Sin operaciones abiertas.</td>
+                                    <td colspan="11" class="text-muted py-4">Sin operaciones abiertas.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -166,7 +168,32 @@
         &copy; {{ current_year }} Trading Bot Dashboard · Diseñado con Flask &amp; Bootstrap
     </footer>
 
+    <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
+
+    <div class="modal fade" id="partialCloseModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Cierre parcial</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2" id="partialModalInfo">—</p>
+                    <div class="mb-3">
+                        <label for="partialPercent" class="form-label">Porcentaje a cerrar (%)</label>
+                        <input type="number" class="form-control" id="partialPercent" min="1" max="100" step="0.1" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="partialConfirmBtn">Confirmar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
 </body>
