@@ -414,6 +414,7 @@ def close_position(
     side_lower = side.lower()
     execution_side = "buy" if side_lower in {"close_short", "buy"} else "sell"
     dry_mode = (
+
         config.DRY_RUN
         or config.BOT_MODE == "shadow"
         or not config.ENABLE_TRADING
