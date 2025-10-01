@@ -301,8 +301,8 @@ def open_position(
 
     dry_mode = (
         config.BOT_MODE == "shadow"
+        or config.DRY_RUN
         or not config.ENABLE_TRADING
-        or (config.DRY_RUN and not config.ENABLE_TRADING)
     )
     if dry_mode:
         mock_id = f"MOCK-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
@@ -415,8 +415,8 @@ def close_position(
     execution_side = "buy" if side_lower in {"close_short", "buy"} else "sell"
     dry_mode = (
         config.BOT_MODE == "shadow"
+        or config.DRY_RUN
         or not config.ENABLE_TRADING
-        or (config.DRY_RUN and not config.ENABLE_TRADING)
     )
     if dry_mode:
         mock_id = f"MOCK-CLOSE-{normalize_symbol(symbol)}-{int(time.time() * 1000)}"
