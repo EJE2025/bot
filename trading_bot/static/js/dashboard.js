@@ -32,6 +32,13 @@ const state = {
 };
 
 let pnlChart = null;
+let socket = null;
+let partialModal = null;
+let partialTradeContext = null;
+
+function getTradeId(trade) {
+  return trade.trade_id || trade.id || trade.uuid;
+}
 
 async function fetchJSON(url) {
   const response = await fetch(url, { cache: 'no-cache' });
@@ -62,6 +69,40 @@ function clearAlert() {
   if (container) {
     container.innerHTML = '';
   }
+}
+
+function showToast(message, variant = 'info') {
+  const container = document.getElementById('toastContainer');
+  if (!container || !window.bootstrap) {
+    console.log(`[${variant}] ${message}`);
+    return;
+  }
+  const toastEl = document.createElement('div');
+  const variantClass = variant === 'error' ? 'danger' : variant;
+  toastEl.className = `toast align-items-center text-bg-${variantClass} border-0`;
+  toastEl.setAttribute('role', 'alert');
+  toastEl.setAttribute('aria-live', 'assertive');
+  toastEl.setAttribute('aria-atomic', 'true');
+  toastEl.innerHTML = `
+    <div class="d-flex">
+      <div class="toast-body">${message}</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Cerrar"></button>
+    </div>`;
+  container.appendChild(toastEl);
+  const toast = new bootstrap.Toast(toastEl, { delay: 3500 });
+  toast.show();
+  toastEl.addEventListener('hidden.bs.toast', () => {
+    toastEl.remove();
+  });
+}
+
+function setRowBusy(tradeId, busy) {
+  const row = document.querySelector(`tr[data-trade-id="${tradeId}"]`);
+  if (!row) return;
+  row.classList.toggle('table-active', busy);
+  row.querySelectorAll('button[data-trade-id]').forEach((btn) => {
+    btn.disabled = busy;
+  });
 }
 
 function formatNumber(value, formatter = numberFormatter) {
@@ -221,12 +262,13 @@ function renderTrades() {
     : state.trades;
 
   if (!trades || trades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
     return;
   }
 
   const rows = trades
     .map((trade) => {
+      const tradeId = getTradeId(trade);
       const side = String(trade.side || '').toLowerCase();
       const sideClass = side === 'buy' ? 'buy' : 'sell';
       const pnlClass = trade.pnl_unrealized >= 0 ? 'pnl-positive' : 'pnl-negative';
@@ -234,10 +276,12 @@ function renderTrades() {
       const entryPrice = formatNumber(trade.entry_price, priceFormatter);
       const takeProfit = formatNumber(trade.take_profit, priceFormatter);
       const stopLoss = formatNumber(trade.stop_loss, priceFormatter);
-      const quantity = formatNumber(trade.quantity, quantityFormatter);
+      const remaining = trade.quantity_remaining ?? trade.quantity;
+      const quantity = formatNumber(remaining, quantityFormatter);
       const pnl = formatPnL(trade.pnl_unrealized);
+      const realized = formatPnL(trade.realized_pnl);
       return `
-        <tr>
+        <tr data-trade-id="${tradeId}">
           <td><span class="symbol-badge"><i class="bi bi-currency-bitcoin"></i>${trade.symbol}</span></td>
           <td class="trade-side ${sideClass}">${side.toUpperCase()}</td>
           <td>${quantity}</td>
@@ -246,12 +290,20 @@ function renderTrades() {
           <td>${takeProfit}</td>
           <td>${stopLoss}</td>
           <td class="${pnlClass}">${pnl}</td>
+          <td>${realized}</td>
           <td>${trade.open_time ? formatDate(trade.open_time) : '—'}</td>
+          <td>
+            <div class="btn-group" role="group">
+              <button class="btn btn-sm btn-outline-danger" data-trade-id="${tradeId}" data-action="close">Cerrar</button>
+              <button class="btn btn-sm btn-outline-warning" data-trade-id="${tradeId}" data-action="partial" data-remaining="${remaining}">Cerrar parcial</button>
+            </div>
+          </td>
         </tr>`;
     })
     .join('');
 
   tbody.innerHTML = rows;
+  attachTradeRowEvents();
 }
 
 function renderLiquidity() {
@@ -385,6 +437,16 @@ function attachEvents() {
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => refreshDashboard(true));
   }
+
+  const modalElement = document.getElementById('partialCloseModal');
+  if (modalElement && window.bootstrap) {
+    partialModal = new bootstrap.Modal(modalElement);
+  }
+
+  const confirmBtn = document.getElementById('partialConfirmBtn');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', handlePartialConfirm);
+  }
 }
 
 function initialize() {
@@ -393,6 +455,140 @@ function initialize() {
   refreshDashboard();
   setStatus('Sincronizando…', 'warning');
   setInterval(refreshDashboard, REFRESH_INTERVAL);
+  connectSocket();
 }
 
 document.addEventListener('DOMContentLoaded', initialize);
+
+function attachTradeRowEvents() {
+  document.querySelectorAll('button[data-action="close"]').forEach((btn) => {
+    btn.addEventListener('click', async (event) => {
+      const { tradeId } = event.currentTarget.dataset;
+      if (!tradeId) return;
+      if (!window.confirm('¿Cerrar totalmente esta operación?')) {
+        return;
+      }
+      setRowBusy(tradeId, true);
+      try {
+        const response = await fetch(`/api/trades/${tradeId}/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'manual_close_ui' }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'No se pudo cerrar la operación');
+        }
+        showToast('Operación cerrada correctamente', 'success');
+      } catch (error) {
+        console.error(error);
+        showToast(error.message || 'Error cerrando la operación', 'danger');
+      } finally {
+        setRowBusy(tradeId, false);
+      }
+    });
+  });
+
+  document.querySelectorAll('button[data-action="partial"]').forEach((btn) => {
+    btn.addEventListener('click', (event) => {
+      const { tradeId, remaining } = event.currentTarget.dataset;
+      if (!tradeId) return;
+      partialTradeContext = { tradeId, remaining: Number(remaining) };
+      const info = document.getElementById('partialModalInfo');
+      if (info) {
+        info.textContent = `Trade ${tradeId} — tamaño restante: ${formatNumber(Number(remaining), quantityFormatter)}`;
+      }
+      const input = document.getElementById('partialPercent');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+      if (partialModal) {
+        partialModal.show();
+      }
+    });
+  });
+}
+
+async function handlePartialConfirm() {
+  if (!partialTradeContext) {
+    return;
+  }
+  const input = document.getElementById('partialPercent');
+  const value = Number(input?.value || 0);
+  if (!Number.isFinite(value) || value <= 0 || value > 100) {
+    showToast('Porcentaje inválido (1–100)', 'warning');
+    return;
+  }
+  const { tradeId } = partialTradeContext;
+  setRowBusy(tradeId, true);
+  try {
+    const response = await fetch(`/api/trades/${tradeId}/close-partial`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ percent: value, reason: 'manual_partial_ui' }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || 'No se pudo cerrar parcialmente');
+    }
+    showToast(`Cierre parcial del ${value}% ejecutado`, 'success');
+    if (partialModal) {
+      partialModal.hide();
+    }
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || 'Error realizando cierre parcial', 'danger');
+  } finally {
+    setRowBusy(tradeId, false);
+    partialTradeContext = null;
+  }
+}
+
+function updateTradeInState(updatedTrade) {
+  const tradeId = getTradeId(updatedTrade);
+  const index = state.trades.findIndex((trade) => getTradeId(trade) === tradeId);
+  if (index >= 0) {
+    state.trades[index] = { ...state.trades[index], ...updatedTrade };
+  } else {
+    state.trades.push(updatedTrade);
+  }
+  renderTrades();
+}
+
+function removeTradeFromState(tradeId) {
+  const index = state.trades.findIndex((trade) => getTradeId(trade) === tradeId);
+  if (index >= 0) {
+    state.trades.splice(index, 1);
+    renderTrades();
+  }
+}
+
+function connectSocket() {
+  if (!window.io) {
+    return;
+  }
+  socket = window.io('/ws');
+  socket.on('connect', () => {
+    setStatus('En vivo', 'success');
+  });
+  socket.on('disconnect', () => {
+    setStatus('Desconectado', 'danger');
+  });
+  socket.on('trades_refresh', (trades) => {
+    if (Array.isArray(trades)) {
+      state.trades = trades;
+      renderTrades();
+    }
+  });
+  socket.on('trade_updated', ({ trade }) => {
+    if (trade) {
+      updateTradeInState(trade);
+    }
+  });
+  socket.on('trade_closed', ({ trade }) => {
+    if (trade) {
+      removeTradeFromState(getTradeId(trade));
+    }
+  });
+}
