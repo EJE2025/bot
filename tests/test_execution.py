@@ -14,6 +14,7 @@ def test_open_and_close_position_success(monkeypatch):
     monkeypatch.setattr(execution.time, "sleep", lambda x: None)
     monkeypatch.setattr(execution.config, "BOT_MODE", "normal")
     monkeypatch.setattr(execution.config, "ENABLE_TRADING", True)
+    monkeypatch.setattr(execution.config, "DRY_RUN", False)
 
     order = execution.open_position("BTC_USDT", "BUY", 1, 30000, order_type="market")
     assert order["side"] == "buy"
@@ -28,6 +29,7 @@ def test_open_position_retry_failure(monkeypatch):
     monkeypatch.setattr(execution.time, "sleep", lambda x: None)
     monkeypatch.setattr(execution.config, "BOT_MODE", "normal")
     monkeypatch.setattr(execution.config, "ENABLE_TRADING", True)
+    monkeypatch.setattr(execution.config, "DRY_RUN", False)
 
     def always_fail(*args, **kwargs):
         raise RuntimeError("boom")
@@ -38,12 +40,47 @@ def test_open_position_retry_failure(monkeypatch):
         execution.open_position("BTC_USDT", "BUY", 1, 30000, order_type="market")
 
 
+def test_open_position_stop_retry_preserves_stop_price(monkeypatch):
+    ex = MockExchange()
+    monkeypatch.setattr(execution, "exchange", ex)
+    monkeypatch.setattr(execution.time, "sleep", lambda x: None)
+    monkeypatch.setattr(execution.config, "BOT_MODE", "normal")
+    monkeypatch.setattr(execution.config, "ENABLE_TRADING", True)
+    monkeypatch.setattr(execution.config, "DRY_RUN", False)
+
+    original_create = ex.create_order
+    attempts = []
+
+    def fail_once(*args, **kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise RuntimeError("temp failure")
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(ex, "create_order", fail_once)
+
+    execution.open_position(
+        "BTC_USDT",
+        "BUY",
+        1,
+        30000,
+        order_type="stop",
+        stop_price=29900,
+    )
+
+    assert len(attempts) >= 2
+    for attempt in attempts[:2]:
+        assert "params" in attempt
+        assert attempt["params"].get("stopPrice") == 29900
+
+
 def test_close_position_retry_success(monkeypatch):
     ex = MockExchange()
     monkeypatch.setattr(execution, "exchange", ex)
     monkeypatch.setattr(execution.time, "sleep", lambda x: None)
     monkeypatch.setattr(execution.config, "BOT_MODE", "normal")
     monkeypatch.setattr(execution.config, "ENABLE_TRADING", True)
+    monkeypatch.setattr(execution.config, "DRY_RUN", False)
 
     original_create = ex.create_order
     calls = {"n": 0}
