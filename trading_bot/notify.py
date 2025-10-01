@@ -1,4 +1,7 @@
+"""Notification helpers for messaging services."""
+
 import requests
+
 from . import config
 
 
