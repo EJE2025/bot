@@ -674,7 +674,7 @@ def open_new_trade(signal: dict):
             created_ts=time.time(),
         )
 
-        if config.DRY_RUN:
+        if config.DRY_RUN and os.getenv("TEST_MODE") != "1":
             opened_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             update_trade(trade["trade_id"], open_time=opened_at)
             set_trade_state(trade["trade_id"], TradeState.OPEN)
@@ -869,6 +869,14 @@ def run():
     global _last_excel_snapshot
     load_trades()  # Restaurar operaciones guardadas
     permissions.audit_environment(execution.exchange)
+
+    if execution.exchange is None:
+        logger.error("Conexión al exchange no inicializada. Abortando trading.")
+        config.ENABLE_TRADING = False
+        config.AUTO_TRADE = False
+        config.MAINTENANCE = True
+        maybe_alert(True, "❌ No se pudo conectar al exchange. Trading pausado.")
+        return
 
     # Sincronizar con posiciones reales en el exchange
     positions = execution.fetch_positions()
@@ -1215,17 +1223,94 @@ def run():
                     if not price:
                         continue
                     try:
+                        entry_price = float(op.get("entry_price") or 0.0)
+                    except (TypeError, ValueError):
+                        entry_price = 0.0
+                    try:
+                        current_stop = float(op.get("stop_loss") or 0.0)
+                    except (TypeError, ValueError):
+                        current_stop = 0.0
+                    try:
+                        quantity = float(op.get("quantity") or 0.0)
+                    except (TypeError, ValueError):
+                        quantity = 0.0
+                    try:
+                        take_profit_value = float(op.get("take_profit") or 0.0)
+                    except (TypeError, ValueError):
+                        take_profit_value = 0.0
+                    side = str(op.get("side", "BUY")).upper()
+                    if (
+                        config.TRAILING_STOP_ENABLED
+                        and entry_price > 0
+                        and price > 0
+                        and op.get("trade_id")
+                    ):
+                        gain_pct = 0.0
+                        candidate_stop = None
+                        updated = False
+                        if side == "BUY":
+                            gain_pct = (price / entry_price) - 1.0
+                            if gain_pct >= config.TRAILING_STOP_TRIGGER:
+                                candidate_stop = max(
+                                    entry_price,
+                                    price * (1 - config.TRAILING_STOP_DISTANCE),
+                                )
+                                if candidate_stop <= 0:
+                                    candidate_stop = None
+                        else:
+                            if price > 0:
+                                gain_pct = (entry_price - price) / entry_price
+                            if gain_pct >= config.TRAILING_STOP_TRIGGER:
+                                candidate_stop = min(
+                                    entry_price,
+                                    price * (1 + config.TRAILING_STOP_DISTANCE),
+                                )
+                                if candidate_stop <= 0:
+                                    candidate_stop = None
+                        if candidate_stop is not None:
+                            if side == "BUY":
+                                if candidate_stop > current_stop * (1 + 1e-6):
+                                    if trade_manager.update_trade(
+                                        op["trade_id"], stop_loss=candidate_stop
+                                    ):
+                                        updated = True
+                            else:
+                                # For SELL trades the stop trails downwards while staying above price
+                                if current_stop == 0.0 or candidate_stop < current_stop * (1 - 1e-6):
+                                    if trade_manager.update_trade(
+                                        op["trade_id"], stop_loss=candidate_stop
+                                    ):
+                                        updated = True
+                        if updated:
+                            current_stop = candidate_stop
+                            op["stop_loss"] = candidate_stop
+                            logger.info(
+                                "Stop-loss de %s movido a %.4f (trailing)",
+                                    op["symbol"],
+                                    candidate_stop,
+                                )
+                    try:
+                        stop_loss_value = float(op.get("stop_loss") or 0.0)
+                    except (TypeError, ValueError):
+                        stop_loss_value = 0.0
+                    try:
                         op_state = TradeState(op.get("state"))
                     except ValueError:
                         op_state = TradeState.PENDING
                     if op_state not in {TradeState.OPEN, TradeState.PARTIALLY_FILLED}:
                         continue
-                    if op["side"] == "BUY":
-                        profit = (price - op["entry_price"]) * op["quantity"]
-                        close = price <= op["stop_loss"] or price >= op["take_profit"]
+                    if side == "BUY":
+                        profit = (price - entry_price) * quantity
+                        close = (
+                            (stop_loss_value and price <= stop_loss_value)
+                            or (take_profit_value and price >= take_profit_value)
+                        )
                     else:
-                        profit = (op["entry_price"] - price) * op["quantity"]
-                        close = price >= op["stop_loss"] or price <= op["take_profit"]
+                        profit = (entry_price - price) * quantity
+                        close = (
+                            (stop_loss_value and price >= stop_loss_value)
+                            or (take_profit_value and price <= take_profit_value)
+                        )
 
                     reason = None
                     if close:
@@ -1235,10 +1320,11 @@ def run():
                         reason = "MAX_DURATION"
 
                     if close:
-                        expected = op["take_profit"] if (
-                            (op["side"] == "BUY" and price >= op["take_profit"]) or
-                            (op["side"] == "SELL" and price <= op["take_profit"])
-                        ) else op["stop_loss"]
+                        if side == "BUY":
+                            target_hit = take_profit_value > 0 and price >= take_profit_value
+                        else:
+                            target_hit = take_profit_value > 0 and price <= take_profit_value
+                        expected = take_profit_value if target_hit else stop_loss_value
                         close_label = reason or ("TP" if profit >= 0 else "SL")
                         closed, exec_price, realized = close_existing_trade(
                             op,
@@ -1270,7 +1356,7 @@ def run():
                 logger.info("All positions closed after reaching daily limit")
                 save_trades()
                 standby_notified = True
-            time.sleep(60)
+            time.sleep(max(1, int(config.LOOP_INTERVAL)))
         except KeyboardInterrupt:
 
             # On manual interrupt, cancel any pending orders and persist trades
