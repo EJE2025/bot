@@ -222,7 +222,7 @@ def calcular_tamano_posicion(
 
 
 def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> float:
-    """Return the desired *invested* capital in USDT for ``symbol``.
+    """Return the desired position notional in USDT for ``symbol``.
 
     When :data:`config.USE_FIXED_POSITION_SIZE` is enabled the function
     short-circuits and returns :data:`config.FIXED_POSITION_SIZE_USDT` without
@@ -248,9 +248,6 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         clamped = max(lower, fixed_size)
         if upper > 0:
             clamped = min(clamped, upper)
-        balance = ctx.get("balance") if ctx else None
-        if balance is not None:
-            clamped = min(clamped, float(balance))
         return clamped
 
     balance = ctx.get("balance")
@@ -274,20 +271,14 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
     if qty is None:
         return 0.0
 
-    leverage = float(getattr(config, "DEFAULT_LEVERAGE", 1.0) or 1.0)
-    if leverage <= 0:
-        leverage = 1.0
-
-    invested = abs(entry_price * qty) / leverage
+    notional = qty * entry_price
     lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
     upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
     if lower > 0:
-        invested = max(invested, lower)
+        notional = max(notional, lower)
     if upper > 0:
-        invested = min(invested, upper)
-    if balance is not None:
-        invested = min(invested, float(balance))
-    return invested
+        notional = min(notional, upper)
+    return notional
 
 
 def risk_reward_ratio(
@@ -417,11 +408,11 @@ def decidir_entrada(
         "atr_multiplier": atr_mult,
     }
     sizing_ctx = {"balance": balance, "risk_usd": risk_usd}
-    invested_usd = position_sizer(symbol, sizing_features, sizing_ctx)
-    if invested_usd <= 0:
+    position_size_usdt = position_sizer(symbol, sizing_features, sizing_ctx)
+    if position_size_usdt <= 0:
         logger.error("[%s] position size below minimum", symbol)
         return None
-    quantity = (invested_usd * leverage) / entry_price
+    quantity = position_size_usdt / entry_price
 
     risk = abs(entry_price - stop_loss)
     risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
@@ -459,7 +450,6 @@ def decidir_entrada(
         .isoformat()
         .replace("+00:00", "Z"),
         "feature_snapshot": feature_snapshot,
-        "invested_value": invested_usd,
     }
 
     modelo_activo = (

@@ -38,73 +38,6 @@ main.container-fluid {
     overflow: hidden;
 }
 
-.chart-body {
-    position: relative;
-    height: 320px;
-    padding-right: 2.8rem;
-}
-
-.pnl-chart-wrapper {
-    position: relative;
-    height: 100%;
-}
-
-.pnl-chart-wrapper canvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-.pnl-scroll {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: -0.85rem;
-    margin: auto 0;
-    width: 2.2rem;
-    padding: 0;
-    background: transparent;
-    -webkit-appearance: slider-vertical;
-    writing-mode: bt-lr;
-}
-
-.pnl-scroll:disabled {
-    opacity: 0.35;
-}
-
-.pnl-scroll:focus {
-    box-shadow: none;
-}
-
-.pnl-scroll::-webkit-slider-runnable-track {
-    width: 6px;
-    background: rgba(63, 81, 181, 0.25);
-    border-radius: 999px;
-}
-
-.pnl-scroll::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
-    background: var(--brand-secondary);
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.9);
-    margin-top: -5px;
-}
-
-.pnl-scroll::-moz-range-track {
-    width: 6px;
-    background: rgba(63, 81, 181, 0.25);
-    border-radius: 999px;
-}
-
-.pnl-scroll::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    background: var(--brand-secondary);
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.9);
-}
-
 .card-header {
     background: rgba(15, 23, 42, 0.04);
     border-bottom: 1px solid rgba(15, 23, 42, 0.08);
@@ -276,16 +209,6 @@ main.container-fluid {
 
     .liquidity-grid {
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    }
-}
-
-@media (max-width: 576px) {
-    .chart-body {
-        padding-right: 2.2rem;
-    }
-
-    .pnl-scroll {
-        right: -0.6rem;
     }
 }
 
