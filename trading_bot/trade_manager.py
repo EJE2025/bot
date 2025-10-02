@@ -61,10 +61,12 @@ def add_trade(trade):
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
+        trade.setdefault("original_quantity", trade.get("quantity"))
         trade.setdefault(
             "open_time",
             datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
+        trade.setdefault("leverage", config.DEFAULT_LEVERAGE)
         trade.setdefault("status", "pending")
         trade.setdefault("state", TradeState.PENDING.value)
         trade.setdefault("timeframe", "short_term")
@@ -128,15 +130,39 @@ def _resolve_exit_price(trade: dict, exit_price: float | None) -> float:
         return 0.0
 
 
+def _trade_leverage(trade: dict) -> float:
+    try:
+        lev = float(trade.get("leverage") or 1.0)
+    except (TypeError, ValueError):
+        lev = 1.0
+    if lev <= 0:
+        return 1.0
+    return lev
+
+
 def _calculate_realized_pnl(trade: dict, quantity: float, exit_price: float) -> float:
     try:
         entry_price = float(trade.get("entry_price") or 0.0)
     except (TypeError, ValueError):
         entry_price = 0.0
+    try:
+        qty = float(quantity or 0.0)
+    except (TypeError, ValueError):
+        qty = 0.0
+    qty = abs(qty)
+    leverage = _trade_leverage(trade)
+    if entry_price <= 0 or qty <= 0:
+        return 0.0
+    invested = abs(entry_price * qty) / leverage
     side = str(trade.get("side", "buy")).lower()
     if side == "buy":
-        return (exit_price - entry_price) * quantity
-    return (entry_price - exit_price) * quantity
+        pnl = (exit_price - entry_price) * qty
+    else:
+        pnl = (entry_price - exit_price) * qty
+    pnl /= leverage
+    if invested > 0:
+        pnl = max(pnl, -invested)
+    return pnl
 
 
 def _ensure_realized_pnl(trade: dict) -> float:
@@ -144,6 +170,53 @@ def _ensure_realized_pnl(trade: dict) -> float:
         return float(trade.get("realized_pnl", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _original_quantity(trade: dict) -> float:
+    quantity_keys = (
+        "requested_quantity",
+        "original_quantity",
+        "initial_quantity",
+        "orig_qty",
+        "quantity_requested",
+        "base_quantity",
+    )
+    for key in quantity_keys:
+        raw = trade.get(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value != 0:
+            return abs(value)
+
+    fallback_keys = ("quantity", "quantity_filled", "executed_quantity")
+    for key in fallback_keys:
+        raw = trade.get(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value != 0:
+            return abs(value)
+
+    return 0.0
+
+
+def _total_invested(trade: dict) -> float:
+    try:
+        entry_price = float(trade.get("entry_price") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    quantity = _original_quantity(trade)
+    if entry_price <= 0 or quantity <= 0:
+        return 0.0
+    leverage = _trade_leverage(trade)
+    return abs(entry_price * quantity) / leverage
 
 
 def update_trade(trade_id, **kwargs):
@@ -236,6 +309,7 @@ def close_trade(
         else:
             trade.setdefault("profit", realized)
             trade["realized_pnl"] = realized
+        trade["invested_value"] = _total_invested(trade)
         trade["status"] = "closed"
         trade["closing"] = False
         trade.setdefault("quantity_remaining", 0.0)

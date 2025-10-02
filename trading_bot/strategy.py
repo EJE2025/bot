@@ -243,9 +243,12 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
 
     if config.USE_FIXED_POSITION_SIZE:
         fixed_size = float(config.FIXED_POSITION_SIZE_USDT)
-        if (config.BOT_MODE or "") == "shadow":
-            return max(fixed_size, config.MIN_POSITION_SIZE_USDT)
-        return fixed_size
+        lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+        upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
+        clamped = max(lower, fixed_size)
+        if upper > 0:
+            clamped = min(clamped, upper)
+        return clamped
 
     balance = ctx.get("balance")
     if balance is None:
@@ -269,8 +272,12 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         return 0.0
 
     notional = qty * entry_price
-    if (config.BOT_MODE or "") == "shadow":
-        return max(notional, config.MIN_POSITION_SIZE_USDT)
+    lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+    upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
+    if lower > 0:
+        notional = max(notional, lower)
+    if upper > 0:
+        notional = min(notional, upper)
     return notional
 
 
