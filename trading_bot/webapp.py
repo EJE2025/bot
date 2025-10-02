@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -16,7 +17,9 @@ try:
 except ImportError:  # SocketIO optional
     SocketIO = None
 
+from trading_bot import config
 from trading_bot.trade_manager import (
+    all_closed_trades,
     all_open_trades,
     close_trade_full,
     close_trade_partial,
@@ -24,6 +27,8 @@ from trading_bot.trade_manager import (
 )
 from trading_bot import liquidity_ws, data
 from trading_bot.history import HISTORY_FILE, FIELDS as HISTORY_FIELDS
+
+logger = logging.getLogger(__name__)
 
 if Flask:
     app = Flask(__name__)
@@ -70,6 +75,74 @@ if Flask:
             trades.append(row)
         return trades
 
+    def _original_quantity(trade: dict[str, Any]) -> float:
+        """Best effort to recover the original filled quantity for a trade."""
+
+        quantity_keys = (
+            "requested_quantity",
+            "original_quantity",
+            "initial_quantity",
+            "orig_qty",
+            "quantity_requested",
+            "base_quantity",
+        )
+        for key in quantity_keys:
+            raw = trade.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value != 0:
+                return abs(value)
+
+        fallback_keys = ("quantity", "quantity_filled", "executed_quantity")
+        for key in fallback_keys:
+            raw = trade.get(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value != 0:
+                return abs(value)
+
+        return 0.0
+
+    def _realized_aggregates() -> tuple[float, float]:
+        """Compute realized balance and PnL from closed trades."""
+
+        realized_balance = 0.0
+        realized_pnl_total = 0.0
+
+        for trade in all_closed_trades():
+            realized = _coerce_float(trade.get("realized_pnl") or trade.get("profit"))
+            realized_pnl_total += realized
+
+            qty = _original_quantity(trade)
+            if qty <= 0:
+                continue
+
+            exit_price = _coerce_float(trade.get("exit_price"))
+            if exit_price > 0:
+                realized_balance += abs(exit_price * qty)
+                continue
+
+            entry_price = _coerce_float(trade.get("entry_price"))
+            if entry_price <= 0:
+                continue
+
+            entry_notional = abs(entry_price * qty)
+            side = str(trade.get("side", "BUY")).upper()
+            if side == "SELL":
+                realized_balance += max(0.0, entry_notional - realized)
+            else:
+                realized_balance += max(0.0, entry_notional + realized)
+
+        return realized_balance, realized_pnl_total
+
     @app.route("/")
     def index():
         return render_template("index.html", current_year=datetime.utcnow().year)
@@ -78,6 +151,20 @@ if Flask:
     def api_trades():
         """Return open trades with current price and unrealized PnL."""
         return jsonify(_trades_with_metrics())
+
+    @app.post("/api/toggle-trading")
+    def api_toggle_trading():
+        """Permite pausar o reanudar el trading automático desde el dashboard."""
+
+        current = bool(getattr(config, "AUTO_TRADE", True))
+        new_status = not current
+        config.AUTO_TRADE = new_status
+        config.MAINTENANCE = not new_status
+        state_label = "habilitado" if new_status else "pausado"
+        logger.warning("Trading %s por solicitud vía dashboard", state_label)
+        payload = {"ok": True, "trading_active": new_status, "status": state_label}
+        _emit("bot_status", {"trading_active": new_status})
+        return jsonify(payload)
 
     def _emit(event: str, payload: Any) -> None:
         if socketio:
@@ -157,6 +244,7 @@ if Flask:
         unrealized_pnl = sum(t["pnl_unrealized"] for t in trades)
         winners = sum(1 for t in trades if t["pnl_unrealized"] > 0)
         losers = sum(1 for t in trades if t["pnl_unrealized"] < 0)
+        realized_balance, realized_pnl_total = _realized_aggregates()
 
         per_symbol: dict[str, dict[str, Any]] = defaultdict(
             lambda: {
@@ -194,10 +282,16 @@ if Flask:
             "total_exposure": total_exposure,
             "gross_notional": gross_notional,
             "unrealized_pnl": unrealized_pnl,
+            "realized_balance": realized_balance,
+            "realized_pnl": realized_pnl_total,
             "winning_positions": winners,
             "losing_positions": losers,
             "win_rate": win_rate,
             "per_symbol": per_symbol_list,
+            "trading_active": bool(
+                getattr(config, "AUTO_TRADE", True)
+                and not getattr(config, "MAINTENANCE", False)
+            ),
         }
         return jsonify(payload)
 

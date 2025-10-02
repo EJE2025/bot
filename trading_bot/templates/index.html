@@ -16,6 +16,10 @@
             </a>
             <div class="d-flex align-items-center gap-3">
                 <span class="badge badge-status bg-warning text-dark" id="connectionStatus">Sincronizando…</span>
+                <button class="btn btn-sm btn-warning" id="toggleTradeBtn">
+                    <i class="bi bi-pause-circle"></i>
+                    Pausar bot
+                </button>
                 <button class="btn btn-sm btn-outline-light" id="refreshTradesBtn">
                     <i class="bi bi-arrow-repeat"></i>
                     Actualizar ahora
@@ -61,6 +65,27 @@
                         <div class="metric-label">Win rate</div>
                         <div class="metric-value" id="metricWinRate">0%</div>
                         <div class="metric-delta text-muted">Operaciones en verde vs. en rojo</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3 mt-1">
+            <div class="col-12 col-md-6 col-xl-3">
+                <div class="card metric-card h-100">
+                    <div class="card-body">
+                        <div class="metric-label">Saldo realizado</div>
+                        <div class="metric-value" id="metricRealizedBalance">0.00</div>
+                        <div class="metric-delta text-muted">Capital recuperado de operaciones cerradas</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-md-6 col-xl-3">
+                <div class="card metric-card h-100">
+                    <div class="card-body">
+                        <div class="metric-label">PnL realizado</div>
+                        <div class="metric-value" id="metricRealizedPnL">0.00</div>
+                        <div class="metric-delta text-muted">Ganancias y pérdidas materializadas</div>
                     </div>
                 </div>
             </div>

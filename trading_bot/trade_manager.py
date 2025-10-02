@@ -242,6 +242,12 @@ def close_trade(
         trade["quantity"] = trade.get("quantity_remaining", 0.0)
         closed_trades.append(trade)
         log_history("close", trade)
+        try:
+            from trading_bot import history
+
+            history.append_trade(trade)
+        except Exception as exc:  # pragma: no cover - defensive persistence
+            logger.error("Error al guardar historial CSV: %s", exc)
         return trade
 
 
