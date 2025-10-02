@@ -26,11 +26,11 @@ const state = {
   trades: [],
   summary: null,
   history: [],
-  liquidity: {},
   symbolFilter: '',
   pnlSeries: [],
   tradingActive: true,
   connectionHealthy: true,
+  sessionId: null,
 };
 
 let pnlChart = null;
@@ -167,7 +167,7 @@ function ensureChart() {
       labels: [],
       datasets: [
         {
-          label: 'PnL no realizado',
+          label: 'PnL total',
           data: [],
           borderColor: '#2b6cb0',
           backgroundColor: 'rgba(66, 153, 225, 0.25)',
@@ -219,13 +219,35 @@ function ensureChart() {
   return pnlChart;
 }
 
+function resetPnlSeries() {
+  state.pnlSeries = [];
+  const chart = ensureChart();
+  if (!chart) return;
+  chart.data.labels = [];
+  chart.data.datasets[0].data = [];
+  chart.update('none');
+}
+
+function handleSession(summary) {
+  if (!summary) return;
+  const newSessionId = summary.session_id || null;
+  const openPositions = Number(summary.total_positions || 0);
+  const sessionChanged = newSessionId && newSessionId !== state.sessionId;
+  if (openPositions === 0 && (sessionChanged || state.sessionId === null)) {
+    resetPnlSeries();
+  }
+  state.sessionId = newSessionId;
+}
+
 function updatePnlSeries(summary) {
   if (!summary) return;
   const chart = ensureChart();
   if (!chart) return;
 
   const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString();
-  const currentValue = Number(summary.unrealized_pnl) || 0;
+  const realized = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
+  const unrealized = Number(summary.unrealized_pnl ?? 0);
+  const currentValue = Number(summary.total_pnl ?? realized + unrealized) || 0;
 
   state.pnlSeries.push({ label: timestampLabel, value: currentValue });
   if (state.pnlSeries.length > MAX_POINTS) {
@@ -241,7 +263,8 @@ function renderSummary(summary) {
   if (!summary) return;
   document.getElementById('metricPositions').textContent = summary.total_positions;
   document.getElementById('metricPnL').textContent = formatPnL(summary.unrealized_pnl);
-  document.getElementById('metricExposure').textContent = formatNumber(summary.gross_notional);
+  const totalInvested = Number(summary.total_invested ?? summary.total_exposure ?? 0);
+  document.getElementById('metricExposure').textContent = formatNumber(totalInvested);
   document.getElementById('metricWinRate').textContent = formatNumber(summary.win_rate, percentFormatter);
   const realizedBalance = document.getElementById('metricRealizedBalance');
   if (realizedBalance) {
@@ -249,7 +272,8 @@ function renderSummary(summary) {
   }
   const realizedPnL = document.getElementById('metricRealizedPnL');
   if (realizedPnL) {
-    realizedPnL.textContent = formatPnL(summary.realized_pnl);
+    const realizedPnLValue = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
+    realizedPnL.textContent = formatPnL(realizedPnLValue);
   }
   document.getElementById('lastUpdated').textContent = new Date(summary.generated_at).toLocaleTimeString();
 
@@ -265,7 +289,7 @@ function renderSummary(summary) {
     const pnlClass = item.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
     const exposure = formatNumber(item.exposure, quantityFormatter);
     const pnl = formatPnL(item.unrealized_pnl);
-    const notional = formatNumber(item.notional_value);
+    const invested = formatNumber(item.invested_value ?? 0);
     const li = document.createElement('li');
     li.className = 'list-group-item d-flex flex-column flex-sm-row align-items-sm-center justify-content-between';
     li.innerHTML = `
@@ -274,8 +298,8 @@ function renderSummary(summary) {
         <span class="badge bg-dark-subtle text-dark">${item.positions} posiciones</span>
       </div>
       <div class="d-flex flex-wrap gap-3">
-        <span><strong>Exposición:</strong> ${exposure}</span>
-        <span><strong>Notional:</strong> ${notional}</span>
+        <span><strong>Cantidad:</strong> ${exposure}</span>
+        <span><strong>Invertido:</strong> ${invested}</span>
         <span class="${pnlClass}"><strong>PnL:</strong> ${pnl}</span>
       </div>`;
     list.appendChild(li);
@@ -336,60 +360,6 @@ function renderTrades() {
   attachTradeRowEvents();
 }
 
-function renderLiquidity() {
-  const container = document.getElementById('liquidityContainer');
-  if (!container) return;
-
-  const entries = Object.entries(state.liquidity || {});
-  if (entries.length === 0) {
-    container.innerHTML = '<div class="text-muted text-center py-4">No hay datos de liquidez disponibles.</div>';
-    return;
-  }
-
-  const html = entries
-    .map(([symbol, book]) => {
-      const bids = (book.bids || []).slice(0, 5);
-      const asks = (book.asks || []).slice(0, 5);
-      const rows = [];
-      for (let i = 0; i < Math.max(bids.length, asks.length); i += 1) {
-        const bid = bids[i] || ['—', '—'];
-        const ask = asks[i] || ['—', '—'];
-        rows.push(`
-          <tr>
-            <td class="text-success">${formatNumber(bid[0], priceFormatter)}</td>
-            <td class="text-success">${formatNumber(bid[1], quantityFormatter)}</td>
-            <td class="text-danger">${formatNumber(ask[0], priceFormatter)}</td>
-            <td class="text-danger">${formatNumber(ask[1], quantityFormatter)}</td>
-          </tr>`);
-      }
-      return `
-        <div class="orderbook-card">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <span class="symbol-badge"><i class="bi bi-lightning"></i>${symbol}</span>
-            <span class="badge bg-secondary-subtle text-dark">Top 5 niveles</span>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm mb-0">
-              <thead>
-                <tr>
-                  <th class="text-success">Bid</th>
-                  <th class="text-success">Cantidad</th>
-                  <th class="text-danger">Ask</th>
-                  <th class="text-danger">Cantidad</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>`;
-    })
-    .join('');
-
-  container.innerHTML = `<div class="liquidity-grid">${html}</div>`;
-}
-
 function renderHistory() {
   const container = document.getElementById('historyList');
   if (!container) return;
@@ -429,16 +399,14 @@ async function refreshDashboard(manual = false) {
       setStatus('Actualizando…', 'info');
     }
     clearAlert();
-    const [trades, summary, liquidity, history] = await Promise.all([
+    const [trades, summary, history] = await Promise.all([
       fetchJSON('/api/trades'),
       fetchJSON('/api/summary'),
-      fetchJSON('/api/liquidity'),
-      fetchJSON('/api/history?limit=15').catch(() => []),
+      fetchJSON('/api/history?limit=50').catch(() => []),
     ]);
 
     state.trades = trades;
     state.summary = summary;
-    state.liquidity = liquidity;
     state.history = history;
     state.connectionHealthy = true;
 
@@ -448,9 +416,10 @@ async function refreshDashboard(manual = false) {
         : state.tradingActive;
     updateTradingControls(tradingActive);
 
+    handleSession(summary);
+
     renderTrades();
     renderSummary(summary);
-    renderLiquidity();
     renderHistory();
     updatePnlSeries(summary);
   } catch (error) {

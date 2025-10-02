@@ -25,7 +25,7 @@ from trading_bot.trade_manager import (
     close_trade_partial,
     get_open_trade,
 )
-from trading_bot import liquidity_ws, data
+from trading_bot import data
 from trading_bot.history import HISTORY_FILE, FIELDS as HISTORY_FIELDS
 
 logger = logging.getLogger(__name__)
@@ -36,12 +36,26 @@ if Flask:
 
     _trade_locks: dict[str, threading.Lock] = {}
     _locks_lock = threading.Lock()
+    _session_lock = threading.Lock()
+    _session_started_at = datetime.utcnow()
+    _session_has_positions = False
 
     def _get_trade_lock(trade_id: str) -> threading.Lock:
         with _locks_lock:
             if trade_id not in _trade_locks:
                 _trade_locks[trade_id] = threading.Lock()
             return _trade_locks[trade_id]
+
+    def _session_identifier(has_positions: bool) -> str:
+        global _session_started_at, _session_has_positions
+        with _session_lock:
+            if not has_positions and _session_has_positions:
+                _session_started_at = datetime.utcnow()
+            elif _session_started_at is None:
+                _session_started_at = datetime.utcnow()
+            _session_has_positions = has_positions
+            started = _session_started_at or datetime.utcnow()
+            return started.replace(microsecond=0).isoformat() + "Z"
 
     def _coerce_float(value: Any) -> float:
         try:
@@ -54,94 +68,62 @@ if Flask:
         for trade in all_open_trades():
             sym = trade.get("symbol")
             entry = _coerce_float(trade.get("entry_price", 0))
-            qty = _coerce_float(trade.get("quantity_remaining", trade.get("quantity", 0)))
-            side = str(trade.get("side", "BUY")).upper()
-            current_price = data.get_current_price_ticker(sym)
-            if not current_price:
-                current_price = entry
-            pnl = (
-                (current_price - entry) * qty
-                if side == "BUY"
-                else (entry - current_price) * qty
+            qty = abs(
+                _coerce_float(
+                    trade.get("quantity_remaining", trade.get("quantity", 0))
+                )
             )
+            side = str(trade.get("side", "BUY")).upper()
+            current_price_raw = data.get_current_price_ticker(sym)
+            if current_price_raw is None:
+                current_price_raw = entry
+            current_price = _coerce_float(current_price_raw)
+            leverage = 1.0
+            try:
+                leverage = float(trade.get("leverage") or 1.0)
+            except (TypeError, ValueError):
+                leverage = 1.0
+            if leverage <= 0:
+                leverage = 1.0
+            invested_value = 0.0
+            if entry > 0 and qty > 0:
+                invested_value = abs(entry * qty) / leverage
+            if side == "BUY":
+                pnl = (current_price - entry) * qty / leverage
+            else:
+                pnl = (entry - current_price) * qty / leverage
+            if invested_value > 0:
+                pnl = max(pnl, -invested_value)
             row = dict(trade)
             row["entry_price"] = entry
             row["quantity"] = qty
             row["quantity_remaining"] = qty
             row["current_price"] = current_price
             row["pnl_unrealized"] = pnl
-            row["notional_value"] = abs(entry * qty)
+            row["invested_value"] = invested_value
             row["realized_pnl"] = _coerce_float(trade.get("realized_pnl"))
+            row["leverage"] = leverage
             trades.append(row)
         return trades
 
-    def _original_quantity(trade: dict[str, Any]) -> float:
-        """Best effort to recover the original filled quantity for a trade."""
-
-        quantity_keys = (
-            "requested_quantity",
-            "original_quantity",
-            "initial_quantity",
-            "orig_qty",
-            "quantity_requested",
-            "base_quantity",
-        )
-        for key in quantity_keys:
-            raw = trade.get(key)
-            if raw is None:
-                continue
-            try:
-                value = float(raw)
-            except (TypeError, ValueError):
-                continue
-            if value != 0:
-                return abs(value)
-
-        fallback_keys = ("quantity", "quantity_filled", "executed_quantity")
-        for key in fallback_keys:
-            raw = trade.get(key)
-            if raw is None:
-                continue
-            try:
-                value = float(raw)
-            except (TypeError, ValueError):
-                continue
-            if value != 0:
-                return abs(value)
-
-        return 0.0
-
-    def _realized_aggregates() -> tuple[float, float]:
-        """Compute realized balance and PnL from closed trades."""
+    def _realized_aggregates() -> tuple[float, float, int, int]:
+        """Compute realized balance, PnL and win/loss counts from closed trades."""
 
         realized_balance = 0.0
         realized_pnl_total = 0.0
+        winners = 0
+        losers = 0
 
         for trade in all_closed_trades():
             realized = _coerce_float(trade.get("realized_pnl") or trade.get("profit"))
             realized_pnl_total += realized
+            if realized > 0:
+                realized_balance += realized
+                winners += 1
+            elif realized < 0:
+                losers += 1
 
-            qty = _original_quantity(trade)
-            if qty <= 0:
-                continue
-
-            exit_price = _coerce_float(trade.get("exit_price"))
-            if exit_price > 0:
-                realized_balance += abs(exit_price * qty)
-                continue
-
-            entry_price = _coerce_float(trade.get("entry_price"))
-            if entry_price <= 0:
-                continue
-
-            entry_notional = abs(entry_price * qty)
-            side = str(trade.get("side", "BUY")).upper()
-            if side == "SELL":
-                realized_balance += max(0.0, entry_notional - realized)
-            else:
-                realized_balance += max(0.0, entry_notional + realized)
-
-        return realized_balance, realized_pnl_total
+        return realized_balance, realized_pnl_total, winners, losers
 
     @app.route("/")
     def index():
@@ -239,12 +221,18 @@ if Flask:
         """Aggregate metrics that power the dashboard widgets."""
         trades = _trades_with_metrics()
         total_positions = len(trades)
-        total_exposure = sum(abs(t["quantity_remaining"]) for t in trades)
-        gross_notional = sum(t["notional_value"] for t in trades)
+        total_quantity = sum(abs(t["quantity_remaining"]) for t in trades)
+        total_invested = sum(t["invested_value"] for t in trades)
         unrealized_pnl = sum(t["pnl_unrealized"] for t in trades)
-        winners = sum(1 for t in trades if t["pnl_unrealized"] > 0)
-        losers = sum(1 for t in trades if t["pnl_unrealized"] < 0)
-        realized_balance, realized_pnl_total = _realized_aggregates()
+        open_winners = sum(1 for t in trades if t["pnl_unrealized"] > 0)
+        open_losers = sum(1 for t in trades if t["pnl_unrealized"] < 0)
+        (
+            realized_balance,
+            realized_pnl_total,
+            closed_winners,
+            closed_losers,
+        ) = _realized_aggregates()
+        session_id = _session_identifier(total_positions > 0)
 
         per_symbol: dict[str, dict[str, Any]] = defaultdict(
             lambda: {
@@ -252,7 +240,7 @@ if Flask:
                 "positions": 0,
                 "exposure": 0.0,
                 "unrealized_pnl": 0.0,
-                "notional_value": 0.0,
+                "invested_value": 0.0,
             }
         )
 
@@ -263,31 +251,37 @@ if Flask:
             entry["positions"] += 1
             entry["exposure"] += abs(trade["quantity_remaining"])
             entry["unrealized_pnl"] += trade["pnl_unrealized"]
-            entry["notional_value"] += trade["notional_value"]
+            entry["invested_value"] += trade["invested_value"]
 
         per_symbol_list = sorted(
             per_symbol.values(),
-            key=lambda item: item["notional_value"],
+            key=lambda item: item["invested_value"],
             reverse=True,
         )
 
         win_rate = 0.0
-        deciding = winners + losers
+        total_winners = open_winners + closed_winners
+        total_losers = open_losers + closed_losers
+        deciding = total_winners + total_losers
         if deciding:
-            win_rate = winners / deciding
+            win_rate = total_winners / deciding
 
         payload = {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "total_positions": total_positions,
-            "total_exposure": total_exposure,
-            "gross_notional": gross_notional,
+            "total_exposure": total_invested,
+            "total_invested": total_invested,
+            "total_quantity": total_quantity,
             "unrealized_pnl": unrealized_pnl,
             "realized_balance": realized_balance,
             "realized_pnl": realized_pnl_total,
-            "winning_positions": winners,
-            "losing_positions": losers,
+            "realized_pnl_total": realized_pnl_total,
+            "total_pnl": unrealized_pnl + realized_pnl_total,
+            "winning_positions": open_winners,
+            "losing_positions": open_losers,
             "win_rate": win_rate,
             "per_symbol": per_symbol_list,
+            "session_id": session_id,
             "trading_active": bool(
                 getattr(config, "AUTO_TRADE", True)
                 and not getattr(config, "MAINTENANCE", False)
@@ -299,9 +293,9 @@ if Flask:
     def api_history():
         """Return the latest closed trades from the CSV history file."""
         try:
-            limit = int(request.args.get("limit", 20))
+            limit = int(request.args.get("limit", 50))
         except (TypeError, ValueError):
-            limit = 20
+            limit = 50
         limit = max(1, min(limit, 200))
 
         rows: list[dict[str, Any]] = []
@@ -333,22 +327,6 @@ if Flask:
             )
 
         return jsonify(formatted_rows)
-
-    @app.route("/api/liquidity")
-    def api_liquidity():
-        """Return current liquidity order book data."""
-        raw = liquidity_ws.get_liquidity()
-        converted: dict[str, dict[str, list[list[float]]]] = {}
-        for sym, book in raw.items():
-            bids_dict = book.get("bids", {})
-            asks_dict = book.get("asks", {})
-            bids = sorted(bids_dict.items(), key=lambda x: x[0], reverse=True)
-            asks = sorted(asks_dict.items(), key=lambda x: x[0])
-            converted[sym] = {
-                "bids": [[float(p), float(q)] for p, q in bids],
-                "asks": [[float(p), float(q)] for p, q in asks],
-            }
-        return jsonify(converted)
 
     def start_dashboard(host: str, port: int):
         """Run the Flask dashboard in real-time with trade data."""

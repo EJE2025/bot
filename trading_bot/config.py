@@ -194,8 +194,13 @@ HIT_RATE_ROLLING_WARN = _float_env("HIT_RATE_ROLLING_WARN", 0.45, clamp=(0.0, 1.
 HIT_RATE_ROLLING_CRIT = _float_env("HIT_RATE_ROLLING_CRIT", 0.40, clamp=(0.0, 1.0))
 # Minimum notional enforced by the strategy regardless of exchange rules.
 MIN_POSITION_SIZE_USDT = _positive_float_env(
-    "MIN_POSITION_SIZE_USDT", 10.0, minimum=0.0
+    "MIN_POSITION_SIZE_USDT", 5.0, minimum=0.0
 )
+MAX_POSITION_SIZE_USDT = _positive_float_env(
+    "MAX_POSITION_SIZE_USDT", 20.0, minimum=0.0
+)
+if MAX_POSITION_SIZE_USDT < MIN_POSITION_SIZE_USDT:
+    MAX_POSITION_SIZE_USDT = MIN_POSITION_SIZE_USDT
 # Use a constant position size expressed in USDT when ``True``.
 USE_FIXED_POSITION_SIZE = _bool_env("USE_FIXED_POSITION_SIZE", False)
 # Fixed position notional in USDT when :data:`USE_FIXED_POSITION_SIZE` is enabled.
