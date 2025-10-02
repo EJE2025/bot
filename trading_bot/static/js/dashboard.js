@@ -243,6 +243,14 @@ function renderSummary(summary) {
   document.getElementById('metricPnL').textContent = formatPnL(summary.unrealized_pnl);
   document.getElementById('metricExposure').textContent = formatNumber(summary.gross_notional);
   document.getElementById('metricWinRate').textContent = formatNumber(summary.win_rate, percentFormatter);
+  const realizedBalance = document.getElementById('metricRealizedBalance');
+  if (realizedBalance) {
+    realizedBalance.textContent = formatNumber(summary.realized_balance);
+  }
+  const realizedPnL = document.getElementById('metricRealizedPnL');
+  if (realizedPnL) {
+    realizedPnL.textContent = formatPnL(summary.realized_pnl);
+  }
   document.getElementById('lastUpdated').textContent = new Date(summary.generated_at).toLocaleTimeString();
 
   const list = document.getElementById('symbolBreakdown');
