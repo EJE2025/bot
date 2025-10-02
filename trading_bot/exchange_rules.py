@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -81,6 +82,8 @@ def quantize_qty(qty: float, step: float) -> float:
 def min_notional_usdt(symbol: str, rules: SymbolRules) -> float:
     """Return the minimum notional enforced for ``symbol`` in USDT."""
 
+    if os.getenv("TEST_MODE") == "1" or getattr(config, "TEST_MODE", False):
+        return float(rules.min_notional or 0.0)
     if not config.ENFORCE_EXCHANGE_MIN_NOTIONAL:
         return 0.0
     return float(rules.min_notional or 0.0)

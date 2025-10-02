@@ -122,6 +122,8 @@ BACKTEST_DATA_PATH = os.getenv("BACKTEST_DATA_PATH")
 # ===== Order lifecycle & timeouts =====
 PENDING_FILL_TIMEOUT_S = _int_env("PENDING_FILL_TIMEOUT_S", 30, clamp=(1, 600))
 RECONCILE_INTERVAL_S = _int_env("RECONCILE_INTERVAL_S", 5, clamp=(1, 300))
+# Intervalo principal del loop de trading en segundos.
+LOOP_INTERVAL = _int_env("LOOP_INTERVAL", 60, clamp=(1, 3600))
 
 # ===== WebSocket resilience =====
 WS_PING_INTERVAL_S = _int_env("WS_PING_INTERVAL_S", 25, clamp=(5, 120))
@@ -200,6 +202,11 @@ USE_FIXED_POSITION_SIZE = _bool_env("USE_FIXED_POSITION_SIZE", False)
 FIXED_POSITION_SIZE_USDT = _positive_float_env(
     "FIXED_POSITION_SIZE_USDT", 10.0, minimum=0.0
 )
+
+# ===== Gestión dinámica de stop-loss =====
+TRAILING_STOP_ENABLED = _bool_env("TRAILING_STOP_ENABLED", True)
+TRAILING_STOP_TRIGGER = _float_env("TRAILING_STOP_TRIGGER", 0.02, clamp=(0.0, 1.0))
+TRAILING_STOP_DISTANCE = _float_env("TRAILING_STOP_DISTANCE", 0.01, clamp=(0.0005, 0.5))
 # Whether to honour the exchange ``minNotional``/minimum order size constraints.
 ENFORCE_EXCHANGE_MIN_NOTIONAL = _bool_env(
     "ENFORCE_EXCHANGE_MIN_NOTIONAL", True

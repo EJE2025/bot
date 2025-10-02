@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -16,6 +17,7 @@ try:
 except ImportError:  # SocketIO optional
     SocketIO = None
 
+from trading_bot import config
 from trading_bot.trade_manager import (
     all_open_trades,
     close_trade_full,
@@ -24,6 +26,8 @@ from trading_bot.trade_manager import (
 )
 from trading_bot import liquidity_ws, data
 from trading_bot.history import HISTORY_FILE, FIELDS as HISTORY_FIELDS
+
+logger = logging.getLogger(__name__)
 
 if Flask:
     app = Flask(__name__)
@@ -78,6 +82,20 @@ if Flask:
     def api_trades():
         """Return open trades with current price and unrealized PnL."""
         return jsonify(_trades_with_metrics())
+
+    @app.post("/api/toggle-trading")
+    def api_toggle_trading():
+        """Permite pausar o reanudar el trading automático desde el dashboard."""
+
+        current = bool(getattr(config, "AUTO_TRADE", True))
+        new_status = not current
+        config.AUTO_TRADE = new_status
+        config.MAINTENANCE = not new_status
+        state_label = "habilitado" if new_status else "pausado"
+        logger.warning("Trading %s por solicitud vía dashboard", state_label)
+        payload = {"ok": True, "trading_active": new_status, "status": state_label}
+        _emit("bot_status", {"trading_active": new_status})
+        return jsonify(payload)
 
     def _emit(event: str, payload: Any) -> None:
         if socketio:
@@ -198,6 +216,10 @@ if Flask:
             "losing_positions": losers,
             "win_rate": win_rate,
             "per_symbol": per_symbol_list,
+            "trading_active": bool(
+                getattr(config, "AUTO_TRADE", True)
+                and not getattr(config, "MAINTENANCE", False)
+            ),
         }
         return jsonify(payload)
 

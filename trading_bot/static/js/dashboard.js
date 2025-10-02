@@ -29,6 +29,8 @@ const state = {
   liquidity: {},
   symbolFilter: '',
   pnlSeries: [],
+  tradingActive: true,
+  connectionHealthy: true,
 };
 
 let pnlChart = null;
@@ -50,8 +52,28 @@ async function fetchJSON(url) {
 
 function setStatus(label, variant) {
   const badge = document.getElementById('connectionStatus');
+  if (!badge) return;
   badge.textContent = label;
   badge.className = `badge badge-status bg-${variant}`;
+}
+
+function updateTradingControls(isActive) {
+  const toggleBtn = document.getElementById('toggleTradeBtn');
+  if (typeof isActive === 'boolean') {
+    state.tradingActive = isActive;
+    if (state.connectionHealthy) {
+      const label = isActive ? 'En vivo' : 'Pausado';
+      const variant = isActive ? 'success' : 'secondary';
+      setStatus(label, variant);
+    }
+    if (toggleBtn) {
+      toggleBtn.disabled = !state.connectionHealthy;
+      toggleBtn.className = `btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}`;
+      toggleBtn.innerHTML = isActive
+        ? '<i class="bi bi-pause-circle"></i> Pausar bot'
+        : '<i class="bi bi-play-circle"></i> Reanudar bot';
+    }
+  }
 }
 
 function showAlert(message, variant = 'danger') {
@@ -410,16 +432,24 @@ async function refreshDashboard(manual = false) {
     state.summary = summary;
     state.liquidity = liquidity;
     state.history = history;
+    state.connectionHealthy = true;
+
+    const tradingActive =
+      summary && Object.prototype.hasOwnProperty.call(summary, 'trading_active')
+        ? Boolean(summary.trading_active)
+        : state.tradingActive;
+    updateTradingControls(tradingActive);
 
     renderTrades();
     renderSummary(summary);
     renderLiquidity();
     renderHistory();
     updatePnlSeries(summary);
-    setStatus('En vivo', 'success');
   } catch (error) {
     console.error(error);
     showAlert('No se pudieron sincronizar los datos del bot. Reintentaremos automáticamente.', 'danger');
+    state.connectionHealthy = false;
+    updateTradingControls(state.tradingActive);
     setStatus('Desconectado', 'danger');
   }
 }
@@ -436,6 +466,28 @@ function attachEvents() {
   const refreshBtn = document.getElementById('refreshTradesBtn');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => refreshDashboard(true));
+  }
+
+  const toggleBtn = document.getElementById('toggleTradeBtn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', async () => {
+      toggleBtn.disabled = true;
+      try {
+        const response = await fetch('/api/toggle-trading', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'No se pudo cambiar el estado del bot');
+        }
+        state.connectionHealthy = true;
+        updateTradingControls(Boolean(data.trading_active));
+        showToast(`Trading ${data.trading_active ? 'reanudado' : 'pausado'} correctamente`, 'info');
+      } catch (error) {
+        console.error(error);
+        showToast(error.message || 'Error al cambiar el estado del bot', 'danger');
+      } finally {
+        updateTradingControls(state.tradingActive);
+      }
+    });
   }
 
   const modalElement = document.getElementById('partialCloseModal');
@@ -589,6 +641,12 @@ function connectSocket() {
   socket.on('trade_closed', ({ trade }) => {
     if (trade) {
       removeTradeFromState(getTradeId(trade));
+    }
+  });
+  socket.on('bot_status', ({ trading_active: tradingActive }) => {
+    if (typeof tradingActive === 'boolean') {
+      state.connectionHealthy = true;
+      updateTradingControls(Boolean(tradingActive));
     }
   });
 }
