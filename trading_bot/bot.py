@@ -1248,6 +1248,7 @@ def run():
                         gain_pct = 0.0
                         candidate_stop = None
                         applied_stop = None
+
                         if side == "BUY":
                             gain_pct = (price / entry_price) - 1.0
                             if gain_pct >= config.TRAILING_STOP_TRIGGER:
@@ -1274,12 +1275,14 @@ def run():
                                         op["trade_id"], stop_loss=candidate_stop
                                     ):
                                         applied_stop = candidate_stop
+
                             else:
                                 # For SELL trades the stop trails downwards while staying above price
                                 if current_stop == 0.0 or candidate_stop < current_stop * (1 - 1e-6):
                                     if trade_manager.update_trade(
                                         op["trade_id"], stop_loss=candidate_stop
                                     ):
+
                                         applied_stop = candidate_stop
                         if applied_stop is not None:
                             current_stop = applied_stop
