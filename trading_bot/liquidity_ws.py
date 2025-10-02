@@ -219,7 +219,7 @@ class DualExchangeLiquidityStream:
 
     async def _bitget_listener(self, symbols: Iterable[str]):
         subs = [{"op": "subscribe", "args": [f"books{DEPTH}:{format_bitget_stream_symbol(s)}"]} for s in symbols]
-        url = "wss://ws.bitget.com/mix/v1/stream"
+        url = "wss://ws.bitgetapi.com/mix/v1/stream"
         backoff = config.WS_BACKOFF_MIN_S
         while not self._stop_event.is_set():
             try:
