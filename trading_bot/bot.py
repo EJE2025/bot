@@ -1247,6 +1247,7 @@ def run():
                     ):
                         gain_pct = 0.0
                         candidate_stop = None
+                        updated = False
                         if side == "BUY":
                             gain_pct = (price / entry_price) - 1.0
                             if gain_pct >= config.TRAILING_STOP_TRIGGER:
@@ -1267,7 +1268,6 @@ def run():
                                 if candidate_stop <= 0:
                                     candidate_stop = None
                         if candidate_stop is not None:
-                            updated = False
                             if side == "BUY":
                                 if candidate_stop > current_stop * (1 + 1e-6):
                                     if trade_manager.update_trade(
