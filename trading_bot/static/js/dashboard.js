@@ -1,5 +1,6 @@
 const REFRESH_INTERVAL = 10000;
-const MAX_POINTS = 60;
+const MAX_VIEW_POINTS = 60;
+const MAX_SERIES_POINTS = 500;
 
 const numberFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -28,15 +29,23 @@ const state = {
   history: [],
   symbolFilter: '',
   pnlSeries: [],
+  sessionBaselines: {
+    realized_balance: 0,
+    realized_pnl_total: 0,
+    total_pnl: 0,
+  },
   tradingActive: true,
   connectionHealthy: true,
   sessionId: null,
+  pnlViewportOffset: 0,
+  pnlViewportManual: false,
 };
 
 let pnlChart = null;
 let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
+let pnlScroll = null;
 
 function getTradeId(trade) {
   return trade.trade_id || trade.id || trade.uuid;
@@ -136,10 +145,11 @@ function formatNumber(value, formatter = numberFormatter) {
 }
 
 function formatPnL(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) {
     return '—';
   }
+  const numeric = normalizeBaselineDelta(raw);
   const prefix = numeric > 0 ? '+' : '';
   return `${prefix}${numberFormatter.format(numeric)}`;
 }
@@ -151,6 +161,14 @@ function formatDate(value) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function normalizeBaselineDelta(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.abs(numeric) < 1e-8 ? 0 : numeric;
 }
 
 function ensureChart() {
@@ -221,10 +239,58 @@ function ensureChart() {
 
 function resetPnlSeries() {
   state.pnlSeries = [];
+  state.pnlViewportOffset = 0;
+  state.pnlViewportManual = false;
   const chart = ensureChart();
   if (!chart) return;
   chart.data.labels = [];
   chart.data.datasets[0].data = [];
+  chart.update('none');
+  updatePnlSlider();
+}
+
+function getPnlScroll() {
+  if (!pnlScroll) {
+    pnlScroll = document.getElementById('pnlScroll');
+  }
+  return pnlScroll;
+}
+
+function updatePnlSlider() {
+  const slider = getPnlScroll();
+  if (!slider) return;
+  const total = state.pnlSeries.length;
+  const windowSize = Math.min(MAX_VIEW_POINTS, total);
+  const maxOffset = Math.max(0, total - windowSize);
+  slider.max = String(maxOffset);
+  slider.disabled = maxOffset === 0;
+  if (maxOffset === 0) {
+    state.pnlViewportOffset = 0;
+    state.pnlViewportManual = false;
+  }
+  const desiredValue = state.pnlViewportManual ? Math.min(state.pnlViewportOffset, maxOffset) : 0;
+  if (Number(slider.value) !== desiredValue) {
+    slider.value = String(desiredValue);
+  }
+}
+
+function applyPnlViewport() {
+  const chart = ensureChart();
+  if (!chart) return;
+  const total = state.pnlSeries.length;
+  if (total === 0) {
+    chart.data.labels = [];
+    chart.data.datasets[0].data = [];
+    chart.update('none');
+    return;
+  }
+  const windowSize = Math.min(MAX_VIEW_POINTS, total);
+  const maxOffset = Math.max(0, total - windowSize);
+  const offset = Math.min(state.pnlViewportOffset, maxOffset);
+  const startIndex = Math.max(0, total - windowSize - offset);
+  const visible = state.pnlSeries.slice(startIndex, startIndex + windowSize);
+  chart.data.labels = visible.map((item) => item.label);
+  chart.data.datasets[0].data = visible.map((item) => item.value);
   chart.update('none');
 }
 
@@ -233,8 +299,27 @@ function handleSession(summary) {
   const newSessionId = summary.session_id || null;
   const openPositions = Number(summary.total_positions || 0);
   const sessionChanged = newSessionId && newSessionId !== state.sessionId;
+  const realizedBaseline = Number(summary.realized_balance ?? 0);
+  const realizedTotalBaseline = Number(
+    summary.realized_pnl_total ?? summary.realized_pnl ?? 0,
+  );
+  const totalBaseline = Number(
+    summary.total_pnl ?? realizedTotalBaseline + Number(summary.unrealized_pnl ?? 0),
+  );
   if (openPositions === 0 && (sessionChanged || state.sessionId === null)) {
+    state.sessionBaselines = {
+      realized_balance: realizedBaseline,
+      realized_pnl_total: realizedTotalBaseline,
+      total_pnl: totalBaseline,
+    };
     resetPnlSeries();
+  }
+  if (openPositions > 0 && (state.sessionId === null || sessionChanged)) {
+    state.sessionBaselines = {
+      realized_balance: realizedBaseline,
+      realized_pnl_total: realizedTotalBaseline,
+      total_pnl: totalBaseline,
+    };
   }
   state.sessionId = newSessionId;
 }
@@ -245,18 +330,29 @@ function updatePnlSeries(summary) {
   if (!chart) return;
 
   const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString();
-  const realized = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
+  const realizedRaw = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
-  const currentValue = Number(summary.total_pnl ?? realized + unrealized) || 0;
+  const totalRaw = Number(summary.total_pnl ?? realizedRaw + unrealized) || 0;
+  const adjustedTotal = normalizeBaselineDelta(
+    totalRaw - (state.sessionBaselines.total_pnl || 0),
+  );
 
-  state.pnlSeries.push({ label: timestampLabel, value: currentValue });
-  if (state.pnlSeries.length > MAX_POINTS) {
+  state.pnlSeries.push({ label: timestampLabel, value: adjustedTotal });
+  if (state.pnlSeries.length > MAX_SERIES_POINTS) {
     state.pnlSeries.shift();
+    if (state.pnlViewportManual) {
+      const windowSize = Math.min(MAX_VIEW_POINTS, state.pnlSeries.length);
+      const maxOffset = Math.max(0, state.pnlSeries.length - windowSize);
+      state.pnlViewportOffset = Math.min(state.pnlViewportOffset, maxOffset);
+    }
   }
 
-  chart.data.labels = state.pnlSeries.map((item) => item.label);
-  chart.data.datasets[0].data = state.pnlSeries.map((item) => item.value);
-  chart.update('none');
+  if (!state.pnlViewportManual) {
+    state.pnlViewportOffset = 0;
+  }
+
+  updatePnlSlider();
+  applyPnlViewport();
 }
 
 function renderSummary(summary) {
@@ -268,11 +364,18 @@ function renderSummary(summary) {
   document.getElementById('metricWinRate').textContent = formatNumber(summary.win_rate, percentFormatter);
   const realizedBalance = document.getElementById('metricRealizedBalance');
   if (realizedBalance) {
-    realizedBalance.textContent = formatNumber(summary.realized_balance);
+    const baseline = state.sessionBaselines.realized_balance || 0;
+    const realizedBalanceValue = normalizeBaselineDelta(
+      Number(summary.realized_balance ?? 0) - baseline,
+    );
+    realizedBalance.textContent = formatNumber(Math.max(0, realizedBalanceValue));
   }
   const realizedPnL = document.getElementById('metricRealizedPnL');
   if (realizedPnL) {
-    const realizedPnLValue = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
+    const baseline = state.sessionBaselines.realized_pnl_total || 0;
+    const realizedPnLValue = normalizeBaselineDelta(
+      Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0) - baseline,
+    );
     realizedPnL.textContent = formatPnL(realizedPnLValue);
   }
   document.getElementById('lastUpdated').textContent = new Date(summary.generated_at).toLocaleTimeString();
@@ -314,13 +417,23 @@ function renderTrades() {
   const trades = filter
     ? state.trades.filter((trade) => String(trade.symbol || '').toLowerCase().includes(filter))
     : state.trades;
+  const sortedTrades = trades
+    ? [...trades].sort((a, b) => {
+        const pnlA = Number(a.pnl_unrealized ?? 0);
+        const pnlB = Number(b.pnl_unrealized ?? 0);
+        if (!Number.isFinite(pnlA) && !Number.isFinite(pnlB)) return 0;
+        if (!Number.isFinite(pnlA)) return 1;
+        if (!Number.isFinite(pnlB)) return -1;
+        return pnlB - pnlA;
+      })
+    : [];
 
-  if (!trades || trades.length === 0) {
+  if (!sortedTrades || sortedTrades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
     return;
   }
 
-  const rows = trades
+  const rows = sortedTrades
     .map((trade) => {
       const tradeId = getTradeId(trade);
       const side = String(trade.side || '').toLowerCase();
@@ -432,6 +545,35 @@ async function refreshDashboard(manual = false) {
 }
 
 function attachEvents() {
+  pnlScroll = document.getElementById('pnlScroll');
+  if (pnlScroll) {
+    pnlScroll.addEventListener('input', (event) => {
+      const value = Number(event.target.value || 0);
+      if (!Number.isFinite(value) || value < 0) {
+        return;
+      }
+      state.pnlViewportOffset = value;
+      state.pnlViewportManual = value !== 0;
+      applyPnlViewport();
+    });
+    pnlScroll.addEventListener('change', (event) => {
+      const value = Number(event.target.value || 0);
+      if (!Number.isFinite(value) || value < 0) {
+        return;
+      }
+      state.pnlViewportOffset = value;
+      state.pnlViewportManual = value !== 0;
+      updatePnlSlider();
+      applyPnlViewport();
+    });
+    pnlScroll.addEventListener('dblclick', () => {
+      state.pnlViewportOffset = 0;
+      state.pnlViewportManual = false;
+      updatePnlSlider();
+      applyPnlViewport();
+    });
+  }
+
   const filterInput = document.getElementById('symbolFilter');
   if (filterInput) {
     filterInput.addEventListener('input', (event) => {
@@ -476,6 +618,8 @@ function attachEvents() {
   if (confirmBtn) {
     confirmBtn.addEventListener('click', handlePartialConfirm);
   }
+
+  updatePnlSlider();
 }
 
 function initialize() {

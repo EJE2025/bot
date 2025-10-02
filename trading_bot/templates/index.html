@@ -101,8 +101,11 @@
                         </div>
                         <small class="text-muted" id="lastUpdated">Sin datos</small>
                     </div>
-                    <div class="card-body" style="height: 320px;">
-                        <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                    <div class="card-body chart-body">
+                        <div class="pnl-chart-wrapper">
+                            <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                            <input type="range" class="form-range pnl-scroll" id="pnlScroll" min="0" max="0" value="0" step="1" orient="vertical" aria-label="Desplazar historial del PnL">
+                        </div>
                     </div>
                 </div>
             </div>
