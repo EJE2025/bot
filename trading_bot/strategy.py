@@ -264,6 +264,10 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         else:
             risk_usd = config.RISK_PER_TRADE
 
+    leverage = float(getattr(config, "DEFAULT_LEVERAGE", 1.0) or 1.0)
+    if leverage <= 0:
+        leverage = 1.0
+
     qty = calcular_tamano_posicion(
         balance,
         entry_price,
@@ -271,12 +275,13 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         atr_multiplier,
         risk_usd,
     )
-    if qty is None:
-        return 0.0
 
-    leverage = float(getattr(config, "DEFAULT_LEVERAGE", 1.0) or 1.0)
-    if leverage <= 0:
-        leverage = 1.0
+    if qty is None or qty <= 0:
+        lower_usd = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+        if lower_usd <= 0:
+            return 0.0
+        qty = (lower_usd * leverage) / entry_price
+        qty = max(qty, getattr(config, "MIN_POSITION_SIZE", 0.0))
 
     invested = abs(entry_price * qty) / leverage
     lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
