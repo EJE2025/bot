@@ -16,9 +16,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
 - Panel web en `http://localhost:8000` para monitoreo en tiempo real. Los datos
-  de operaciones y liquidez se consultan pulsando los botones **Mostrar
-  Trades** y **Mostrar Liquidez**, que llaman a los endpoints `/api/trades` y
-  `/api/liquidity` respectivamente
+  de operaciones se consultan desde el endpoint `/api/trades`
 - La plantilla HTML del dashboard se encuentra en `trading_bot/templates/index.html` para facilitar su personalizacion.
 - Si Flask no está instalado, intentar iniciar el dashboard lanzará un `ImportError`.
 - Las operaciones abiertas se registran en `trade_manager` y el dashboard las
