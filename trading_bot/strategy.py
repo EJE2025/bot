@@ -222,7 +222,7 @@ def calcular_tamano_posicion(
 
 
 def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> float:
-    """Return the desired position notional in USDT for ``symbol``.
+    """Return the desired *invested* capital in USDT for ``symbol``.
 
     When :data:`config.USE_FIXED_POSITION_SIZE` is enabled the function
     short-circuits and returns :data:`config.FIXED_POSITION_SIZE_USDT` without
@@ -243,9 +243,15 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
 
     if config.USE_FIXED_POSITION_SIZE:
         fixed_size = float(config.FIXED_POSITION_SIZE_USDT)
-        if (config.BOT_MODE or "") == "shadow":
-            return max(fixed_size, config.MIN_POSITION_SIZE_USDT)
-        return fixed_size
+        lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+        upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
+        clamped = max(lower, fixed_size)
+        if upper > 0:
+            clamped = min(clamped, upper)
+        balance = ctx.get("balance") if ctx else None
+        if balance is not None:
+            clamped = min(clamped, float(balance))
+        return clamped
 
     balance = ctx.get("balance")
     if balance is None:
@@ -258,6 +264,10 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         else:
             risk_usd = config.RISK_PER_TRADE
 
+    leverage = float(getattr(config, "DEFAULT_LEVERAGE", 1.0) or 1.0)
+    if leverage <= 0:
+        leverage = 1.0
+
     qty = calcular_tamano_posicion(
         balance,
         entry_price,
@@ -265,13 +275,24 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         atr_multiplier,
         risk_usd,
     )
-    if qty is None:
-        return 0.0
 
-    notional = qty * entry_price
-    if (config.BOT_MODE or "") == "shadow":
-        return max(notional, config.MIN_POSITION_SIZE_USDT)
-    return notional
+    if qty is None or qty <= 0:
+        lower_usd = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+        if lower_usd <= 0:
+            return 0.0
+        qty = (lower_usd * leverage) / entry_price
+        qty = max(qty, getattr(config, "MIN_POSITION_SIZE", 0.0))
+
+    invested = abs(entry_price * qty) / leverage
+    lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
+    upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
+    if lower > 0:
+        invested = max(invested, lower)
+    if upper > 0:
+        invested = min(invested, upper)
+    if balance is not None:
+        invested = min(invested, float(balance))
+    return invested
 
 
 def risk_reward_ratio(
@@ -401,11 +422,11 @@ def decidir_entrada(
         "atr_multiplier": atr_mult,
     }
     sizing_ctx = {"balance": balance, "risk_usd": risk_usd}
-    position_size_usdt = position_sizer(symbol, sizing_features, sizing_ctx)
-    if position_size_usdt <= 0:
+    invested_usd = position_sizer(symbol, sizing_features, sizing_ctx)
+    if invested_usd <= 0:
         logger.error("[%s] position size below minimum", symbol)
         return None
-    quantity = position_size_usdt / entry_price
+    quantity = (invested_usd * leverage) / entry_price
 
     risk = abs(entry_price - stop_loss)
     risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
@@ -443,6 +464,7 @@ def decidir_entrada(
         .isoformat()
         .replace("+00:00", "Z"),
         "feature_snapshot": feature_snapshot,
+        "invested_value": invested_usd,
     }
 
     modelo_activo = (

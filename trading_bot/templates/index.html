@@ -53,9 +53,9 @@
             <div class="col-12 col-md-6 col-xl-3">
                 <div class="card metric-card h-100">
                     <div class="card-body">
-                        <div class="metric-label">Exposición nocional</div>
+                        <div class="metric-label">Capital invertido</div>
                         <div class="metric-value" id="metricExposure">0.00</div>
-                        <div class="metric-delta text-muted">Suma de capital comprometido</div>
+                        <div class="metric-delta text-muted">Suma de USDT en riesgo</div>
                     </div>
                 </div>
             </div>
@@ -96,20 +96,23 @@
                 <div class="card h-100">
                     <div class="card-header d-flex align-items-center justify-content-between">
                         <div>
-                            <h2 class="h5 mb-0">Evolución del PnL</h2>
-                            <p class="text-muted mb-0 small">Seguimiento continuo de la exposición del bot</p>
+                            <h2 class="h5 mb-0">Evolución del PnL total</h2>
+                            <p class="text-muted mb-0 small">Incluye PnL realizado y no realizado</p>
                         </div>
                         <small class="text-muted" id="lastUpdated">Sin datos</small>
                     </div>
-                    <div class="card-body" style="height: 320px;">
-                        <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                    <div class="card-body chart-body">
+                        <div class="pnl-chart-wrapper">
+                            <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                            <input type="range" class="form-range pnl-scroll" id="pnlScroll" min="0" max="0" value="0" step="1" orient="vertical" aria-label="Desplazar historial del PnL">
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="col-12 col-xl-4">
                 <div class="card h-100">
                     <div class="card-header">
-                        <h2 class="h5 mb-0">Exposición por símbolo</h2>
+                        <h2 class="h5 mb-0">Capital invertido por símbolo</h2>
                     </div>
                     <div class="card-body">
                         <ul class="list-group list-group-flush symbol-breakdown" id="symbolBreakdown">
@@ -162,22 +165,11 @@
         </div>
 
         <div class="row g-3 mt-1">
-            <div class="col-12 col-xl-6">
-                <div class="card h-100">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h2 class="h5 mb-0">Libro de órdenes</h2>
-                        <span class="badge bg-dark-subtle text-dark">Actualizado en vivo</span>
-                    </div>
-                    <div class="card-body" id="liquidityContainer">
-                        <div class="text-muted text-center">Esperando datos de liquidez…</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-xl-6">
+            <div class="col-12">
                 <div class="card h-100">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h2 class="h5 mb-0">Historial reciente</h2>
-                        <span class="badge bg-info text-dark">Últimas 15 operaciones</span>
+                        <span class="badge bg-info text-dark">Últimas 50 operaciones</span>
                     </div>
                     <div class="card-body">
                         <div id="historyList" class="history-list">

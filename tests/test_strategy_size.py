@@ -61,3 +61,18 @@ def test_position_sizer_shadow_minimum(monkeypatch):
     size = strategy.position_sizer("BTC_USDT", features, {})
     assert size == pytest.approx(5.0)
 
+
+def test_position_sizer_dynamic_minimum(monkeypatch):
+    monkeypatch.setattr(strategy.config, "USE_FIXED_POSITION_SIZE", False)
+    monkeypatch.setattr(strategy.config, "DEFAULT_LEVERAGE", 10.0)
+    monkeypatch.setattr(strategy.config, "MIN_POSITION_SIZE_USDT", 5.0)
+    monkeypatch.setattr(strategy.config, "MAX_POSITION_SIZE_USDT", 20.0)
+
+    features = {"entry_price": 100.0, "atr": 2.0, "atr_multiplier": 1.0}
+    ctx = {"balance": 100.0, "risk_usd": 0.5}
+
+    monkeypatch.setattr(strategy, "calcular_tamano_posicion", lambda *_, **__: None)
+
+    size = strategy.position_sizer("BTC_USDT", features, ctx)
+    assert size == pytest.approx(5.0)
+

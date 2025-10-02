@@ -42,4 +42,8 @@ def test_summary_includes_realized_metrics(client):
 
     payload = response.get_json()
     assert math.isclose(payload["realized_pnl"], 0.0, abs_tol=1e-9)
-    assert math.isclose(payload["realized_balance"], 14.0, rel_tol=1e-9)
+    assert math.isclose(payload["realized_pnl_total"], 0.0, abs_tol=1e-9)
+    assert math.isclose(payload["realized_balance"], 0.2, rel_tol=1e-9)
+    assert math.isclose(payload["win_rate"], 2.0 / 3.0, rel_tol=1e-9)
+    assert payload["winning_positions"] == 0
+    assert payload["losing_positions"] == 0

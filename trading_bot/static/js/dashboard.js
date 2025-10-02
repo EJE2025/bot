@@ -1,5 +1,6 @@
 const REFRESH_INTERVAL = 10000;
-const MAX_POINTS = 60;
+const MAX_VIEW_POINTS = 60;
+const MAX_SERIES_POINTS = 500;
 
 const numberFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
@@ -26,17 +27,25 @@ const state = {
   trades: [],
   summary: null,
   history: [],
-  liquidity: {},
   symbolFilter: '',
   pnlSeries: [],
+  sessionBaselines: {
+    realized_balance: 0,
+    realized_pnl_total: 0,
+    total_pnl: 0,
+  },
   tradingActive: true,
   connectionHealthy: true,
+  sessionId: null,
+  pnlViewportOffset: 0,
+  pnlViewportManual: false,
 };
 
 let pnlChart = null;
 let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
+let pnlScroll = null;
 
 function getTradeId(trade) {
   return trade.trade_id || trade.id || trade.uuid;
@@ -136,10 +145,11 @@ function formatNumber(value, formatter = numberFormatter) {
 }
 
 function formatPnL(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) {
     return '—';
   }
+  const numeric = normalizeBaselineDelta(raw);
   const prefix = numeric > 0 ? '+' : '';
   return `${prefix}${numberFormatter.format(numeric)}`;
 }
@@ -151,6 +161,14 @@ function formatDate(value) {
     return value;
   }
   return date.toLocaleString();
+}
+
+function normalizeBaselineDelta(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.abs(numeric) < 1e-8 ? 0 : numeric;
 }
 
 function ensureChart() {
@@ -167,7 +185,7 @@ function ensureChart() {
       labels: [],
       datasets: [
         {
-          label: 'PnL no realizado',
+          label: 'PnL total',
           data: [],
           borderColor: '#2b6cb0',
           backgroundColor: 'rgba(66, 153, 225, 0.25)',
@@ -219,37 +237,146 @@ function ensureChart() {
   return pnlChart;
 }
 
+function resetPnlSeries() {
+  state.pnlSeries = [];
+  state.pnlViewportOffset = 0;
+  state.pnlViewportManual = false;
+  const chart = ensureChart();
+  if (!chart) return;
+  chart.data.labels = [];
+  chart.data.datasets[0].data = [];
+  chart.update('none');
+  updatePnlSlider();
+}
+
+function getPnlScroll() {
+  if (!pnlScroll) {
+    pnlScroll = document.getElementById('pnlScroll');
+  }
+  return pnlScroll;
+}
+
+function updatePnlSlider() {
+  const slider = getPnlScroll();
+  if (!slider) return;
+  const total = state.pnlSeries.length;
+  const windowSize = Math.min(MAX_VIEW_POINTS, total);
+  const maxOffset = Math.max(0, total - windowSize);
+  slider.max = String(maxOffset);
+  slider.disabled = maxOffset === 0;
+  if (maxOffset === 0) {
+    state.pnlViewportOffset = 0;
+    state.pnlViewportManual = false;
+  }
+  const desiredValue = state.pnlViewportManual ? Math.min(state.pnlViewportOffset, maxOffset) : 0;
+  if (Number(slider.value) !== desiredValue) {
+    slider.value = String(desiredValue);
+  }
+}
+
+function applyPnlViewport() {
+  const chart = ensureChart();
+  if (!chart) return;
+  const total = state.pnlSeries.length;
+  if (total === 0) {
+    chart.data.labels = [];
+    chart.data.datasets[0].data = [];
+    chart.update('none');
+    return;
+  }
+  const windowSize = Math.min(MAX_VIEW_POINTS, total);
+  const maxOffset = Math.max(0, total - windowSize);
+  const offset = Math.min(state.pnlViewportOffset, maxOffset);
+  const startIndex = Math.max(0, total - windowSize - offset);
+  const visible = state.pnlSeries.slice(startIndex, startIndex + windowSize);
+  chart.data.labels = visible.map((item) => item.label);
+  chart.data.datasets[0].data = visible.map((item) => item.value);
+  chart.update('none');
+}
+
+function handleSession(summary) {
+  if (!summary) return;
+  const newSessionId = summary.session_id || null;
+  const openPositions = Number(summary.total_positions || 0);
+  const sessionChanged = newSessionId && newSessionId !== state.sessionId;
+  const realizedBaseline = Number(summary.realized_balance ?? 0);
+  const realizedTotalBaseline = Number(
+    summary.realized_pnl_total ?? summary.realized_pnl ?? 0,
+  );
+  const totalBaseline = Number(
+    summary.total_pnl ?? realizedTotalBaseline + Number(summary.unrealized_pnl ?? 0),
+  );
+  if (openPositions === 0 && (sessionChanged || state.sessionId === null)) {
+    state.sessionBaselines = {
+      realized_balance: realizedBaseline,
+      realized_pnl_total: realizedTotalBaseline,
+      total_pnl: totalBaseline,
+    };
+    resetPnlSeries();
+  }
+  if (openPositions > 0 && (state.sessionId === null || sessionChanged)) {
+    state.sessionBaselines = {
+      realized_balance: realizedBaseline,
+      realized_pnl_total: realizedTotalBaseline,
+      total_pnl: totalBaseline,
+    };
+  }
+  state.sessionId = newSessionId;
+}
+
 function updatePnlSeries(summary) {
   if (!summary) return;
   const chart = ensureChart();
   if (!chart) return;
 
   const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString();
-  const currentValue = Number(summary.unrealized_pnl) || 0;
+  const realizedRaw = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
+  const unrealized = Number(summary.unrealized_pnl ?? 0);
+  const totalRaw = Number(summary.total_pnl ?? realizedRaw + unrealized) || 0;
+  const adjustedTotal = normalizeBaselineDelta(
+    totalRaw - (state.sessionBaselines.total_pnl || 0),
+  );
 
-  state.pnlSeries.push({ label: timestampLabel, value: currentValue });
-  if (state.pnlSeries.length > MAX_POINTS) {
+  state.pnlSeries.push({ label: timestampLabel, value: adjustedTotal });
+  if (state.pnlSeries.length > MAX_SERIES_POINTS) {
     state.pnlSeries.shift();
+    if (state.pnlViewportManual) {
+      const windowSize = Math.min(MAX_VIEW_POINTS, state.pnlSeries.length);
+      const maxOffset = Math.max(0, state.pnlSeries.length - windowSize);
+      state.pnlViewportOffset = Math.min(state.pnlViewportOffset, maxOffset);
+    }
   }
 
-  chart.data.labels = state.pnlSeries.map((item) => item.label);
-  chart.data.datasets[0].data = state.pnlSeries.map((item) => item.value);
-  chart.update('none');
+  if (!state.pnlViewportManual) {
+    state.pnlViewportOffset = 0;
+  }
+
+  updatePnlSlider();
+  applyPnlViewport();
 }
 
 function renderSummary(summary) {
   if (!summary) return;
   document.getElementById('metricPositions').textContent = summary.total_positions;
   document.getElementById('metricPnL').textContent = formatPnL(summary.unrealized_pnl);
-  document.getElementById('metricExposure').textContent = formatNumber(summary.gross_notional);
+  const totalInvested = Number(summary.total_invested ?? summary.total_exposure ?? 0);
+  document.getElementById('metricExposure').textContent = formatNumber(totalInvested);
   document.getElementById('metricWinRate').textContent = formatNumber(summary.win_rate, percentFormatter);
   const realizedBalance = document.getElementById('metricRealizedBalance');
   if (realizedBalance) {
-    realizedBalance.textContent = formatNumber(summary.realized_balance);
+    const baseline = state.sessionBaselines.realized_balance || 0;
+    const realizedBalanceValue = normalizeBaselineDelta(
+      Number(summary.realized_balance ?? 0) - baseline,
+    );
+    realizedBalance.textContent = formatNumber(Math.max(0, realizedBalanceValue));
   }
   const realizedPnL = document.getElementById('metricRealizedPnL');
   if (realizedPnL) {
-    realizedPnL.textContent = formatPnL(summary.realized_pnl);
+    const baseline = state.sessionBaselines.realized_pnl_total || 0;
+    const realizedPnLValue = normalizeBaselineDelta(
+      Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0) - baseline,
+    );
+    realizedPnL.textContent = formatPnL(realizedPnLValue);
   }
   document.getElementById('lastUpdated').textContent = new Date(summary.generated_at).toLocaleTimeString();
 
@@ -265,7 +392,7 @@ function renderSummary(summary) {
     const pnlClass = item.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
     const exposure = formatNumber(item.exposure, quantityFormatter);
     const pnl = formatPnL(item.unrealized_pnl);
-    const notional = formatNumber(item.notional_value);
+    const invested = formatNumber(item.invested_value ?? 0);
     const li = document.createElement('li');
     li.className = 'list-group-item d-flex flex-column flex-sm-row align-items-sm-center justify-content-between';
     li.innerHTML = `
@@ -274,8 +401,8 @@ function renderSummary(summary) {
         <span class="badge bg-dark-subtle text-dark">${item.positions} posiciones</span>
       </div>
       <div class="d-flex flex-wrap gap-3">
-        <span><strong>Exposición:</strong> ${exposure}</span>
-        <span><strong>Notional:</strong> ${notional}</span>
+        <span><strong>Cantidad:</strong> ${exposure}</span>
+        <span><strong>Invertido:</strong> ${invested}</span>
         <span class="${pnlClass}"><strong>PnL:</strong> ${pnl}</span>
       </div>`;
     list.appendChild(li);
@@ -290,13 +417,23 @@ function renderTrades() {
   const trades = filter
     ? state.trades.filter((trade) => String(trade.symbol || '').toLowerCase().includes(filter))
     : state.trades;
+  const sortedTrades = trades
+    ? [...trades].sort((a, b) => {
+        const pnlA = Number(a.pnl_unrealized ?? 0);
+        const pnlB = Number(b.pnl_unrealized ?? 0);
+        if (!Number.isFinite(pnlA) && !Number.isFinite(pnlB)) return 0;
+        if (!Number.isFinite(pnlA)) return 1;
+        if (!Number.isFinite(pnlB)) return -1;
+        return pnlB - pnlA;
+      })
+    : [];
 
-  if (!trades || trades.length === 0) {
+  if (!sortedTrades || sortedTrades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
     return;
   }
 
-  const rows = trades
+  const rows = sortedTrades
     .map((trade) => {
       const tradeId = getTradeId(trade);
       const side = String(trade.side || '').toLowerCase();
@@ -334,60 +471,6 @@ function renderTrades() {
 
   tbody.innerHTML = rows;
   attachTradeRowEvents();
-}
-
-function renderLiquidity() {
-  const container = document.getElementById('liquidityContainer');
-  if (!container) return;
-
-  const entries = Object.entries(state.liquidity || {});
-  if (entries.length === 0) {
-    container.innerHTML = '<div class="text-muted text-center py-4">No hay datos de liquidez disponibles.</div>';
-    return;
-  }
-
-  const html = entries
-    .map(([symbol, book]) => {
-      const bids = (book.bids || []).slice(0, 5);
-      const asks = (book.asks || []).slice(0, 5);
-      const rows = [];
-      for (let i = 0; i < Math.max(bids.length, asks.length); i += 1) {
-        const bid = bids[i] || ['—', '—'];
-        const ask = asks[i] || ['—', '—'];
-        rows.push(`
-          <tr>
-            <td class="text-success">${formatNumber(bid[0], priceFormatter)}</td>
-            <td class="text-success">${formatNumber(bid[1], quantityFormatter)}</td>
-            <td class="text-danger">${formatNumber(ask[0], priceFormatter)}</td>
-            <td class="text-danger">${formatNumber(ask[1], quantityFormatter)}</td>
-          </tr>`);
-      }
-      return `
-        <div class="orderbook-card">
-          <div class="d-flex justify-content-between align-items-center mb-2">
-            <span class="symbol-badge"><i class="bi bi-lightning"></i>${symbol}</span>
-            <span class="badge bg-secondary-subtle text-dark">Top 5 niveles</span>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm mb-0">
-              <thead>
-                <tr>
-                  <th class="text-success">Bid</th>
-                  <th class="text-success">Cantidad</th>
-                  <th class="text-danger">Ask</th>
-                  <th class="text-danger">Cantidad</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>`;
-    })
-    .join('');
-
-  container.innerHTML = `<div class="liquidity-grid">${html}</div>`;
 }
 
 function renderHistory() {
@@ -429,16 +512,14 @@ async function refreshDashboard(manual = false) {
       setStatus('Actualizando…', 'info');
     }
     clearAlert();
-    const [trades, summary, liquidity, history] = await Promise.all([
+    const [trades, summary, history] = await Promise.all([
       fetchJSON('/api/trades'),
       fetchJSON('/api/summary'),
-      fetchJSON('/api/liquidity'),
-      fetchJSON('/api/history?limit=15').catch(() => []),
+      fetchJSON('/api/history?limit=50').catch(() => []),
     ]);
 
     state.trades = trades;
     state.summary = summary;
-    state.liquidity = liquidity;
     state.history = history;
     state.connectionHealthy = true;
 
@@ -448,9 +529,10 @@ async function refreshDashboard(manual = false) {
         : state.tradingActive;
     updateTradingControls(tradingActive);
 
+    handleSession(summary);
+
     renderTrades();
     renderSummary(summary);
-    renderLiquidity();
     renderHistory();
     updatePnlSeries(summary);
   } catch (error) {
@@ -463,6 +545,35 @@ async function refreshDashboard(manual = false) {
 }
 
 function attachEvents() {
+  pnlScroll = document.getElementById('pnlScroll');
+  if (pnlScroll) {
+    pnlScroll.addEventListener('input', (event) => {
+      const value = Number(event.target.value || 0);
+      if (!Number.isFinite(value) || value < 0) {
+        return;
+      }
+      state.pnlViewportOffset = value;
+      state.pnlViewportManual = value !== 0;
+      applyPnlViewport();
+    });
+    pnlScroll.addEventListener('change', (event) => {
+      const value = Number(event.target.value || 0);
+      if (!Number.isFinite(value) || value < 0) {
+        return;
+      }
+      state.pnlViewportOffset = value;
+      state.pnlViewportManual = value !== 0;
+      updatePnlSlider();
+      applyPnlViewport();
+    });
+    pnlScroll.addEventListener('dblclick', () => {
+      state.pnlViewportOffset = 0;
+      state.pnlViewportManual = false;
+      updatePnlSlider();
+      applyPnlViewport();
+    });
+  }
+
   const filterInput = document.getElementById('symbolFilter');
   if (filterInput) {
     filterInput.addEventListener('input', (event) => {
@@ -507,6 +618,8 @@ function attachEvents() {
   if (confirmBtn) {
     confirmBtn.addEventListener('click', handlePartialConfirm);
   }
+
+  updatePnlSlider();
 }
 
 function initialize() {
