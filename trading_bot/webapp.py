@@ -104,7 +104,6 @@ if Flask:
             row["realized_pnl"] = _coerce_float(trade.get("realized_pnl"))
             row["leverage"] = leverage
             trades.append(row)
-        trades.sort(key=lambda item: item.get("pnl_unrealized", 0.0), reverse=True)
         return trades
 
     def _realized_aggregates() -> tuple[float, float, int, int]:
