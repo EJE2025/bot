@@ -1,22 +1,22 @@
 const REFRESH_INTERVAL = 10000;
 const MAX_POINTS = 60;
 
-const numberFormatter = new Intl.NumberFormat('en-US', {
+const numberFormatter = new Intl.NumberFormat('es-ES', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
-const priceFormatter = new Intl.NumberFormat('en-US', {
+const priceFormatter = new Intl.NumberFormat('es-ES', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
 
-const quantityFormatter = new Intl.NumberFormat('en-US', {
+const quantityFormatter = new Intl.NumberFormat('es-ES', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
 
-const percentFormatter = new Intl.NumberFormat('en-US', {
+const percentFormatter = new Intl.NumberFormat('es-ES', {
   style: 'percent',
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
@@ -42,12 +42,48 @@ function getTradeId(trade) {
   return trade.trade_id || trade.id || trade.uuid;
 }
 
-async function fetchJSON(url) {
-  const response = await fetch(url, { cache: 'no-cache' });
-  if (!response.ok) {
-    throw new Error(`Request failed for ${url}`);
+async function fetchJSON(url, options = {}) {
+  const { silent = false, ...fetchOptions } = options;
+  try {
+    const response = await fetch(url, { cache: 'no-cache', ...fetchOptions });
+    const text = await response.text();
+    if (!response.ok) {
+      const snippet = text ? text.slice(0, 180) : response.statusText;
+      throw new Error(
+        `Error ${response.status} al llamar a ${url}: ${snippet || 'sin cuerpo de respuesta'}`,
+      );
+    }
+    if (!text) {
+      return null;
+    }
+    try {
+      return JSON.parse(text);
+    } catch (parseError) {
+      throw new Error(`Respuesta JSON inválida desde ${url}`);
+    }
+  } catch (error) {
+    console.error(error);
+    if (!silent) {
+      showToast(error.message || 'Error de red', 'danger');
+    }
+    return null;
   }
-  return response.json();
+}
+
+async function readJsonResponse(response, fallbackMessage = 'Respuesta inválida del servidor') {
+  const text = await response.text();
+  if (!text) {
+    if (response.ok) {
+      return {};
+    }
+    throw new Error(fallbackMessage);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const snippet = text.length > 180 ? `${text.slice(0, 180)}…` : text;
+    throw new Error(`${fallbackMessage}: ${snippet}`);
+  }
 }
 
 function setStatus(label, variant) {
@@ -150,7 +186,7 @@ function formatDate(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString();
+  return date.toLocaleString('es-ES');
 }
 
 function ensureChart() {
@@ -244,7 +280,9 @@ function updatePnlSeries(summary) {
   const chart = ensureChart();
   if (!chart) return;
 
-  const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString();
+  const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString(
+    'es-ES',
+  );
   const realized = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
   const currentValue = Number(summary.total_pnl ?? realized + unrealized) || 0;
@@ -261,11 +299,43 @@ function updatePnlSeries(summary) {
 
 function renderSummary(summary) {
   if (!summary) return;
-  document.getElementById('metricPositions').textContent = summary.total_positions;
-  document.getElementById('metricPnL').textContent = formatPnL(summary.unrealized_pnl);
-  const totalInvested = Number(summary.total_invested ?? summary.total_exposure ?? 0);
-  document.getElementById('metricExposure').textContent = formatNumber(totalInvested);
-  document.getElementById('metricWinRate').textContent = formatNumber(summary.win_rate, percentFormatter);
+  const positionsEl = document.getElementById('metricPositions');
+  if (positionsEl) {
+    positionsEl.textContent = Number(summary.total_positions ?? 0);
+  }
+
+  const pnlEl = document.getElementById('metricPnL');
+  if (pnlEl) {
+    pnlEl.textContent = formatPnL(summary.unrealized_pnl);
+  }
+
+  const totalExposure = Number(summary.total_exposure ?? 0);
+  const totalInvested = Number(summary.total_invested ?? 0);
+  const exposureEl = document.getElementById('metricExposure');
+  if (exposureEl) {
+    exposureEl.textContent = formatNumber(totalExposure);
+    exposureEl.title = `Capital invertido: ${formatNumber(totalInvested)}`;
+  }
+
+  const winRateEl = document.getElementById('metricWinRate');
+  if (winRateEl) {
+    const hasValue = typeof summary.win_rate === 'number' && !Number.isNaN(summary.win_rate);
+    if (hasValue) {
+      winRateEl.textContent = percentFormatter.format(summary.win_rate);
+      winRateEl.classList.remove('text-muted');
+    } else {
+      winRateEl.textContent = '—';
+      winRateEl.classList.add('text-muted');
+    }
+    const samples = Number(summary.win_rate_samples || 0);
+    const winners = Number(summary.win_rate_winners || 0);
+    const losers = Number(summary.win_rate_losers || 0);
+    const tooltip = samples
+      ? `${samples} operaciones (${winners} ganadas / ${losers} perdidas)`
+      : 'Sin operaciones suficientes para calcular la métrica';
+    winRateEl.setAttribute('title', tooltip);
+  }
+
   const realizedBalance = document.getElementById('metricRealizedBalance');
   if (realizedBalance) {
     realizedBalance.textContent = formatNumber(summary.realized_balance);
@@ -275,7 +345,11 @@ function renderSummary(summary) {
     const realizedPnLValue = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
     realizedPnL.textContent = formatPnL(realizedPnLValue);
   }
-  document.getElementById('lastUpdated').textContent = new Date(summary.generated_at).toLocaleTimeString();
+  const lastUpdated = document.getElementById('lastUpdated');
+  if (lastUpdated) {
+    const generatedAt = summary.generated_at ? new Date(summary.generated_at) : new Date();
+    lastUpdated.textContent = generatedAt.toLocaleTimeString('es-ES');
+  }
 
   const list = document.getElementById('symbolBreakdown');
   if (!list) return;
@@ -287,7 +361,8 @@ function renderSummary(summary) {
 
   summary.per_symbol.forEach((item) => {
     const pnlClass = item.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
-    const exposure = formatNumber(item.exposure, quantityFormatter);
+    const quantity = formatNumber(item.quantity, quantityFormatter);
+    const exposure = formatNumber(item.exposure, numberFormatter);
     const pnl = formatPnL(item.unrealized_pnl);
     const invested = formatNumber(item.invested_value ?? 0);
     const li = document.createElement('li');
@@ -298,7 +373,8 @@ function renderSummary(summary) {
         <span class="badge bg-dark-subtle text-dark">${item.positions} posiciones</span>
       </div>
       <div class="d-flex flex-wrap gap-3">
-        <span><strong>Cantidad:</strong> ${exposure}</span>
+        <span><strong>Cantidad:</strong> ${quantity}</span>
+        <span><strong>Exposición:</strong> ${exposure}</span>
         <span><strong>Invertido:</strong> ${invested}</span>
         <span class="${pnlClass}"><strong>PnL:</strong> ${pnl}</span>
       </div>`;
@@ -399,16 +475,16 @@ async function refreshDashboard(manual = false) {
       setStatus('Actualizando…', 'info');
     }
     clearAlert();
-    const [trades, summary, history] = await Promise.all([
-      fetchJSON('/api/trades'),
-      fetchJSON('/api/summary'),
-      fetchJSON('/api/history?limit=50').catch(() => []),
-    ]);
 
-    state.trades = trades;
+    const trades = (await fetchJSON('/api/trades', { silent: !manual })) ?? [];
+    const summarySilent = manual ? false : state.summary !== null;
+    const summary = await fetchJSON('/api/summary', { silent: summarySilent });
+    const history = (await fetchJSON('/api/history?limit=50', { silent: true })) ?? [];
+
+    state.trades = Array.isArray(trades) ? trades : [];
     state.summary = summary;
-    state.history = history;
-    state.connectionHealthy = true;
+    state.history = Array.isArray(history) ? history : [];
+    state.connectionHealthy = Boolean(summary);
 
     const tradingActive =
       summary && Object.prototype.hasOwnProperty.call(summary, 'trading_active')
@@ -419,9 +495,17 @@ async function refreshDashboard(manual = false) {
     handleSession(summary);
 
     renderTrades();
-    renderSummary(summary);
     renderHistory();
+    renderSummary(summary);
     updatePnlSeries(summary);
+
+    if (!state.connectionHealthy) {
+      showAlert(
+        'No se pudieron obtener las métricas principales. Mostramos los últimos datos disponibles.',
+        'warning',
+      );
+      setStatus('Datos incompletos', 'warning');
+    }
   } catch (error) {
     console.error(error);
     showAlert('No se pudieron sincronizar los datos del bot. Reintentaremos automáticamente.', 'danger');
@@ -451,13 +535,17 @@ function attachEvents() {
       toggleBtn.disabled = true;
       try {
         const response = await fetch('/api/toggle-trading', { method: 'POST' });
-        const data = await response.json();
+        const data = await readJsonResponse(response, 'No se pudo cambiar el estado del bot');
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'No se pudo cambiar el estado del bot');
         }
         state.connectionHealthy = true;
         updateTradingControls(Boolean(data.trading_active));
-        showToast(`Trading ${data.trading_active ? 'reanudado' : 'pausado'} correctamente`, 'info');
+        const persistedLabel = data.persisted ? ' (estado guardado)' : '';
+        showToast(
+          `Trading ${data.trading_active ? 'reanudado' : 'pausado'} correctamente${persistedLabel}`,
+          'info',
+        );
       } catch (error) {
         console.error(error);
         showToast(error.message || 'Error al cambiar el estado del bot', 'danger');
@@ -504,10 +592,11 @@ function attachTradeRowEvents() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason: 'manual_close_ui' }),
         });
-        const data = await response.json();
+        const data = await readJsonResponse(response, 'No se pudo cerrar la operación');
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'No se pudo cerrar la operación');
         }
+        state.connectionHealthy = true;
         showToast('Operación cerrada correctamente', 'success');
       } catch (error) {
         console.error(error);
@@ -525,7 +614,10 @@ function attachTradeRowEvents() {
       partialTradeContext = { tradeId, remaining: Number(remaining) };
       const info = document.getElementById('partialModalInfo');
       if (info) {
-        info.textContent = `Trade ${tradeId} — tamaño restante: ${formatNumber(Number(remaining), quantityFormatter)}`;
+        info.textContent = `Trade ${tradeId} — tamaño restante: ${formatNumber(
+          Number(remaining),
+          quantityFormatter,
+        )}. Introduce un porcentaje entre 1 y 100.`;
       }
       const input = document.getElementById('partialPercent');
       if (input) {
@@ -546,7 +638,7 @@ async function handlePartialConfirm() {
   const input = document.getElementById('partialPercent');
   const value = Number(input?.value || 0);
   if (!Number.isFinite(value) || value <= 0 || value > 100) {
-    showToast('Porcentaje inválido (1–100)', 'warning');
+    showToast('Porcentaje inválido (usa un valor entre 1 y 100)', 'warning');
     return;
   }
   const { tradeId } = partialTradeContext;
@@ -557,11 +649,12 @@ async function handlePartialConfirm() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ percent: value, reason: 'manual_partial_ui' }),
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response, 'No se pudo cerrar parcialmente');
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'No se pudo cerrar parcialmente');
     }
-    showToast(`Cierre parcial del ${value}% ejecutado`, 'success');
+    const formattedPercent = percentFormatter.format(value / 100);
+    showToast(`Cierre parcial de ${formattedPercent} ejecutado`, 'success');
     if (partialModal) {
       partialModal.hide();
     }
