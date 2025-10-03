@@ -4,29 +4,57 @@
     <meta charset="utf-8">
     <title>Trading Bot Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#2b6cb0">
+    <meta name="theme-color" content="#00bcd4">
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/icon.svg') }}">
     <link rel="manifest" href="{{ url_for('manifest') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+    :root {
+      --background: #f5f6fa;
+      --surface: rgba(255, 255, 255, 0.6);
+      --surface-strong: #ffffff;
+      --surface-elevated: #ffffff;
+      --accent-primary: #00bcd4;
+      --accent-secondary: #ff6f61;
+      --accent-tertiary: #2ecc71;
+      --text-primary: #2c3e50;
+      --text-secondary: #95a5a6;
+      --shadow: rgba(0, 0, 0, 0.1);
+      --border-subtle: rgba(0, 0, 0, 0.05);
+    }
+
+    body {
+      font-family: 'Poppins', 'Segoe UI', sans-serif;
+      background: var(--background);
+      color: var(--text-primary);
+    }
+    </style>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/dashboard.css') }}" rel="stylesheet">
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
+    <nav class="navbar navbar-expand-lg">
         <div class="container-fluid px-4">
-            <a class="navbar-brand" href="#">
+            <a class="navbar-brand d-flex align-items-center gap-2" href="#">
+                <i class="bi bi-robot"></i>
                 <span>Patatabot</span>
             </a>
-            <span class="badge bg-secondary d-none" id="modeBadge" aria-live="polite">Demo</span>
-            <div class="d-flex align-items-center gap-3">
-                <span class="badge badge-status bg-warning text-dark" id="connectionStatus">Sincronizando…</span>
-                <button class="btn btn-sm btn-warning" id="toggleTradeBtn">
+            <div class="d-flex align-items-center gap-3 ms-auto">
+                <span class="badge d-none" id="modeBadge" aria-live="polite">Demo</span>
+                <span class="badge badge-status" id="connectionStatus">Sincronizando…</span>
+                <button class="btn btn-sm btn-secondary" id="toggleTradeBtn" type="button">
                     <i class="bi bi-pause-circle"></i>
                     Pausar bot
                 </button>
-                <button class="btn btn-sm btn-outline-light" id="refreshTradesBtn">
+                <button class="btn btn-sm btn-primary" id="refreshTradesBtn" type="button">
                     <i class="bi bi-arrow-repeat"></i>
                     Actualizar ahora
+                </button>
+                <button class="btn btn-sm btn-ghost" id="themeToggleBtn" type="button" aria-pressed="false" aria-label="Cambiar tema">
+                    <i class="bi bi-moon-stars"></i>
                 </button>
             </div>
         </div>
@@ -40,7 +68,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">Posiciones abiertas</div>
-                        <div class="metric-value" id="metricPositions">0</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricPositions">0</div>
                         <div class="metric-delta text-muted">Número total de operaciones activas</div>
                     </div>
                 </div>
@@ -49,7 +77,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">PnL no realizado</div>
-                        <div class="metric-value" id="metricPnL">0.00</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricPnL">0.00</div>
                         <div class="metric-delta text-muted">Actualizado en tiempo real</div>
                     </div>
                 </div>
@@ -58,7 +86,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">Capital invertido</div>
-                        <div class="metric-value" id="metricExposure">0.00</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricExposure">0.00</div>
                         <div class="metric-delta text-muted">Suma de USDT en riesgo</div>
                     </div>
                 </div>
@@ -67,7 +95,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">Win rate</div>
-                        <div class="metric-value" id="metricWinRate">0%</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricWinRate">0%</div>
                         <div class="metric-delta text-muted">Operaciones en verde vs. en rojo</div>
                     </div>
                 </div>
@@ -79,7 +107,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">Saldo realizado</div>
-                        <div class="metric-value" id="metricRealizedBalance">0.00</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricRealizedBalance">0.00</div>
                         <div class="metric-delta text-muted">Capital recuperado de operaciones cerradas</div>
                     </div>
                 </div>
@@ -88,7 +116,7 @@
                 <div class="card metric-card h-100">
                     <div class="card-body">
                         <div class="metric-label">PnL realizado</div>
-                        <div class="metric-value" id="metricRealizedPnL">0.00</div>
+                        <div class="metric-value skeleton" data-skeleton id="metricRealizedPnL">0.00</div>
                         <div class="metric-delta text-muted">Ganancias y pérdidas materializadas</div>
                     </div>
                 </div>
@@ -105,7 +133,7 @@
                         </div>
                         <div class="d-flex align-items-center gap-2">
                             <small class="text-muted" id="lastUpdated">Sin datos</small>
-                            <button class="btn btn-sm btn-outline-secondary card-toggle" type="button" data-card-toggle="pnlCard" aria-expanded="true" aria-controls="pnlCardContent" aria-label="Colapsar gráfico de PnL">
+                            <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="pnlCard" aria-expanded="true" aria-controls="pnlCardContent" aria-label="Colapsar gráfico de PnL">
                                 <i class="bi bi-arrows-collapse"></i>
                             </button>
                         </div>
@@ -121,14 +149,14 @@
                 <div class="card h-100 collapsible-card" data-card-id="symbolCard">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h2 class="h5 mb-0">Capital invertido por símbolo</h2>
-                        <button class="btn btn-sm btn-outline-secondary card-toggle" type="button" data-card-toggle="symbolCard" aria-expanded="true" aria-controls="symbolCardContent" aria-label="Colapsar resumen por símbolo">
+                        <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="symbolCard" aria-expanded="true" aria-controls="symbolCardContent" aria-label="Colapsar resumen por símbolo">
                             <i class="bi bi-arrows-collapse"></i>
                         </button>
                     </div>
                     <div class="collapsible-content" id="symbolCardContent">
                         <div class="card-body">
-                            <ul class="list-group list-group-flush symbol-breakdown" id="symbolBreakdown">
-                                <li class="list-group-item">Sin posiciones abiertas.</li>
+                            <ul class="list-group list-group-flush symbol-breakdown" id="symbolBreakdown" data-skeleton>
+                                <li class="list-group-item skeleton">Sin posiciones abiertas.</li>
                             </ul>
                         </div>
                     </div>
@@ -145,13 +173,13 @@
                             <label for="symbolFilter" class="small text-muted text-uppercase">Filtrar por símbolo</label>
                             <input type="search" id="symbolFilter" class="form-control form-control-sm" placeholder="Ej: BTCUSDT">
                         </div>
-                        <button class="btn btn-sm btn-outline-secondary card-toggle ms-lg-2" type="button" data-card-toggle="tradesCard" aria-expanded="true" aria-controls="tradesCardContent" aria-label="Colapsar tabla de operaciones">
+                        <button class="btn btn-sm btn-ghost card-toggle ms-lg-2" type="button" data-card-toggle="tradesCard" aria-expanded="true" aria-controls="tradesCardContent" aria-label="Colapsar tabla de operaciones">
                             <i class="bi bi-arrows-collapse"></i>
                         </button>
                     </div>
                     <div class="collapsible-content" id="tradesCardContent">
                         <div class="table-responsive">
-                            <table class="table table-hover align-middle mb-0 text-center" id="tradesTable">
+                            <table class="table table-hover align-middle mb-0 text-center" id="tradesTable" data-skeleton>
                                 <thead>
                                     <tr>
                                         <th>Símbolo</th>
@@ -168,8 +196,8 @@
                                     </tr>
                                 </thead>
                                 <tbody id="tradesTableBody">
-                                    <tr>
-                                        <td colspan="11" class="text-muted py-4">Sin operaciones abiertas.</td>
+                                    <tr class="skeleton-row">
+                                        <td colspan="11" class="text-muted py-4 skeleton">Sin operaciones abiertas.</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -183,15 +211,15 @@
                         <h2 class="h5 mb-0">Historial reciente</h2>
                         <div class="d-flex align-items-center gap-2">
                             <span class="badge bg-info text-dark">Últimas 50 operaciones</span>
-                            <button class="btn btn-sm btn-outline-secondary card-toggle" type="button" data-card-toggle="historyCard" aria-expanded="true" aria-controls="historyCardContent" aria-label="Colapsar historial reciente">
+                            <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="historyCard" aria-expanded="true" aria-controls="historyCardContent" aria-label="Colapsar historial reciente">
                                 <i class="bi bi-arrows-collapse"></i>
                             </button>
                         </div>
                     </div>
                     <div class="collapsible-content" id="historyCardContent">
                         <div class="card-body">
-                            <div id="historyList" class="history-list">
-                                <div class="text-center text-muted">Sin operaciones cerradas recientes.</div>
+                            <div id="historyList" class="history-list" data-skeleton>
+                                <div class="text-center text-muted skeleton">Sin operaciones cerradas recientes.</div>
                             </div>
                         </div>
                     </div>
@@ -221,7 +249,7 @@
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-ghost" data-bs-dismiss="modal">Cancelar</button>
                     <button type="button" class="btn btn-primary" id="partialConfirmBtn">Confirmar</button>
                 </div>
             </div>
