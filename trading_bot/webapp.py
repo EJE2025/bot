@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from flask import Flask, render_template, jsonify, request
+    from flask import Flask, render_template, jsonify, request, send_from_directory
 except ImportError:  # Flask not installed
     Flask = None
 
@@ -179,6 +179,14 @@ if Flask:
     @app.route("/")
     def index():
         return render_template("index.html", current_year=datetime.utcnow().year)
+
+    @app.route("/manifest.json")
+    def manifest():
+        return send_from_directory(app.static_folder, "manifest.json")
+
+    @app.route("/service-worker.js")
+    def service_worker():
+        return send_from_directory(app.static_folder, "service-worker.js")
 
     @app.route("/api/trades")
     def api_trades():
@@ -371,6 +379,9 @@ if Flask:
                 and not getattr(config, "MAINTENANCE", False)
             ),
         }
+        trading_mode = str(getattr(config, "TRADING_MODE", "live")).lower()
+        payload["trading_mode"] = trading_mode
+        payload["paper_trading"] = trading_mode != "live"
         return jsonify(payload)
 
     @app.route("/api/history")

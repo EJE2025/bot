@@ -14,10 +14,19 @@ body {
     color: #f8f9ff;
 }
 
+body.demo-mode {
+    background: linear-gradient(140deg, #1f2933, #27323f 70%);
+    color: #f5f7fb;
+}
+
 .navbar {
     background: linear-gradient(120deg, rgba(41, 72, 189, 0.95), rgba(11, 191, 189, 0.9));
     box-shadow: 0 15px 30px rgba(0, 0, 0, 0.25);
     backdrop-filter: blur(8px);
+}
+
+body.demo-mode .navbar {
+    background: linear-gradient(120deg, rgba(100, 116, 139, 0.95), rgba(148, 163, 184, 0.9));
 }
 
 .navbar-brand span {
@@ -36,6 +45,10 @@ main.container-fluid {
     border-radius: 18px;
     box-shadow: 0 20px 40px rgba(15, 23, 42, 0.24);
     overflow: hidden;
+}
+
+body.demo-mode .card {
+    background: rgba(255, 255, 255, 0.85);
 }
 
 .card-header {
@@ -143,6 +156,65 @@ main.container-fluid {
     font-size: 0.7rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+#modeBadge {
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.card-toggle {
+    white-space: nowrap;
+}
+
+.collapsible-card .collapsible-content {
+    overflow: hidden;
+    transition: max-height 0.4s ease, opacity 0.3s ease;
+    max-height: 1600px;
+    opacity: 1;
+}
+
+.collapsible-card.is-collapsed .collapsible-content {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+.collapsible-card.is-collapsed .card-body,
+.collapsible-card.is-collapsed .table-responsive,
+.collapsible-card.is-collapsed .history-list {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+.flash-update {
+    animation: highlight 1s ease-out;
+}
+
+@keyframes highlight {
+    from {
+        background-color: rgba(255, 235, 59, 0.5);
+    }
+    to {
+        background-color: transparent;
+    }
+}
+
+td.price-up,
+td.price-down {
+    transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+td.price-up {
+    background-color: rgba(46, 204, 113, 0.18);
+    color: var(--success);
+}
+
+td.price-down {
+    background-color: rgba(231, 76, 60, 0.18);
+    color: var(--danger);
 }
 
 .liquidity-grid {
