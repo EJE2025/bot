@@ -3,6 +3,36 @@ const MAX_POINTS = 60;
 const DASHBOARD_ORDER_KEY = 'dashboard:layout';
 const COLLAPSED_CARDS_KEY = 'dashboard:collapsed';
 const NOTIFICATION_REQUESTED_KEY = 'dashboard:notifications-requested';
+const THEME_STORAGE_KEY = 'dashboard:theme';
+
+const themePalettes = {
+  light: {
+    '--background': '#f5f6fa',
+    '--surface': 'rgba(255, 255, 255, 0.6)',
+    '--surface-strong': '#ffffff',
+    '--surface-elevated': '#ffffff',
+    '--accent-primary': '#00bcd4',
+    '--accent-secondary': '#ff6f61',
+    '--accent-tertiary': '#2ecc71',
+    '--text-primary': '#2c3e50',
+    '--text-secondary': '#95a5a6',
+    '--shadow': 'rgba(0, 0, 0, 0.1)',
+    '--border-subtle': 'rgba(0, 0, 0, 0.05)',
+  },
+  dark: {
+    '--background': '#1e272e',
+    '--surface': 'rgba(47, 54, 64, 0.7)',
+    '--surface-strong': 'rgba(47, 54, 64, 0.9)',
+    '--surface-elevated': 'rgba(60, 66, 74, 0.92)',
+    '--accent-primary': '#00bcd4',
+    '--accent-secondary': '#ff6f61',
+    '--accent-tertiary': '#2ecc71',
+    '--text-primary': '#ecf0f1',
+    '--text-secondary': 'rgba(189, 195, 199, 0.8)',
+    '--shadow': 'rgba(0, 0, 0, 0.35)',
+    '--border-subtle': 'rgba(255, 255, 255, 0.08)',
+  },
+};
 
 const userLocale = (() => {
   try {
@@ -46,6 +76,8 @@ const state = {
   priceMemory: new Map(),
   priceDirection: new Map(),
   collapsedCards: new Set(),
+  isInitialLoad: true,
+  theme: 'light',
 };
 
 let pnlChart = null;
@@ -53,6 +85,147 @@ let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
 let notificationsRequested = false;
+
+function getCssVariable(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name)?.trim();
+}
+
+function hexToRgb(hex) {
+  if (!hex) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  const normalized = hex.replace('#', '');
+  const value = normalized.length === 3
+    ? normalized
+        .split('')
+        .map((char) => char + char)
+        .join('')
+    : normalized;
+  const int = Number.parseInt(value, 16);
+  if (Number.isNaN(int)) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  return {
+    r: (int >> 16) & 255,
+    g: (int >> 8) & 255,
+    b: int & 255,
+  };
+}
+
+function colorWithAlpha(color, alpha) {
+  if (!color) {
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  const trimmed = color.trim();
+  if (trimmed.startsWith('rgba')) {
+    const [r, g, b] = trimmed
+      .slice(trimmed.indexOf('(') + 1, trimmed.lastIndexOf(')'))
+      .split(',')
+      .map((part) => part.trim())
+      .slice(0, 3);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (trimmed.startsWith('rgb')) {
+    const [r, g, b] = trimmed
+      .slice(trimmed.indexOf('(') + 1, trimmed.lastIndexOf(')'))
+      .split(',')
+      .map((part) => part.trim());
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (trimmed.startsWith('#')) {
+    const { r, g, b } = hexToRgb(trimmed);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return trimmed;
+}
+
+function createPnlGradient(ctx) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, 320);
+  const accent = getCssVariable('--accent-primary') || '#00bcd4';
+  gradient.addColorStop(0, colorWithAlpha(accent, 0.4));
+  gradient.addColorStop(1, colorWithAlpha(accent, 0));
+  return gradient;
+}
+
+function updateChartTheme() {
+  if (!pnlChart) {
+    return;
+  }
+  const accent = getCssVariable('--accent-primary') || '#00bcd4';
+  const textSecondary = getCssVariable('--text-secondary') || '#95a5a6';
+  const gridColor = colorWithAlpha(textSecondary || '#95a5a6', 0.2);
+  if (pnlChart.ctx) {
+    pnlChart.data.datasets[0].backgroundColor = createPnlGradient(pnlChart.ctx);
+  }
+  pnlChart.data.datasets[0].borderColor = accent;
+  pnlChart.options.scales.x.ticks.color = textSecondary;
+  pnlChart.options.scales.y.ticks.color = textSecondary;
+  pnlChart.options.scales.x.grid.color = gridColor;
+  pnlChart.options.scales.y.grid.color = gridColor;
+  pnlChart.update('none');
+}
+
+function applyThemeVariables(theme) {
+  const palette = themePalettes[theme] || themePalettes.light;
+  Object.entries(palette).forEach(([variable, value]) => {
+    document.documentElement.style.setProperty(variable, value);
+  });
+  document.documentElement.dataset.theme = theme;
+  state.theme = theme;
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (error) {
+    console.debug('No se pudo persistir el tema preferido', error);
+  }
+  updateThemeToggleButton(theme);
+  updateChartTheme();
+}
+
+function updateThemeToggleButton(theme) {
+  const toggle = document.getElementById('themeToggleBtn');
+  if (!toggle) return;
+  const isDark = theme === 'dark';
+  toggle.setAttribute('aria-pressed', String(isDark));
+  const icon = toggle.querySelector('i');
+  if (icon) {
+    icon.classList.toggle('bi-moon-stars', !isDark);
+    icon.classList.toggle('bi-sun', isDark);
+  }
+  toggle.setAttribute('title', isDark ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro');
+}
+
+function toggleTheme() {
+  const next = state.theme === 'dark' ? 'light' : 'dark';
+  applyThemeVariables(next);
+}
+
+function initTheme() {
+  let storedTheme = null;
+  try {
+    storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  } catch (error) {
+    storedTheme = null;
+  }
+  if (storedTheme !== 'dark' && storedTheme !== 'light') {
+    storedTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
+  }
+  applyThemeVariables(storedTheme);
+}
+
+function clearSkeleton(element) {
+  if (!element) return;
+  element.classList.remove('skeleton');
+  element.querySelectorAll('.skeleton').forEach((node) => {
+    node.classList.remove('skeleton');
+  });
+}
+
+function markElementLoaded(elementOrId) {
+  const element = typeof elementOrId === 'string' ? document.getElementById(elementOrId) : elementOrId;
+  clearSkeleton(element);
+}
 
 try {
   notificationsRequested = localStorage.getItem(NOTIFICATION_REQUESTED_KEY) === '1';
@@ -112,7 +285,8 @@ function setStatus(label, variant) {
   const badge = document.getElementById('connectionStatus');
   if (!badge) return;
   badge.textContent = label;
-  badge.className = `badge badge-status bg-${variant}`;
+  const variantClass = variant ? `badge-status--${variant}` : '';
+  badge.className = ['badge', 'badge-status', variantClass].filter(Boolean).join(' ');
 }
 
 function updateTradingControls(isActive) {
@@ -121,17 +295,17 @@ function updateTradingControls(isActive) {
     state.tradingActive = isActive;
     if (state.connectionHealthy) {
       const label = isActive ? 'En vivo' : 'Pausado';
-      const variant = isActive ? 'success' : 'secondary';
+      const variant = isActive ? 'success' : 'warning';
       setStatus(label, variant);
     }
-    if (toggleBtn) {
-      toggleBtn.disabled = !state.connectionHealthy;
-      toggleBtn.className = `btn btn-sm ${isActive ? 'btn-warning' : 'btn-success'}`;
-      toggleBtn.innerHTML = isActive
-        ? '<i class="bi bi-pause-circle"></i> Pausar bot'
-        : '<i class="bi bi-play-circle"></i> Reanudar bot';
-    }
+  if (toggleBtn) {
+    toggleBtn.disabled = !state.connectionHealthy;
+    toggleBtn.className = `btn btn-sm ${isActive ? 'btn-secondary' : 'btn-tertiary'}`;
+    toggleBtn.innerHTML = isActive
+      ? '<i class="bi bi-pause-circle"></i> Pausar bot'
+      : '<i class="bi bi-play-circle"></i> Reanudar bot';
   }
+}
 }
 
 function showAlert(message, variant = 'danger') {
@@ -267,8 +441,10 @@ function loadCollapsedCards() {
 function updateToggleButtons(cardId, collapsed) {
   document.querySelectorAll(`button[data-card-toggle="${cardId}"]`).forEach((button) => {
     button.setAttribute('aria-expanded', String(!collapsed));
-    button.classList.toggle('btn-outline-secondary', !collapsed);
-    button.classList.toggle('btn-outline-primary', collapsed);
+    button.classList.remove('btn-outline-secondary', 'btn-outline-primary', 'btn-primary', 'btn-ghost');
+    button.classList.add('btn');
+    button.classList.add('btn-sm');
+    button.classList.add(collapsed ? 'btn-primary' : 'btn-ghost');
     const icon = collapsed ? 'bi-arrows-expand' : 'bi-arrows-collapse';
     button.innerHTML = `<i class="bi ${icon}"></i>`;
     const actionLabel = collapsed ? 'Expandir tarjeta' : 'Colapsar tarjeta';
@@ -422,6 +598,8 @@ function ensureChart() {
   if (!ctx) {
     return null;
   }
+  const accent = getCssVariable('--accent-primary') || '#00bcd4';
+  const textSecondary = getCssVariable('--text-secondary') || '#95a5a6';
   pnlChart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -430,8 +608,8 @@ function ensureChart() {
         {
           label: 'PnL total',
           data: [],
-          borderColor: '#2b6cb0',
-          backgroundColor: 'rgba(66, 153, 225, 0.25)',
+          borderColor: accent,
+          backgroundColor: createPnlGradient(ctx),
           tension: 0.35,
           fill: true,
           borderWidth: 2,
@@ -457,26 +635,27 @@ function ensureChart() {
       scales: {
         x: {
           ticks: {
-            color: '#5b6478',
+            color: textSecondary,
           },
           grid: {
-            color: 'rgba(91, 100, 120, 0.15)',
+            color: colorWithAlpha(textSecondary, 0.2),
           },
         },
         y: {
           ticks: {
-            color: '#5b6478',
+            color: textSecondary,
             callback(value) {
               return formatNumber(value);
             },
           },
           grid: {
-            color: 'rgba(91, 100, 120, 0.15)',
+            color: colorWithAlpha(textSecondary, 0.2),
           },
         },
       },
     },
   });
+  updateChartTheme();
   return pnlChart;
 }
 
@@ -527,11 +706,13 @@ function renderSummary(summary) {
   const positionsEl = document.getElementById('metricPositions');
   if (positionsEl) {
     positionsEl.textContent = Number(summary.total_positions ?? 0);
+    markElementLoaded(positionsEl);
   }
 
   const pnlEl = document.getElementById('metricPnL');
   if (pnlEl) {
     pnlEl.textContent = formatPnL(summary.unrealized_pnl);
+    markElementLoaded(pnlEl);
   }
 
   const totalExposure = Number(summary.total_exposure ?? 0);
@@ -540,6 +721,7 @@ function renderSummary(summary) {
   if (exposureEl) {
     exposureEl.textContent = formatNumber(totalExposure);
     exposureEl.title = `Capital invertido: ${formatNumber(totalInvested)}`;
+    markElementLoaded(exposureEl);
   }
 
   const winRateEl = document.getElementById('metricWinRate');
@@ -559,16 +741,19 @@ function renderSummary(summary) {
       ? `${samples} operaciones (${winners} ganadas / ${losers} perdidas)`
       : 'Sin operaciones suficientes para calcular la métrica';
     winRateEl.setAttribute('title', tooltip);
+    markElementLoaded(winRateEl);
   }
 
   const realizedBalance = document.getElementById('metricRealizedBalance');
   if (realizedBalance) {
     realizedBalance.textContent = formatNumber(summary.realized_balance);
+    markElementLoaded(realizedBalance);
   }
   const realizedPnL = document.getElementById('metricRealizedPnL');
   if (realizedPnL) {
     const realizedPnLValue = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
     realizedPnL.textContent = formatPnL(realizedPnLValue);
+    markElementLoaded(realizedPnL);
   }
   const lastUpdated = document.getElementById('lastUpdated');
   if (lastUpdated) {
@@ -595,11 +780,12 @@ function renderSummary(summary) {
   list.innerHTML = '';
   if (!summary.per_symbol || summary.per_symbol.length === 0) {
     list.innerHTML = '<li class="list-group-item">Sin posiciones abiertas.</li>';
+    clearSkeleton(list);
     return;
   }
 
   summary.per_symbol.forEach((item) => {
-    const pnlClass = item.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
+    const pnlClass = item.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
     const quantity = formatNumber(item.quantity, quantityFormatter);
     const exposure = formatNumber(item.exposure, numberFormatter);
     const pnl = formatPnL(item.unrealized_pnl);
@@ -619,6 +805,7 @@ function renderSummary(summary) {
       </div>`;
     list.appendChild(li);
   });
+  clearSkeleton(list);
 }
 
 function renderTrades() {
@@ -633,6 +820,7 @@ function renderTrades() {
   if (!trades || trades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
     state.priceDirection.clear();
+    clearSkeleton(tbody);
     return;
   }
 
@@ -682,8 +870,8 @@ function renderTrades() {
           <td>${trade.open_time ? formatDate(trade.open_time) : '—'}</td>
           <td>
             <div class="btn-group" role="group">
-              <button class="btn btn-sm btn-outline-danger" data-trade-id="${tradeId}" data-action="close">Cerrar</button>
-              <button class="btn btn-sm btn-outline-warning" data-trade-id="${tradeId}" data-action="partial" data-remaining="${remaining}">Cerrar parcial</button>
+              <button class="btn btn-sm btn-secondary" type="button" data-trade-id="${tradeId}" data-action="close">Cerrar</button>
+              <button class="btn btn-sm btn-tertiary" type="button" data-trade-id="${tradeId}" data-action="partial" data-remaining="${remaining}">Cerrar parcial</button>
             </div>
           </td>
         </tr>`;
@@ -691,6 +879,7 @@ function renderTrades() {
     .join('');
 
   tbody.innerHTML = rows;
+  clearSkeleton(tbody);
   attachTradeRowEvents();
   applyTradeHighlights();
 
@@ -754,6 +943,7 @@ function renderHistory() {
 
   if (!state.history || state.history.length === 0) {
     container.innerHTML = '<div class="text-center text-muted">Sin operaciones cerradas recientes.</div>';
+    clearSkeleton(container);
     return;
   }
 
@@ -761,7 +951,7 @@ function renderHistory() {
     .map((trade) => {
       const side = String(trade.side || '').toLowerCase();
       const sideLabel = side === 'buy' ? 'Compra' : 'Venta';
-      const pnlClass = Number(trade.profit) >= 0 ? 'text-success' : 'text-danger';
+      const pnlClass = Number(trade.profit) >= 0 ? 'pnl-positive' : 'pnl-negative';
       return `
         <div class="history-item">
           <div class="d-flex justify-content-between align-items-center">
@@ -779,6 +969,7 @@ function renderHistory() {
     .join('');
 
   container.innerHTML = items;
+  clearSkeleton(container);
 }
 
 async function refreshDashboard(manual = false) {
@@ -818,6 +1009,7 @@ async function refreshDashboard(manual = false) {
       );
       setStatus('Datos incompletos', 'warning');
     }
+    state.isInitialLoad = false;
   } catch (error) {
     console.error(error);
     showAlert('No se pudieron sincronizar los datos del bot. Reintentaremos automáticamente.', 'danger');
@@ -839,6 +1031,11 @@ function attachEvents() {
   const refreshBtn = document.getElementById('refreshTradesBtn');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => refreshDashboard(true));
+  }
+
+  const themeToggle = document.getElementById('themeToggleBtn');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', toggleTheme);
   }
 
   const toggleBtn = document.getElementById('toggleTradeBtn');
@@ -879,6 +1076,7 @@ function attachEvents() {
 }
 
 function initialize() {
+  initTheme();
   registerServiceWorker();
   applyDashboardLayout();
   setupCollapsibles();
