@@ -260,3 +260,33 @@ pytest
 
 Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más informacion.
 
+
+## Nueva arquitectura basada en microservicios
+
+El bot se ha ampliado para funcionar como una plataforma moderna compuesta por servicios independientes:
+
+- **Trading Engine** (`services/trading_engine/app.py`): API de FastAPI para la gestión de órdenes en memoria.
+- **Streaming Service** (`services/streaming_service/app.py`): publica eventos de mercado mediante Redis Streams.
+- **Analytics Service** (`services/analytics/app`): expone un endpoint GraphQL con modelos SQLAlchemy para usuarios, ajustes y operaciones.
+- **AI Service** (`services/ai_service/app.py`): integra ChatGPT para generar informes y responder preguntas contextuales.
+- **Gateway** (`services/gateway/app.py`): punto de entrada único que reenvía peticiones a los servicios anteriores.
+- **Frontend** (`services/frontend`): base documentada para una SPA Next.js/SvelteKit conectada al gateway.
+
+Cada servicio se empaqueta mediante Docker y se orquesta con `docker-compose` para facilitar despliegues reproducibles.
+
+### Orquestación con Docker Compose
+
+El archivo `docker-compose.yml` en la raíz levanta Redis, PostgreSQL y los microservicios descritos. Ajusta las variables de entorno
+según tus credenciales y la clave `OPENAI_API_KEY` para habilitar la IA.
+
+### Integración de la IA
+
+El Gateway expone `/ai/report` y `/ai/chat`, que a su vez llaman al servicio AI. Puedes invocar estos endpoints desde el frontend o scripts
+de automatización para mostrar informes de rendimiento, explicar métricas y resolver dudas operativas.
+
+### Próximos pasos sugeridos
+
+1. Desplegar el frontend siguiendo las instrucciones de `services/frontend/README.md`.
+2. Conectar el bot de trading existente a la cola de eventos (`Redis Streams`) para enviar datos en tiempo real al Streaming Service.
+3. Alimentar el Analytics Service con los resultados históricos del bot para aprovechar las consultas GraphQL.
+4. Definir pipelines de CI/CD que construyan y publiquen las imágenes Docker de cada microservicio.
