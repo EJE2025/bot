@@ -15,3 +15,13 @@ filelock>=3.12
 hypothesis>=6.0
 openpyxl>=3.1
 xlsxwriter>=3.2
+fastapi>=0.95,<0.110
+uvicorn[standard]
+pydantic>=1.10,<2
+SQLAlchemy>=1.4
+psycopg2-binary
+graphene==2.1.9
+flask-graphql==2.0.1
+openai
+redis>=5.0
+httpx
