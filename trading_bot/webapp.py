@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import threading
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 try:
@@ -39,6 +41,55 @@ if Flask:
     _session_lock = threading.Lock()
     _session_started_at = datetime.utcnow()
     _session_has_positions = False
+    _trading_state_lock = threading.Lock()
+
+    _TRADING_STATE_PATH = Path(getattr(config, "__file__", __file__)).with_name(
+        "auto_trade_state.json"
+    )
+
+    def _write_trading_state(active: bool) -> None:
+        """Persist the AUTO_TRADE flag so it survives restarts."""
+
+        path = _TRADING_STATE_PATH
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(".tmp")
+            payload = {
+                "auto_trade": bool(active),
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }
+            tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp_path.replace(path)
+        except OSError as exc:  # pragma: no cover - disk issues are unlikely in tests
+            logger.warning("No se pudo persistir el estado de AUTO_TRADE: %s", exc)
+
+    def _apply_trading_state(active: bool, *, persist: bool = False) -> bool:
+        """Update config flags and optionally persist them to disk."""
+
+        active_flag = bool(active)
+        with _trading_state_lock:
+            config.AUTO_TRADE = active_flag
+            config.MAINTENANCE = not active_flag
+            if persist:
+                _write_trading_state(active_flag)
+        return active_flag
+
+    def _load_trading_state() -> bool:
+        """Load AUTO_TRADE from disk if available and keep it consistent."""
+
+        stored = bool(getattr(config, "AUTO_TRADE", True))
+        path = _TRADING_STATE_PATH
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                logger.warning("No se pudo leer el estado persistido de AUTO_TRADE: %s", exc)
+            else:
+                if isinstance(raw, dict) and "auto_trade" in raw:
+                    stored = bool(raw["auto_trade"])
+        return _apply_trading_state(stored, persist=True)
+
+    _load_trading_state()
 
     def _get_trade_lock(trade_id: str) -> threading.Lock:
         with _locks_lock:
@@ -139,12 +190,15 @@ if Flask:
         """Permite pausar o reanudar el trading automático desde el dashboard."""
 
         current = bool(getattr(config, "AUTO_TRADE", True))
-        new_status = not current
-        config.AUTO_TRADE = new_status
-        config.MAINTENANCE = not new_status
+        new_status = _apply_trading_state(not current, persist=True)
         state_label = "habilitado" if new_status else "pausado"
         logger.warning("Trading %s por solicitud vía dashboard", state_label)
-        payload = {"ok": True, "trading_active": new_status, "status": state_label}
+        payload = {
+            "ok": True,
+            "trading_active": new_status,
+            "status": state_label,
+            "persisted": True,
+        }
         _emit("bot_status", {"trading_active": new_status})
         return jsonify(payload)
 
@@ -192,19 +246,39 @@ if Flask:
                 try:
                     pct_val = float(pct)
                 except (TypeError, ValueError):
-                    return jsonify({"ok": False, "error": "percent inválido"}), 400
+                    return jsonify(
+                        {"ok": False, "error": "percent inválido (usa un número real)"}
+                    ), 400
                 if pct_val <= 0 or pct_val > 100:
-                    return jsonify({"ok": False, "error": "percent fuera de rango (1-100)"}), 400
+                    return jsonify(
+                        {
+                            "ok": False,
+                            "error": "percent fuera de rango permitido (1-100)",
+                        }
+                    ), 400
                 qty = remaining * (pct_val / 100.0)
 
             try:
                 qty_val = float(qty)
             except (TypeError, ValueError):
-                return jsonify({"ok": False, "error": "qty inválido"}), 400
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "qty inválido (usa un número mayor que 0)",
+                    }
+                ), 400
             if qty_val <= 0:
-                return jsonify({"ok": False, "error": "qty debe ser > 0"}), 400
+                return jsonify(
+                    {"ok": False, "error": "qty debe ser mayor que 0"}
+                ), 400
             if qty_val > remaining + 1e-12:
-                return jsonify({"ok": False, "error": "qty excede la cantidad restante"}), 400
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "qty excede la cantidad restante"
+                        f" ({remaining:.6f})",
+                    }
+                ), 400
 
             try:
                 result = close_trade_partial(trade_id, quantity=qty_val, reason=reason)
@@ -223,6 +297,9 @@ if Flask:
         total_positions = len(trades)
         total_quantity = sum(abs(t["quantity_remaining"]) for t in trades)
         total_invested = sum(t["invested_value"] for t in trades)
+        total_exposure = sum(
+            abs(t["quantity_remaining"] * t.get("current_price", 0.0)) for t in trades
+        )
         unrealized_pnl = sum(t["pnl_unrealized"] for t in trades)
         open_winners = sum(1 for t in trades if t["pnl_unrealized"] > 0)
         open_losers = sum(1 for t in trades if t["pnl_unrealized"] < 0)
@@ -238,6 +315,7 @@ if Flask:
             lambda: {
                 "symbol": "",
                 "positions": 0,
+                "quantity": 0.0,
                 "exposure": 0.0,
                 "unrealized_pnl": 0.0,
                 "invested_value": 0.0,
@@ -249,17 +327,20 @@ if Flask:
             entry = per_symbol[sym]
             entry["symbol"] = sym
             entry["positions"] += 1
-            entry["exposure"] += abs(trade["quantity_remaining"])
+            entry["quantity"] += abs(trade["quantity_remaining"])
+            entry["exposure"] += abs(
+                trade["quantity_remaining"] * trade.get("current_price", 0.0)
+            )
             entry["unrealized_pnl"] += trade["pnl_unrealized"]
             entry["invested_value"] += trade["invested_value"]
 
         per_symbol_list = sorted(
             per_symbol.values(),
-            key=lambda item: item["invested_value"],
+            key=lambda item: item["exposure"],
             reverse=True,
         )
 
-        win_rate = 0.0
+        win_rate: float | None = None
         total_winners = open_winners + closed_winners
         total_losers = open_losers + closed_losers
         deciding = total_winners + total_losers
@@ -269,7 +350,7 @@ if Flask:
         payload = {
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "total_positions": total_positions,
-            "total_exposure": total_invested,
+            "total_exposure": total_exposure,
             "total_invested": total_invested,
             "total_quantity": total_quantity,
             "unrealized_pnl": unrealized_pnl,
@@ -280,6 +361,9 @@ if Flask:
             "winning_positions": open_winners,
             "losing_positions": open_losers,
             "win_rate": win_rate,
+            "win_rate_samples": deciding,
+            "win_rate_winners": total_winners,
+            "win_rate_losers": total_losers,
             "per_symbol": per_symbol_list,
             "session_id": session_id,
             "trading_active": bool(
