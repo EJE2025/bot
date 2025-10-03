@@ -1,22 +1,33 @@
 const REFRESH_INTERVAL = 10000;
 const MAX_POINTS = 60;
+const DASHBOARD_ORDER_KEY = 'dashboard:layout';
+const COLLAPSED_CARDS_KEY = 'dashboard:collapsed';
+const NOTIFICATION_REQUESTED_KEY = 'dashboard:notifications-requested';
 
-const numberFormatter = new Intl.NumberFormat('es-ES', {
+const userLocale = (() => {
+  try {
+    return localStorage.getItem('dashboard:locale') || navigator.language || 'es-ES';
+  } catch (error) {
+    return navigator.language || 'es-ES';
+  }
+})();
+
+const numberFormatter = new Intl.NumberFormat(userLocale, {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
-const priceFormatter = new Intl.NumberFormat('es-ES', {
+const priceFormatter = new Intl.NumberFormat(userLocale, {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
 
-const quantityFormatter = new Intl.NumberFormat('es-ES', {
+const quantityFormatter = new Intl.NumberFormat(userLocale, {
   minimumFractionDigits: 2,
   maximumFractionDigits: 4,
 });
 
-const percentFormatter = new Intl.NumberFormat('es-ES', {
+const percentFormatter = new Intl.NumberFormat(userLocale, {
   style: 'percent',
   minimumFractionDigits: 1,
   maximumFractionDigits: 1,
@@ -31,12 +42,23 @@ const state = {
   tradingActive: true,
   connectionHealthy: true,
   sessionId: null,
+  flashTrades: new Set(),
+  priceMemory: new Map(),
+  priceDirection: new Map(),
+  collapsedCards: new Set(),
 };
 
 let pnlChart = null;
 let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
+let notificationsRequested = false;
+
+try {
+  notificationsRequested = localStorage.getItem(NOTIFICATION_REQUESTED_KEY) === '1';
+} catch (error) {
+  notificationsRequested = false;
+}
 
 function getTradeId(trade) {
   return trade.trade_id || trade.id || trade.uuid;
@@ -180,13 +202,216 @@ function formatPnL(value) {
   return `${prefix}${numberFormatter.format(numeric)}`;
 }
 
+function getStoredJSON(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn(`No se pudo leer ${key} de localStorage`, error);
+    return null;
+  }
+}
+
+function setStoredJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`No se pudo almacenar ${key} en localStorage`, error);
+  }
+}
+
+function applyDashboardLayout() {
+  const grid = document.getElementById('dashboardGrid');
+  if (!grid) return;
+
+  const savedOrder = getStoredJSON(DASHBOARD_ORDER_KEY);
+  if (Array.isArray(savedOrder) && savedOrder.length) {
+    const elements = new Map(Array.from(grid.children).map((child) => [child.dataset.id, child]));
+    savedOrder.forEach((id) => {
+      const element = elements.get(id);
+      if (element) {
+        grid.appendChild(element);
+        elements.delete(id);
+      }
+    });
+  }
+
+  if (window.Sortable && !grid.sortableInstance) {
+    grid.sortableInstance = new Sortable(grid, {
+      animation: 150,
+      handle: '.card-header',
+      onEnd: () => {
+        const order = Array.from(grid.children)
+          .map((child) => child.dataset.id)
+          .filter(Boolean);
+        setStoredJSON(DASHBOARD_ORDER_KEY, order);
+      },
+    });
+  }
+}
+
+function persistCollapsedCards() {
+  setStoredJSON(COLLAPSED_CARDS_KEY, Array.from(state.collapsedCards));
+}
+
+function loadCollapsedCards() {
+  const stored = getStoredJSON(COLLAPSED_CARDS_KEY);
+  if (Array.isArray(stored)) {
+    state.collapsedCards = new Set(stored);
+  } else {
+    state.collapsedCards = new Set();
+  }
+}
+
+function updateToggleButtons(cardId, collapsed) {
+  document.querySelectorAll(`button[data-card-toggle="${cardId}"]`).forEach((button) => {
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.classList.toggle('btn-outline-secondary', !collapsed);
+    button.classList.toggle('btn-outline-primary', collapsed);
+    const icon = collapsed ? 'bi-arrows-expand' : 'bi-arrows-collapse';
+    button.innerHTML = `<i class="bi ${icon}"></i>`;
+    const actionLabel = collapsed ? 'Expandir tarjeta' : 'Colapsar tarjeta';
+    button.setAttribute('aria-label', actionLabel);
+    button.setAttribute('title', actionLabel);
+  });
+}
+
+function toggleCardCollapse(card, collapsed, persist = true) {
+  if (!card) return;
+  const cardId = card.dataset.cardId;
+  if (!cardId) return;
+  card.classList.toggle('is-collapsed', collapsed);
+  if (collapsed) {
+    state.collapsedCards.add(cardId);
+  } else {
+    state.collapsedCards.delete(cardId);
+  }
+  updateToggleButtons(cardId, collapsed);
+  if (persist) {
+    persistCollapsedCards();
+  }
+}
+
+function setupCollapsibles() {
+  loadCollapsedCards();
+  document.querySelectorAll('.collapsible-card').forEach((card) => {
+    const cardId = card.dataset.cardId;
+    if (!cardId) return;
+    const collapsed = state.collapsedCards.has(cardId);
+    toggleCardCollapse(card, collapsed, false);
+  });
+
+  document.querySelectorAll('button[data-card-toggle]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const cardId = button.dataset.cardToggle;
+      const card = document.querySelector(`.collapsible-card[data-card-id="${cardId}"]`);
+      if (!card) return;
+      const collapsed = !card.classList.contains('is-collapsed');
+      toggleCardCollapse(card, collapsed, true);
+    });
+  });
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) {
+    return;
+  }
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/service-worker.js')
+      .catch((error) => console.error('No se pudo registrar el service worker', error));
+  });
+}
+
+function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    notificationsRequested = true;
+    return;
+  }
+  if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+    notificationsRequested = true;
+    try {
+      localStorage.setItem(NOTIFICATION_REQUESTED_KEY, '1');
+    } catch (error) {
+      // ignore storage errors
+    }
+    return;
+  }
+  if (notificationsRequested) {
+    return;
+  }
+  notificationsRequested = true;
+  Notification.requestPermission()
+    .catch((error) => {
+      console.warn('No se pudo solicitar permiso de notificaciones', error);
+    })
+    .finally(() => {
+      try {
+        localStorage.setItem(NOTIFICATION_REQUESTED_KEY, '1');
+      } catch (error) {
+        // ignore storage errors
+      }
+    });
+}
+
+function scheduleNotificationRequest() {
+  if (!('Notification' in window)) {
+    return;
+  }
+  if (Notification.permission !== 'default') {
+    if (!notificationsRequested) {
+      notificationsRequested = true;
+      try {
+        localStorage.setItem(NOTIFICATION_REQUESTED_KEY, '1');
+      } catch (error) {
+        // ignore storage errors
+      }
+    }
+    return;
+  }
+  if (notificationsRequested) {
+    return;
+  }
+  setTimeout(() => {
+    requestNotificationPermission();
+  }, 1200);
+}
+
+function registerHotkeys() {
+  document.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey || event.metaKey)) {
+      return;
+    }
+    const target = event.target;
+    if (
+      target &&
+      (target.isContentEditable ||
+        ['input', 'textarea', 'select'].includes(String(target.tagName).toLowerCase()))
+    ) {
+      return;
+    }
+    const key = String(event.key || '').toLowerCase();
+    if (key === 'p') {
+      event.preventDefault();
+      const toggleBtn = document.getElementById('toggleTradeBtn');
+      if (toggleBtn) {
+        toggleBtn.click();
+      }
+    } else if (key === 'r') {
+      event.preventDefault();
+      refreshDashboard(true);
+    }
+  });
+}
+
 function formatDate(value) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString('es-ES');
+  return date.toLocaleString(userLocale);
 }
 
 function ensureChart() {
@@ -281,7 +506,7 @@ function updatePnlSeries(summary) {
   if (!chart) return;
 
   const timestampLabel = new Date(summary.generated_at || Date.now()).toLocaleTimeString(
-    'es-ES',
+    userLocale,
   );
   const realized = Number(summary.realized_pnl_total ?? summary.realized_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
@@ -348,7 +573,21 @@ function renderSummary(summary) {
   const lastUpdated = document.getElementById('lastUpdated');
   if (lastUpdated) {
     const generatedAt = summary.generated_at ? new Date(summary.generated_at) : new Date();
-    lastUpdated.textContent = generatedAt.toLocaleTimeString('es-ES');
+    lastUpdated.textContent = generatedAt.toLocaleTimeString(userLocale);
+  }
+
+  const tradingMode = String(summary.trading_mode || '').toLowerCase();
+  const isDemo = Boolean(tradingMode && tradingMode !== 'live');
+  document.body.classList.toggle('demo-mode', isDemo);
+  const modeBadge = document.getElementById('modeBadge');
+  if (modeBadge) {
+    if (isDemo) {
+      const label = tradingMode === 'paper' ? 'Demo' : tradingMode.toUpperCase();
+      modeBadge.textContent = label;
+      modeBadge.classList.remove('d-none');
+    } else {
+      modeBadge.classList.add('d-none');
+    }
   }
 
   const list = document.getElementById('symbolBreakdown');
@@ -393,12 +632,17 @@ function renderTrades() {
 
   if (!trades || trades.length === 0) {
     tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hay operaciones abiertas.</td></tr>';
+    state.priceDirection.clear();
     return;
   }
+
+  state.priceDirection.clear();
+  const visibleIds = new Set();
 
   const rows = trades
     .map((trade) => {
       const tradeId = getTradeId(trade);
+      visibleIds.add(tradeId);
       const side = String(trade.side || '').toLowerCase();
       const sideClass = side === 'buy' ? 'buy' : 'sell';
       const pnlClass = trade.pnl_unrealized >= 0 ? 'pnl-positive' : 'pnl-negative';
@@ -410,13 +654,27 @@ function renderTrades() {
       const quantity = formatNumber(remaining, quantityFormatter);
       const pnl = formatPnL(trade.pnl_unrealized);
       const realized = formatPnL(trade.realized_pnl);
+      const numericPrice = Number(trade.current_price);
+      let priceChangeClass = '';
+      if (Number.isFinite(numericPrice)) {
+        const previous = state.priceMemory.has(tradeId)
+          ? Number(state.priceMemory.get(tradeId))
+          : undefined;
+        if (Number.isFinite(previous) && numericPrice !== previous) {
+          priceChangeClass = numericPrice > previous ? 'price-up' : 'price-down';
+          state.priceDirection.set(tradeId, priceChangeClass);
+        }
+        state.priceMemory.set(tradeId, numericPrice);
+      } else {
+        state.priceMemory.delete(tradeId);
+      }
       return `
         <tr data-trade-id="${tradeId}">
           <td><span class="symbol-badge"><i class="bi bi-currency-bitcoin"></i>${trade.symbol}</span></td>
           <td class="trade-side ${sideClass}">${side.toUpperCase()}</td>
           <td>${quantity}</td>
           <td>${entryPrice}</td>
-          <td>${currentPrice}</td>
+          <td class="${priceChangeClass}" data-field="current_price">${currentPrice}</td>
           <td>${takeProfit}</td>
           <td>${stopLoss}</td>
           <td class="${pnlClass}">${pnl}</td>
@@ -434,6 +692,60 @@ function renderTrades() {
 
   tbody.innerHTML = rows;
   attachTradeRowEvents();
+  applyTradeHighlights();
+
+  Array.from(state.priceMemory.keys()).forEach((id) => {
+    if (!visibleIds.has(id)) {
+      state.priceMemory.delete(id);
+    }
+  });
+}
+
+function applyTradeHighlights() {
+  const tbody = document.getElementById('tradesTableBody');
+  if (!tbody) return;
+
+  if (state.flashTrades.size > 0) {
+    state.flashTrades.forEach((tradeId) => {
+      const row = tbody.querySelector(`tr[data-trade-id="${tradeId}"]`);
+      if (!row) return;
+      row.classList.add('flash-update');
+      setTimeout(() => {
+        row.classList.remove('flash-update');
+      }, 1000);
+    });
+    state.flashTrades.clear();
+  }
+
+  if (state.priceDirection.size > 0) {
+    state.priceDirection.forEach((className, tradeId) => {
+      if (!className) return;
+      const cell = tbody.querySelector(
+        `tr[data-trade-id="${tradeId}"] td[data-field="current_price"]`,
+      );
+      if (!cell) return;
+      cell.classList.add(className);
+      setTimeout(() => {
+        cell.classList.remove('price-up');
+        cell.classList.remove('price-down');
+      }, 700);
+    });
+    state.priceDirection.clear();
+  }
+}
+
+function notifyTradeClosed(trade) {
+  if (!trade || !('Notification' in window) || Notification.permission !== 'granted') {
+    return;
+  }
+  const symbol = String(trade.symbol || trade.pair || 'Operación');
+  const pnlValue = trade.realized_pnl ?? trade.profit ?? trade.pnl_unrealized ?? 0;
+  const body = `PnL: ${formatPnL(pnlValue)}`;
+  try {
+    new Notification(`Operación cerrada · ${symbol}`, { body });
+  } catch (error) {
+    console.warn('No se pudo mostrar la notificación', error);
+  }
 }
 
 function renderHistory() {
@@ -567,12 +879,17 @@ function attachEvents() {
 }
 
 function initialize() {
+  registerServiceWorker();
+  applyDashboardLayout();
+  setupCollapsibles();
+  registerHotkeys();
   ensureChart();
   attachEvents();
   refreshDashboard();
   setStatus('Sincronizando…', 'warning');
   setInterval(refreshDashboard, REFRESH_INTERVAL);
   connectSocket();
+  scheduleNotificationRequest();
 }
 
 document.addEventListener('DOMContentLoaded', initialize);
@@ -675,6 +992,7 @@ function updateTradeInState(updatedTrade) {
   } else {
     state.trades.push(updatedTrade);
   }
+  state.flashTrades.add(tradeId);
   renderTrades();
 }
 
@@ -682,6 +1000,7 @@ function removeTradeFromState(tradeId) {
   const index = state.trades.findIndex((trade) => getTradeId(trade) === tradeId);
   if (index >= 0) {
     state.trades.splice(index, 1);
+    state.priceMemory.delete(tradeId);
     renderTrades();
   }
 }
@@ -710,7 +1029,16 @@ function connectSocket() {
   });
   socket.on('trade_closed', ({ trade }) => {
     if (trade) {
-      removeTradeFromState(getTradeId(trade));
+      const tradeId = getTradeId(trade);
+      removeTradeFromState(tradeId);
+      const pnlValue = Number(trade.realized_pnl ?? trade.profit ?? 0);
+      const pnlLabel = formatPnL(pnlValue);
+      const variant = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'success' : 'warning';
+      showToast(
+        `Operación ${trade.symbol || tradeId} cerrada · PnL ${pnlLabel}`,
+        variant,
+      );
+      notifyTradeClosed(trade);
     }
   });
   socket.on('bot_status', ({ trading_active: tradingActive }) => {
