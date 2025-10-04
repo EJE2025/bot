@@ -106,6 +106,15 @@ SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Dashboard & web UI ---------------------------------------------------------
+_default_gateway = os.getenv("GATEWAY_BASE_URL", "http://localhost:8080")
+DASHBOARD_GATEWAY_BASE = _str_env("DASHBOARD_GATEWAY_BASE", _default_gateway).rstrip("/")
+ANALYTICS_GRAPHQL_URL = _str_env(
+    "ANALYTICS_GRAPHQL_URL", f"{DASHBOARD_GATEWAY_BASE}/graphql"
+)
+AI_ASSISTANT_URL = _str_env("AI_ASSISTANT_URL", f"{DASHBOARD_GATEWAY_BASE}/ai/chat")
+EXTERNAL_SERVICE_LINKS = _str_env("EXTERNAL_SERVICE_LINKS", "")
+
 # Trading mode and permissions -------------------------------------------------
 # Trading mode (``shadow`` performs simulated execution without touching the exchange).
 BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or None
