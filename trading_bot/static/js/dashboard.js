@@ -313,6 +313,9 @@ function applyThemeVariables(theme) {
     document.documentElement.style.setProperty(variable, value);
   });
   document.documentElement.dataset.theme = theme;
+  if (document.body) {
+    document.body.dataset.theme = theme;
+  }
   state.theme = theme;
   try {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -581,6 +584,14 @@ function handlePreferencesSubmit(event) {
   showToast('Preferencias actualizadas', 'success');
 }
 
+function getNextTheme(current) {
+  const index = themeOrder.indexOf(current);
+  if (index === -1) {
+    return themeOrder[0];
+  }
+  return themeOrder[(index + 1) % themeOrder.length];
+}
+
 function initTheme() {
   let storedTheme = null;
   try {
@@ -778,6 +789,189 @@ function setStoredJSON(key, value) {
   }
 }
 
+function loadWidgetPreferences() {
+  const stored = getStoredJSON(WIDGET_VISIBILITY_KEY);
+  if (stored && typeof stored === 'object') {
+    state.widgetVisibility = { ...DEFAULT_WIDGET_VISIBILITY, ...stored };
+  } else {
+    state.widgetVisibility = { ...DEFAULT_WIDGET_VISIBILITY };
+  }
+  applyWidgetVisibility();
+}
+
+function applyWidgetVisibility() {
+  Object.entries(widgetSelectors).forEach(([key, selector]) => {
+    const isVisible = state.widgetVisibility[key] !== false;
+    document.querySelectorAll(selector).forEach((element) => {
+      element.classList.toggle('widget-hidden', !isVisible);
+      if (!isVisible) {
+        element.setAttribute('aria-hidden', 'true');
+      } else {
+        element.removeAttribute('aria-hidden');
+      }
+    });
+  });
+}
+
+function setWidgetVisibility(key, visible, persist = true) {
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+    return;
+  }
+  state.widgetVisibility[key] = Boolean(visible);
+  applyWidgetVisibility();
+  if (persist) {
+    setStoredJSON(WIDGET_VISIBILITY_KEY, state.widgetVisibility);
+  }
+}
+
+function loadRefreshInterval() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY);
+  } catch (error) {
+    stored = null;
+  }
+  const numeric = Number(stored);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    state.refreshInterval = numeric;
+  } else {
+    state.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+  }
+  updateRefreshSelect();
+}
+
+function setRefreshInterval(value, { persist = true, reschedule = true } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return state.refreshInterval;
+  }
+  state.refreshInterval = numeric;
+  if (persist) {
+    try {
+      localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, String(numeric));
+    } catch (error) {
+      console.warn('No se pudo guardar el intervalo preferido', error);
+    }
+  }
+  if (reschedule) {
+    scheduleNextRefresh();
+  }
+  updateRefreshSelect();
+  return numeric;
+}
+
+function scheduleNextRefresh() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+  if (state.refreshInterval <= 0) {
+    return;
+  }
+  refreshTimer = window.setTimeout(() => {
+    refreshDashboard(false);
+  }, state.refreshInterval);
+}
+
+function updateRefreshSelect() {
+  const select = document.getElementById('refreshIntervalSelect');
+  if (select) {
+    select.value = String(state.refreshInterval);
+  }
+}
+
+function populateSettingsForm() {
+  const form = document.getElementById('dashboardSettingsForm');
+  if (!form) {
+    return;
+  }
+  form.querySelectorAll('#widgetList input[type="checkbox"]').forEach((input) => {
+    const key = input.value;
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+      return;
+    }
+    input.checked = state.widgetVisibility[key] !== false;
+  });
+  const intervalSelect = form.querySelector('#refreshIntervalSelect');
+  if (intervalSelect) {
+    intervalSelect.value = String(state.refreshInterval);
+  }
+}
+
+function setupSettingsModal() {
+  const modalElement = document.getElementById('dashboardSettingsModal');
+  if (!modalElement || !window.bootstrap) {
+    return;
+  }
+  if (!settingsModal) {
+    settingsModal = new bootstrap.Modal(modalElement);
+  }
+  if (!modalElement.dataset.settingsBound) {
+    modalElement.addEventListener('show.bs.modal', populateSettingsForm);
+    modalElement.dataset.settingsBound = '1';
+  }
+}
+
+function openSettingsModal() {
+  if (!settingsModal) {
+    setupSettingsModal();
+  }
+  populateSettingsForm();
+  if (settingsModal) {
+    settingsModal.show();
+  }
+}
+
+function handleSettingsSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const visibilityUpdate = { ...state.widgetVisibility };
+  form.querySelectorAll('#widgetList input[type="checkbox"]').forEach((input) => {
+    const key = input.value;
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+      visibilityUpdate[key] = Boolean(input.checked);
+    }
+  });
+  Object.entries(DEFAULT_WIDGET_VISIBILITY).forEach(([key]) => {
+    const visible = visibilityUpdate[key] !== false;
+    setWidgetVisibility(key, visible, false);
+  });
+  setStoredJSON(WIDGET_VISIBILITY_KEY, state.widgetVisibility);
+  const intervalSelect = form.querySelector('#refreshIntervalSelect');
+  if (intervalSelect) {
+    setRefreshInterval(intervalSelect.value, { persist: true, reschedule: true });
+  }
+  applyWidgetVisibility();
+  showToast('Preferencias actualizadas', 'success');
+  if (settingsModal) {
+    settingsModal.hide();
+  }
+}
+
+function openExternalService(key) {
+  const base = GATEWAY_BASE || '';
+  const serviceMap = {
+    orders: base ? `${base}/orders` : null,
+    docs: base ? `${base}/docs` : null,
+    analytics: GRAPHQL_URL || (base ? `${base}/graphql` : null),
+  };
+  const url = serviceMap[key];
+  if (!url) {
+    showToast('No se pudo determinar la URL del servicio solicitado.', 'warning');
+    return;
+  }
+  const win = window.open(url, '_blank', 'noopener,noreferrer');
+  if (win) {
+    win.opener = null;
+  } else {
+    showToast('El navegador bloqueó la apertura de la pestaña.', 'warning');
+  }
+}
+
+function handleServiceOpen(event) {
+  const key = event.currentTarget.dataset.openService;
+  openExternalService(key);
+}
+
 function applyDashboardLayout() {
   const grid = document.getElementById('dashboardGrid');
   if (!grid) return;
@@ -870,6 +1064,51 @@ function setupCollapsibles() {
       toggleCardCollapse(card, collapsed, true);
     });
   });
+}
+
+function updateNavLinks(activeSection) {
+  document.querySelectorAll('[data-section-target]').forEach((link) => {
+    const target = link.getAttribute('data-section-target');
+    const isActive = target === activeSection;
+    link.classList.toggle('active', isActive);
+    if (isActive) {
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.removeAttribute('aria-current');
+    }
+  });
+}
+
+function focusAiInput() {
+  const input = document.getElementById('aiMessage');
+  if (input) {
+    window.requestAnimationFrame(() => {
+      input.focus();
+    });
+  }
+}
+
+function switchSection(sectionId) {
+  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
+  state.activeSection = normalized;
+  document.querySelectorAll('.app-section').forEach((section) => {
+    const isTarget = section.dataset.section === normalized;
+    section.classList.toggle('is-active', isTarget);
+    if (isTarget) {
+      section.classList.remove('d-none');
+      section.removeAttribute('hidden');
+    } else {
+      section.classList.add('d-none');
+      section.setAttribute('hidden', 'hidden');
+    }
+  });
+  updateNavLinks(normalized);
+  if (normalized === 'analytics') {
+    ensureAnalyticsData();
+  }
+  if (normalized === 'ai-assistant') {
+    focusAiInput();
+  }
 }
 
 function registerServiceWorker() {
@@ -1189,6 +1428,227 @@ function renderSummary(summary) {
     list.appendChild(li);
   });
   clearSkeleton(list);
+}
+
+const ANALYTICS_TRADES_QUERY = `
+  query AnalyticsTrades($symbol: String) {
+    trades(symbol: $symbol) {
+      id
+      symbol
+      side
+      quantity
+      pnl
+      openTime
+      closeTime
+    }
+  }
+`;
+
+const ANALYTICS_SETTINGS_QUERY = `
+  query AnalyticsUserSettings($userId: Int!) {
+    userSettings(userId: $userId) {
+      locale
+      theme
+      maxRisk
+      notificationsEnabled
+    }
+  }
+`;
+
+async function postGraphQL(query, variables = {}) {
+  if (!GRAPHQL_URL) {
+    throw new Error('No se configuró el endpoint de GraphQL.');
+  }
+  const response = await fetch(GRAPHQL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.errors?.[0]?.message || response.statusText || 'Error en la petición GraphQL';
+    throw new Error(message);
+  }
+  if (payload.errors && payload.errors.length) {
+    throw new Error(payload.errors[0]?.message || 'Error en la consulta GraphQL');
+  }
+  return payload.data || {};
+}
+
+function setAnalyticsStatus(message, variant = 'muted') {
+  const status = document.getElementById('analyticsStatus');
+  if (!status) return;
+  const classMap = {
+    success: 'text-success',
+    info: 'text-info',
+    warning: 'text-warning',
+    danger: 'text-danger',
+    muted: 'text-muted',
+  };
+  status.className = `small ${classMap[variant] || 'text-muted'}`;
+  status.textContent = message;
+}
+
+function getAnalyticsUserId() {
+  const input = document.getElementById('analyticsUserId');
+  if (!input) {
+    return 1;
+  }
+  const numeric = Number(input.value || input.getAttribute('value') || 1);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+}
+
+function normalizeAnalyticsTrade(trade) {
+  if (!trade) {
+    return null;
+  }
+  return {
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side,
+    quantity: trade.quantity,
+    pnl: trade.pnl,
+    openTime: trade.openTime || trade.open_time,
+    closeTime: trade.closeTime || trade.close_time,
+  };
+}
+
+function renderAnalyticsTrades() {
+  const tbody = document.getElementById('analyticsTradesBody');
+  if (!tbody) return;
+
+  const trades = state.analytics.trades;
+  if (!Array.isArray(trades) || trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-muted py-4">No se encontraron operaciones para los filtros seleccionados.</td></tr>';
+    return;
+  }
+
+  const rows = trades
+    .slice(0, 50)
+    .map((raw) => {
+      const trade = normalizeAnalyticsTrade(raw) || {};
+      const side = String(trade.side || '').toUpperCase();
+      const pnlValue = Number(trade.pnl);
+      const pnlClass = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'pnl-positive' : 'pnl-negative';
+      const sideClass = side === 'BUY' ? 'text-success' : side === 'SELL' ? 'text-danger' : 'text-muted';
+      const openTime = trade.openTime ? formatDate(trade.openTime) : '—';
+      const closeTime = trade.closeTime ? formatDate(trade.closeTime) : '—';
+      return `
+        <tr>
+          <td>${trade.symbol || '—'}</td>
+          <td class="${sideClass}">${side || '—'}</td>
+          <td>${formatNumber(trade.quantity, quantityFormatter)}</td>
+          <td class="${pnlClass}">${formatPnL(trade.pnl)}</td>
+          <td>${openTime}</td>
+          <td>${closeTime}</td>
+        </tr>`;
+    })
+    .join('');
+
+  tbody.innerHTML = rows;
+}
+
+function renderAnalyticsPreferences() {
+  const container = document.getElementById('analyticsPreferences');
+  if (!container) return;
+  const preferences = state.analytics.preferences;
+  const localeField = container.querySelector('[data-field="locale"]');
+  const themeField = container.querySelector('[data-field="theme"]');
+  const maxRiskField = container.querySelector('[data-field="max_risk"]');
+  const notificationsField = container.querySelector('[data-field="notifications_enabled"]');
+  if (!preferences) {
+    if (localeField) localeField.textContent = '—';
+    if (themeField) themeField.textContent = '—';
+    if (maxRiskField) maxRiskField.textContent = '—';
+    if (notificationsField) notificationsField.textContent = '—';
+    return;
+  }
+  const locale = preferences.locale || '—';
+  const theme = preferences.theme || preferences.preferredTheme || '—';
+  const maxRisk = Number(preferences.maxRisk ?? preferences.max_risk);
+  const notificationsEnabled = preferences.notificationsEnabled ?? preferences.notifications_enabled;
+  if (localeField) localeField.textContent = locale;
+  if (themeField) themeField.textContent = theme;
+  if (maxRiskField) {
+    maxRiskField.textContent = Number.isFinite(maxRisk) ? formatNumber(maxRisk) : '—';
+  }
+  if (notificationsField) {
+    if (typeof notificationsEnabled === 'boolean') {
+      notificationsField.textContent = notificationsEnabled ? 'Activadas' : 'Desactivadas';
+    } else {
+      notificationsField.textContent = '—';
+    }
+  }
+}
+
+async function loadAnalyticsTrades(symbol = state.analytics.symbolFilter || '') {
+  if (!GRAPHQL_URL) {
+    setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
+    state.analytics.trades = [];
+    renderAnalyticsTrades();
+    state.analytics.loading = false;
+    return;
+  }
+  state.analytics.loading = true;
+  state.analytics.symbolFilter = symbol.trim();
+  try {
+    setAnalyticsStatus('Consultando operaciones…', 'info');
+    const variables = state.analytics.symbolFilter ? { symbol: state.analytics.symbolFilter } : {};
+    const data = await postGraphQL(ANALYTICS_TRADES_QUERY, variables);
+    const trades = data?.trades || data?.Trades || [];
+    state.analytics.trades = Array.isArray(trades) ? trades : [];
+    state.analytics.error = null;
+    if (state.analytics.trades.length === 0) {
+      setAnalyticsStatus('No se encontraron operaciones para los filtros seleccionados.', 'warning');
+    } else {
+      setAnalyticsStatus(`Se muestran ${state.analytics.trades.length} operaciones.`, 'success');
+    }
+  } catch (error) {
+    console.error(error);
+    state.analytics.error = error;
+    state.analytics.trades = [];
+    setAnalyticsStatus(error.message || 'Error consultando analítica.', 'danger');
+  } finally {
+    state.analytics.loading = false;
+    renderAnalyticsTrades();
+  }
+}
+
+async function loadAnalyticsPreferences(userId = getAnalyticsUserId()) {
+  if (!GRAPHQL_URL) {
+    return;
+  }
+  try {
+    const data = await postGraphQL(ANALYTICS_SETTINGS_QUERY, { userId });
+    const preferences = data?.userSettings || data?.user_settings || null;
+    state.analytics.preferences = preferences;
+    renderAnalyticsPreferences();
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || 'No se pudieron obtener las preferencias.', 'warning');
+  }
+}
+
+async function loadAnalyticsData({ force = false } = {}) {
+  if (state.analytics.loading && !force) {
+    return;
+  }
+  await Promise.all([loadAnalyticsTrades(state.analytics.symbolFilter), loadAnalyticsPreferences()]);
+}
+
+function ensureAnalyticsData(force = false) {
+  if (!GRAPHQL_URL) {
+    setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
+    return;
+  }
+  if (force) {
+    loadAnalyticsData({ force: true });
+    return;
+  }
+  if (!analyticsInitialized) {
+    analyticsInitialized = true;
+    loadAnalyticsData({ force: true });
+  }
 }
 
 function renderTrades() {
@@ -1725,6 +2185,8 @@ async function refreshDashboard(manual = false) {
     state.connectionHealthy = false;
     updateTradingControls(state.tradingActive);
     setStatus('Desconectado', 'danger');
+  } finally {
+    scheduleNextRefresh();
   }
 }
 
@@ -1878,6 +2340,7 @@ function initialize() {
   initTheme();
   loadPreferences();
   registerServiceWorker();
+  switchSection(state.activeSection);
   applyDashboardLayout();
   setupCollapsibles();
   registerHotkeys();

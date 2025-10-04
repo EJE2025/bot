@@ -102,3 +102,10 @@ venv.bak/
 
 # pyre type checker
 .pyre/
+
+# Local run artifacts
+exports/
+open_trades.json
+closed_trades.json
+trade_history.csv
+trading_bot/auto_trade_state.json
