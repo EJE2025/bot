@@ -1,9 +1,19 @@
-const REFRESH_INTERVAL = 10000;
+const DEFAULT_REFRESH_INTERVAL = 10000;
 const MAX_POINTS = 60;
 const DASHBOARD_ORDER_KEY = 'dashboard:layout';
 const COLLAPSED_CARDS_KEY = 'dashboard:collapsed';
 const NOTIFICATION_REQUESTED_KEY = 'dashboard:notifications-requested';
 const THEME_STORAGE_KEY = 'dashboard:theme';
+const REFRESH_INTERVAL_STORAGE_KEY = 'dashboard:refresh-interval';
+const WIDGET_VISIBILITY_KEY = 'dashboard:widgets';
+
+const APP_CONFIG = window.APP_CONFIG || {};
+const GATEWAY_BASE = APP_CONFIG.apiBase || '';
+const GRAPHQL_URL = APP_CONFIG.graphqlUrl || '';
+const AI_CHAT_URL = APP_CONFIG.aiChatUrl || '';
+const AI_REPORT_URL = APP_CONFIG.aiReportUrl || '';
+
+const themeOrder = ['light', 'dark', 'pastel'];
 
 const themePalettes = {
   light: {
@@ -31,6 +41,19 @@ const themePalettes = {
     '--text-secondary': 'rgba(189, 195, 199, 0.8)',
     '--shadow': 'rgba(0, 0, 0, 0.35)',
     '--border-subtle': 'rgba(255, 255, 255, 0.08)',
+  },
+  pastel: {
+    '--background': '#f7f1ff',
+    '--surface': 'rgba(255, 255, 255, 0.8)',
+    '--surface-strong': 'rgba(255, 255, 255, 0.95)',
+    '--surface-elevated': 'rgba(255, 255, 255, 0.95)',
+    '--accent-primary': '#a855f7',
+    '--accent-secondary': '#f472b6',
+    '--accent-tertiary': '#60a5fa',
+    '--text-primary': '#4c1d95',
+    '--text-secondary': 'rgba(124, 58, 237, 0.6)',
+    '--shadow': 'rgba(168, 85, 247, 0.2)',
+    '--border-subtle': 'rgba(168, 85, 247, 0.15)',
   },
 };
 
@@ -78,6 +101,40 @@ const state = {
   collapsedCards: new Set(),
   isInitialLoad: true,
   theme: 'light',
+  refreshInterval: DEFAULT_REFRESH_INTERVAL,
+  widgetVisibility: {},
+  activeSection: 'dashboard',
+  analytics: {
+    trades: [],
+    preferences: null,
+    loading: false,
+    error: null,
+    symbolFilter: '',
+  },
+  chat: {
+    history: [],
+    sending: false,
+  },
+};
+
+const widgetSelectors = {
+  metrics_primary: '[data-widget="metrics_primary"]',
+  metrics_secondary: '[data-widget="metrics_secondary"]',
+  pnl: '[data-widget="pnl"]',
+  symbols: '[data-widget="symbols"]',
+  trades: '[data-widget="trades"]',
+  history: '[data-widget="history"]',
+};
+
+const SECTION_IDS = ['dashboard', 'analytics', 'ai-assistant', 'services'];
+
+const DEFAULT_WIDGET_VISIBILITY = {
+  metrics_primary: true,
+  metrics_secondary: true,
+  pnl: true,
+  symbols: true,
+  trades: true,
+  history: true,
 };
 
 let pnlChart = null;
@@ -85,6 +142,10 @@ let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
 let notificationsRequested = false;
+let settingsModal = null;
+let refreshTimer = null;
+let analyticsFilterTimeout = null;
+let analyticsInitialized = false;
 
 function getCssVariable(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name)?.trim();
@@ -171,6 +232,9 @@ function applyThemeVariables(theme) {
     document.documentElement.style.setProperty(variable, value);
   });
   document.documentElement.dataset.theme = theme;
+  if (document.body) {
+    document.body.dataset.theme = theme;
+  }
   state.theme = theme;
   try {
     localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -184,19 +248,40 @@ function applyThemeVariables(theme) {
 function updateThemeToggleButton(theme) {
   const toggle = document.getElementById('themeToggleBtn');
   if (!toggle) return;
-  const isDark = theme === 'dark';
-  toggle.setAttribute('aria-pressed', String(isDark));
+  const iconMap = {
+    light: 'bi-moon-stars',
+    dark: 'bi-sun',
+    pastel: 'bi-palette',
+  };
+  const nextTheme = getNextTheme(theme);
+  toggle.setAttribute('data-theme', theme);
+  toggle.setAttribute('aria-pressed', String(theme === 'dark'));
+  const labels = {
+    light: 'Cambiar a tema oscuro',
+    dark: 'Cambiar a tema pastel',
+    pastel: 'Cambiar a tema claro',
+  };
   const icon = toggle.querySelector('i');
   if (icon) {
-    icon.classList.toggle('bi-moon-stars', !isDark);
-    icon.classList.toggle('bi-sun', isDark);
+    icon.className = `bi ${iconMap[theme] || 'bi-moon-stars'}`;
   }
-  toggle.setAttribute('title', isDark ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro');
+  const nextLabel = labels[theme] || 'Cambiar de tema';
+  toggle.setAttribute('title', nextLabel);
+  toggle.setAttribute('aria-label', nextLabel);
+  toggle.dataset.nextTheme = nextTheme;
 }
 
 function toggleTheme() {
-  const next = state.theme === 'dark' ? 'light' : 'dark';
+  const next = getNextTheme(state.theme);
   applyThemeVariables(next);
+}
+
+function getNextTheme(current) {
+  const index = themeOrder.indexOf(current);
+  if (index === -1) {
+    return themeOrder[0];
+  }
+  return themeOrder[(index + 1) % themeOrder.length];
 }
 
 function initTheme() {
@@ -206,10 +291,11 @@ function initTheme() {
   } catch (error) {
     storedTheme = null;
   }
-  if (storedTheme !== 'dark' && storedTheme !== 'light') {
-    storedTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
+  if (!themeOrder.includes(storedTheme)) {
+    storedTheme =
+      window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light';
   }
   applyThemeVariables(storedTheme);
 }
@@ -395,6 +481,189 @@ function setStoredJSON(key, value) {
   }
 }
 
+function loadWidgetPreferences() {
+  const stored = getStoredJSON(WIDGET_VISIBILITY_KEY);
+  if (stored && typeof stored === 'object') {
+    state.widgetVisibility = { ...DEFAULT_WIDGET_VISIBILITY, ...stored };
+  } else {
+    state.widgetVisibility = { ...DEFAULT_WIDGET_VISIBILITY };
+  }
+  applyWidgetVisibility();
+}
+
+function applyWidgetVisibility() {
+  Object.entries(widgetSelectors).forEach(([key, selector]) => {
+    const isVisible = state.widgetVisibility[key] !== false;
+    document.querySelectorAll(selector).forEach((element) => {
+      element.classList.toggle('widget-hidden', !isVisible);
+      if (!isVisible) {
+        element.setAttribute('aria-hidden', 'true');
+      } else {
+        element.removeAttribute('aria-hidden');
+      }
+    });
+  });
+}
+
+function setWidgetVisibility(key, visible, persist = true) {
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+    return;
+  }
+  state.widgetVisibility[key] = Boolean(visible);
+  applyWidgetVisibility();
+  if (persist) {
+    setStoredJSON(WIDGET_VISIBILITY_KEY, state.widgetVisibility);
+  }
+}
+
+function loadRefreshInterval() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(REFRESH_INTERVAL_STORAGE_KEY);
+  } catch (error) {
+    stored = null;
+  }
+  const numeric = Number(stored);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    state.refreshInterval = numeric;
+  } else {
+    state.refreshInterval = DEFAULT_REFRESH_INTERVAL;
+  }
+  updateRefreshSelect();
+}
+
+function setRefreshInterval(value, { persist = true, reschedule = true } = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return state.refreshInterval;
+  }
+  state.refreshInterval = numeric;
+  if (persist) {
+    try {
+      localStorage.setItem(REFRESH_INTERVAL_STORAGE_KEY, String(numeric));
+    } catch (error) {
+      console.warn('No se pudo guardar el intervalo preferido', error);
+    }
+  }
+  if (reschedule) {
+    scheduleNextRefresh();
+  }
+  updateRefreshSelect();
+  return numeric;
+}
+
+function scheduleNextRefresh() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+  if (state.refreshInterval <= 0) {
+    return;
+  }
+  refreshTimer = window.setTimeout(() => {
+    refreshDashboard(false);
+  }, state.refreshInterval);
+}
+
+function updateRefreshSelect() {
+  const select = document.getElementById('refreshIntervalSelect');
+  if (select) {
+    select.value = String(state.refreshInterval);
+  }
+}
+
+function populateSettingsForm() {
+  const form = document.getElementById('dashboardSettingsForm');
+  if (!form) {
+    return;
+  }
+  form.querySelectorAll('#widgetList input[type="checkbox"]').forEach((input) => {
+    const key = input.value;
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+      return;
+    }
+    input.checked = state.widgetVisibility[key] !== false;
+  });
+  const intervalSelect = form.querySelector('#refreshIntervalSelect');
+  if (intervalSelect) {
+    intervalSelect.value = String(state.refreshInterval);
+  }
+}
+
+function setupSettingsModal() {
+  const modalElement = document.getElementById('dashboardSettingsModal');
+  if (!modalElement || !window.bootstrap) {
+    return;
+  }
+  if (!settingsModal) {
+    settingsModal = new bootstrap.Modal(modalElement);
+  }
+  if (!modalElement.dataset.settingsBound) {
+    modalElement.addEventListener('show.bs.modal', populateSettingsForm);
+    modalElement.dataset.settingsBound = '1';
+  }
+}
+
+function openSettingsModal() {
+  if (!settingsModal) {
+    setupSettingsModal();
+  }
+  populateSettingsForm();
+  if (settingsModal) {
+    settingsModal.show();
+  }
+}
+
+function handleSettingsSubmit(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const visibilityUpdate = { ...state.widgetVisibility };
+  form.querySelectorAll('#widgetList input[type="checkbox"]').forEach((input) => {
+    const key = input.value;
+    if (Object.prototype.hasOwnProperty.call(DEFAULT_WIDGET_VISIBILITY, key)) {
+      visibilityUpdate[key] = Boolean(input.checked);
+    }
+  });
+  Object.entries(DEFAULT_WIDGET_VISIBILITY).forEach(([key]) => {
+    const visible = visibilityUpdate[key] !== false;
+    setWidgetVisibility(key, visible, false);
+  });
+  setStoredJSON(WIDGET_VISIBILITY_KEY, state.widgetVisibility);
+  const intervalSelect = form.querySelector('#refreshIntervalSelect');
+  if (intervalSelect) {
+    setRefreshInterval(intervalSelect.value, { persist: true, reschedule: true });
+  }
+  applyWidgetVisibility();
+  showToast('Preferencias actualizadas', 'success');
+  if (settingsModal) {
+    settingsModal.hide();
+  }
+}
+
+function openExternalService(key) {
+  const base = GATEWAY_BASE || '';
+  const serviceMap = {
+    orders: base ? `${base}/orders` : null,
+    docs: base ? `${base}/docs` : null,
+    analytics: GRAPHQL_URL || (base ? `${base}/graphql` : null),
+  };
+  const url = serviceMap[key];
+  if (!url) {
+    showToast('No se pudo determinar la URL del servicio solicitado.', 'warning');
+    return;
+  }
+  const win = window.open(url, '_blank', 'noopener,noreferrer');
+  if (win) {
+    win.opener = null;
+  } else {
+    showToast('El navegador bloqueó la apertura de la pestaña.', 'warning');
+  }
+}
+
+function handleServiceOpen(event) {
+  const key = event.currentTarget.dataset.openService;
+  openExternalService(key);
+}
+
 function applyDashboardLayout() {
   const grid = document.getElementById('dashboardGrid');
   if (!grid) return;
@@ -487,6 +756,51 @@ function setupCollapsibles() {
       toggleCardCollapse(card, collapsed, true);
     });
   });
+}
+
+function updateNavLinks(activeSection) {
+  document.querySelectorAll('[data-section-target]').forEach((link) => {
+    const target = link.getAttribute('data-section-target');
+    const isActive = target === activeSection;
+    link.classList.toggle('active', isActive);
+    if (isActive) {
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.removeAttribute('aria-current');
+    }
+  });
+}
+
+function focusAiInput() {
+  const input = document.getElementById('aiMessage');
+  if (input) {
+    window.requestAnimationFrame(() => {
+      input.focus();
+    });
+  }
+}
+
+function switchSection(sectionId) {
+  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
+  state.activeSection = normalized;
+  document.querySelectorAll('.app-section').forEach((section) => {
+    const isTarget = section.dataset.section === normalized;
+    section.classList.toggle('is-active', isTarget);
+    if (isTarget) {
+      section.classList.remove('d-none');
+      section.removeAttribute('hidden');
+    } else {
+      section.classList.add('d-none');
+      section.setAttribute('hidden', 'hidden');
+    }
+  });
+  updateNavLinks(normalized);
+  if (normalized === 'analytics') {
+    ensureAnalyticsData();
+  }
+  if (normalized === 'ai-assistant') {
+    focusAiInput();
+  }
 }
 
 function registerServiceWorker() {
@@ -808,6 +1122,227 @@ function renderSummary(summary) {
   clearSkeleton(list);
 }
 
+const ANALYTICS_TRADES_QUERY = `
+  query AnalyticsTrades($symbol: String) {
+    trades(symbol: $symbol) {
+      id
+      symbol
+      side
+      quantity
+      pnl
+      openTime
+      closeTime
+    }
+  }
+`;
+
+const ANALYTICS_SETTINGS_QUERY = `
+  query AnalyticsUserSettings($userId: Int!) {
+    userSettings(userId: $userId) {
+      locale
+      theme
+      maxRisk
+      notificationsEnabled
+    }
+  }
+`;
+
+async function postGraphQL(query, variables = {}) {
+  if (!GRAPHQL_URL) {
+    throw new Error('No se configuró el endpoint de GraphQL.');
+  }
+  const response = await fetch(GRAPHQL_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.errors?.[0]?.message || response.statusText || 'Error en la petición GraphQL';
+    throw new Error(message);
+  }
+  if (payload.errors && payload.errors.length) {
+    throw new Error(payload.errors[0]?.message || 'Error en la consulta GraphQL');
+  }
+  return payload.data || {};
+}
+
+function setAnalyticsStatus(message, variant = 'muted') {
+  const status = document.getElementById('analyticsStatus');
+  if (!status) return;
+  const classMap = {
+    success: 'text-success',
+    info: 'text-info',
+    warning: 'text-warning',
+    danger: 'text-danger',
+    muted: 'text-muted',
+  };
+  status.className = `small ${classMap[variant] || 'text-muted'}`;
+  status.textContent = message;
+}
+
+function getAnalyticsUserId() {
+  const input = document.getElementById('analyticsUserId');
+  if (!input) {
+    return 1;
+  }
+  const numeric = Number(input.value || input.getAttribute('value') || 1);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+}
+
+function normalizeAnalyticsTrade(trade) {
+  if (!trade) {
+    return null;
+  }
+  return {
+    id: trade.id,
+    symbol: trade.symbol,
+    side: trade.side,
+    quantity: trade.quantity,
+    pnl: trade.pnl,
+    openTime: trade.openTime || trade.open_time,
+    closeTime: trade.closeTime || trade.close_time,
+  };
+}
+
+function renderAnalyticsTrades() {
+  const tbody = document.getElementById('analyticsTradesBody');
+  if (!tbody) return;
+
+  const trades = state.analytics.trades;
+  if (!Array.isArray(trades) || trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-muted py-4">No se encontraron operaciones para los filtros seleccionados.</td></tr>';
+    return;
+  }
+
+  const rows = trades
+    .slice(0, 50)
+    .map((raw) => {
+      const trade = normalizeAnalyticsTrade(raw) || {};
+      const side = String(trade.side || '').toUpperCase();
+      const pnlValue = Number(trade.pnl);
+      const pnlClass = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'pnl-positive' : 'pnl-negative';
+      const sideClass = side === 'BUY' ? 'text-success' : side === 'SELL' ? 'text-danger' : 'text-muted';
+      const openTime = trade.openTime ? formatDate(trade.openTime) : '—';
+      const closeTime = trade.closeTime ? formatDate(trade.closeTime) : '—';
+      return `
+        <tr>
+          <td>${trade.symbol || '—'}</td>
+          <td class="${sideClass}">${side || '—'}</td>
+          <td>${formatNumber(trade.quantity, quantityFormatter)}</td>
+          <td class="${pnlClass}">${formatPnL(trade.pnl)}</td>
+          <td>${openTime}</td>
+          <td>${closeTime}</td>
+        </tr>`;
+    })
+    .join('');
+
+  tbody.innerHTML = rows;
+}
+
+function renderAnalyticsPreferences() {
+  const container = document.getElementById('analyticsPreferences');
+  if (!container) return;
+  const preferences = state.analytics.preferences;
+  const localeField = container.querySelector('[data-field="locale"]');
+  const themeField = container.querySelector('[data-field="theme"]');
+  const maxRiskField = container.querySelector('[data-field="max_risk"]');
+  const notificationsField = container.querySelector('[data-field="notifications_enabled"]');
+  if (!preferences) {
+    if (localeField) localeField.textContent = '—';
+    if (themeField) themeField.textContent = '—';
+    if (maxRiskField) maxRiskField.textContent = '—';
+    if (notificationsField) notificationsField.textContent = '—';
+    return;
+  }
+  const locale = preferences.locale || '—';
+  const theme = preferences.theme || preferences.preferredTheme || '—';
+  const maxRisk = Number(preferences.maxRisk ?? preferences.max_risk);
+  const notificationsEnabled = preferences.notificationsEnabled ?? preferences.notifications_enabled;
+  if (localeField) localeField.textContent = locale;
+  if (themeField) themeField.textContent = theme;
+  if (maxRiskField) {
+    maxRiskField.textContent = Number.isFinite(maxRisk) ? formatNumber(maxRisk) : '—';
+  }
+  if (notificationsField) {
+    if (typeof notificationsEnabled === 'boolean') {
+      notificationsField.textContent = notificationsEnabled ? 'Activadas' : 'Desactivadas';
+    } else {
+      notificationsField.textContent = '—';
+    }
+  }
+}
+
+async function loadAnalyticsTrades(symbol = state.analytics.symbolFilter || '') {
+  if (!GRAPHQL_URL) {
+    setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
+    state.analytics.trades = [];
+    renderAnalyticsTrades();
+    state.analytics.loading = false;
+    return;
+  }
+  state.analytics.loading = true;
+  state.analytics.symbolFilter = symbol.trim();
+  try {
+    setAnalyticsStatus('Consultando operaciones…', 'info');
+    const variables = state.analytics.symbolFilter ? { symbol: state.analytics.symbolFilter } : {};
+    const data = await postGraphQL(ANALYTICS_TRADES_QUERY, variables);
+    const trades = data?.trades || data?.Trades || [];
+    state.analytics.trades = Array.isArray(trades) ? trades : [];
+    state.analytics.error = null;
+    if (state.analytics.trades.length === 0) {
+      setAnalyticsStatus('No se encontraron operaciones para los filtros seleccionados.', 'warning');
+    } else {
+      setAnalyticsStatus(`Se muestran ${state.analytics.trades.length} operaciones.`, 'success');
+    }
+  } catch (error) {
+    console.error(error);
+    state.analytics.error = error;
+    state.analytics.trades = [];
+    setAnalyticsStatus(error.message || 'Error consultando analítica.', 'danger');
+  } finally {
+    state.analytics.loading = false;
+    renderAnalyticsTrades();
+  }
+}
+
+async function loadAnalyticsPreferences(userId = getAnalyticsUserId()) {
+  if (!GRAPHQL_URL) {
+    return;
+  }
+  try {
+    const data = await postGraphQL(ANALYTICS_SETTINGS_QUERY, { userId });
+    const preferences = data?.userSettings || data?.user_settings || null;
+    state.analytics.preferences = preferences;
+    renderAnalyticsPreferences();
+  } catch (error) {
+    console.error(error);
+    showToast(error.message || 'No se pudieron obtener las preferencias.', 'warning');
+  }
+}
+
+async function loadAnalyticsData({ force = false } = {}) {
+  if (state.analytics.loading && !force) {
+    return;
+  }
+  await Promise.all([loadAnalyticsTrades(state.analytics.symbolFilter), loadAnalyticsPreferences()]);
+}
+
+function ensureAnalyticsData(force = false) {
+  if (!GRAPHQL_URL) {
+    setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
+    return;
+  }
+  if (force) {
+    loadAnalyticsData({ force: true });
+    return;
+  }
+  if (!analyticsInitialized) {
+    analyticsInitialized = true;
+    loadAnalyticsData({ force: true });
+  }
+}
+
 function renderTrades() {
   const tbody = document.getElementById('tradesTableBody');
   if (!tbody) return;
@@ -972,6 +1507,158 @@ function renderHistory() {
   clearSkeleton(container);
 }
 
+function updateAiStatus(label, variant = 'light') {
+  const badge = document.getElementById('aiStatus');
+  if (!badge) return;
+  const textClassMap = {
+    light: 'text-dark',
+    info: 'text-dark',
+    warning: 'text-dark',
+    success: 'text-white',
+    primary: 'text-white',
+    danger: 'text-white',
+  };
+  const bgClass = variant ? `bg-${variant}` : 'bg-light';
+  const textClass = textClassMap[variant] || 'text-dark';
+  badge.className = `badge ${bgClass} ${textClass}`.trim();
+  badge.textContent = label;
+}
+
+function appendChatMessage(role, content) {
+  const container = document.getElementById('aiChatMessages');
+  if (!container) return;
+  const normalized = role === 'assistant' || role === 'system' ? role : 'user';
+  const messageEl = document.createElement('div');
+  messageEl.className = `chat-message chat-message--${normalized}`;
+  messageEl.textContent = content;
+  container.appendChild(messageEl);
+  container.scrollTop = container.scrollHeight;
+  if (!Array.isArray(state.chat.history)) {
+    state.chat.history = [];
+  }
+  state.chat.history.push({ role: normalized, content });
+}
+
+function renderAiReport(text) {
+  const container = document.getElementById('aiReportOutput');
+  if (container) {
+    container.textContent = text;
+  }
+}
+
+function buildAiSummary() {
+  const summary = state.summary || {};
+  const pnl = Number(summary.total_pnl ?? summary.unrealized_pnl ?? 0);
+  const winRate = Number(summary.win_rate ?? 0);
+  const openPositions = Number(summary.total_positions ?? 0);
+  const risk = Number(summary.total_exposure ?? 0);
+  return {
+    pnl,
+    win_rate: winRate,
+    open_positions: openPositions,
+    risk,
+  };
+}
+
+async function handleAiChatSubmit(event) {
+  event.preventDefault();
+  if (state.chat.sending) {
+    return;
+  }
+  const form = event.currentTarget;
+  const textarea = document.getElementById('aiMessage');
+  if (!textarea) {
+    return;
+  }
+  const message = textarea.value.trim();
+  if (!message) {
+    showToast('Escribe un mensaje para enviarlo al asistente.', 'warning');
+    return;
+  }
+  appendChatMessage('user', message);
+  textarea.value = '';
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+  }
+  state.chat.sending = true;
+  updateAiStatus('Pensando…', 'info');
+  try {
+    if (!AI_CHAT_URL) {
+      throw new Error('No se configuró la ruta del asistente IA en el gateway.');
+    }
+    const response = await fetch(AI_CHAT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        summary: buildAiSummary(),
+      }),
+    });
+    const data = await readJsonResponse(response, 'No se pudo interpretar la respuesta del asistente');
+    if (!response.ok) {
+      throw new Error(data?.detail || data?.error || 'El asistente devolvió un error.');
+    }
+    const answer = data?.answer || 'No recibimos respuesta del asistente.';
+    appendChatMessage('assistant', answer);
+    updateAiStatus('Listo', 'light');
+  } catch (error) {
+    console.error(error);
+    updateAiStatus('Error', 'danger');
+    showToast(error.message || 'No se pudo comunicar con el asistente IA.', 'danger');
+  } finally {
+    state.chat.sending = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+    }
+  }
+}
+
+async function handleAiQuickReport() {
+  const button = document.getElementById('aiQuickReportBtn');
+  if (!AI_REPORT_URL) {
+    showToast('No se configuró la ruta de informes IA.', 'warning');
+    return;
+  }
+  if (!state.summary) {
+    showToast('Aún no hay métricas suficientes para generar un informe.', 'warning');
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+  }
+  updateAiStatus('Generando informe…', 'info');
+  try {
+    const payload = {
+      pnl_total: Number(state.summary.total_pnl ?? state.summary.unrealized_pnl ?? 0),
+      win_rate: Number(state.summary.win_rate ?? 0),
+      open_positions: Number(state.summary.total_positions ?? 0),
+      risk: Number(state.summary.total_exposure ?? 0),
+    };
+    const response = await fetch(AI_REPORT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await readJsonResponse(response, 'No se pudo generar el informe');
+    if (!response.ok) {
+      throw new Error(data?.detail || data?.error || 'No se pudo generar el informe');
+    }
+    const report = data?.report || 'No se recibieron datos del informe.';
+    renderAiReport(report);
+    updateAiStatus('Informe listo', 'success');
+    showToast('Informe generado correctamente.', 'success');
+  } catch (error) {
+    console.error(error);
+    updateAiStatus('Error', 'danger');
+    showToast(error.message || 'Error al generar el informe IA.', 'danger');
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
+}
+
 async function refreshDashboard(manual = false) {
   try {
     if (manual) {
@@ -1016,6 +1703,8 @@ async function refreshDashboard(manual = false) {
     state.connectionHealthy = false;
     updateTradingControls(state.tradingActive);
     setStatus('Desconectado', 'danger');
+  } finally {
+    scheduleNextRefresh();
   }
 }
 
@@ -1037,6 +1726,76 @@ function attachEvents() {
   if (themeToggle) {
     themeToggle.addEventListener('click', toggleTheme);
   }
+
+  document.querySelectorAll('[data-section-target]').forEach((element) => {
+    element.addEventListener('click', (event) => {
+      const target = event.currentTarget.getAttribute('data-section-target');
+      if (!target) {
+        return;
+      }
+      event.preventDefault();
+      switchSection(target);
+    });
+  });
+
+  const openConfigBtn = document.getElementById('openConfigBtn');
+  if (openConfigBtn) {
+    openConfigBtn.addEventListener('click', openSettingsModal);
+  }
+
+  const settingsForm = document.getElementById('dashboardSettingsForm');
+  if (settingsForm) {
+    settingsForm.addEventListener('submit', handleSettingsSubmit);
+  }
+
+  const analyticsRefreshBtn = document.getElementById('analyticsRefreshBtn');
+  if (analyticsRefreshBtn) {
+    analyticsRefreshBtn.addEventListener('click', () => {
+      if (analyticsFilterTimeout) {
+        clearTimeout(analyticsFilterTimeout);
+        analyticsFilterTimeout = null;
+      }
+      ensureAnalyticsData(true);
+    });
+  }
+
+  const analyticsSymbolFilter = document.getElementById('analyticsSymbolFilter');
+  if (analyticsSymbolFilter) {
+    analyticsSymbolFilter.addEventListener('input', (event) => {
+      const { value } = event.target;
+      if (analyticsFilterTimeout) {
+        clearTimeout(analyticsFilterTimeout);
+      }
+      analyticsFilterTimeout = window.setTimeout(() => {
+        loadAnalyticsTrades(value.trim());
+      }, 400);
+    });
+  }
+
+  const analyticsSettingsForm = document.getElementById('analyticsSettingsForm');
+  if (analyticsSettingsForm) {
+    analyticsSettingsForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const userIdInput = document.getElementById('analyticsUserId');
+      const numeric = Number(userIdInput?.value || 1);
+      const userId = Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
+      loadAnalyticsPreferences(userId);
+    });
+  }
+
+  const aiChatForm = document.getElementById('aiChatForm');
+  if (aiChatForm) {
+    aiChatForm.addEventListener('submit', handleAiChatSubmit);
+  }
+
+  const aiQuickReportBtn = document.getElementById('aiQuickReportBtn');
+  if (aiQuickReportBtn) {
+    aiQuickReportBtn.addEventListener('click', handleAiQuickReport);
+  }
+
+  document.querySelectorAll('[data-open-service]').forEach((button) => {
+    button.addEventListener('click', handleServiceOpen);
+  });
 
   const toggleBtn = document.getElementById('toggleTradeBtn');
   if (toggleBtn) {
@@ -1077,15 +1836,23 @@ function attachEvents() {
 
 function initialize() {
   initTheme();
+  loadRefreshInterval();
+  loadWidgetPreferences();
+  setupSettingsModal();
   registerServiceWorker();
+  switchSection(state.activeSection);
   applyDashboardLayout();
   setupCollapsibles();
   registerHotkeys();
   ensureChart();
   attachEvents();
-  refreshDashboard();
+  if (AI_CHAT_URL) {
+    updateAiStatus('Listo', 'light');
+  } else {
+    updateAiStatus('Sin gateway IA', 'warning');
+  }
   setStatus('Sincronizando…', 'warning');
-  setInterval(refreshDashboard, REFRESH_INTERVAL);
+  refreshDashboard();
   connectSocket();
   scheduleNotificationRequest();
 }

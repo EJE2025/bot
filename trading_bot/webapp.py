@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -178,7 +179,17 @@ if Flask:
 
     @app.route("/")
     def index():
-        return render_template("index.html", current_year=datetime.utcnow().year)
+        gateway_base = os.getenv("GATEWAY_BASE_URL", "http://localhost:8080")
+        analytics_url = os.getenv("ANALYTICS_GRAPHQL_URL") or f"{gateway_base.rstrip('/')}/graphql"
+        ai_base = os.getenv("AI_GATEWAY_URL") or gateway_base.rstrip("/")
+        return render_template(
+            "index.html",
+            current_year=datetime.utcnow().year,
+            api_base=gateway_base.rstrip("/"),
+            graphql_url=analytics_url,
+            ai_chat_url=f"{ai_base}/ai/chat",
+            ai_report_url=f"{ai_base}/ai/report",
+        )
 
     @app.route("/manifest.json")
     def manifest():

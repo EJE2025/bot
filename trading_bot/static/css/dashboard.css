@@ -20,6 +20,12 @@
     --shadow-strong: rgba(0, 0, 0, 0.5);
 }
 
+:root[data-theme='pastel'] {
+    color-scheme: light;
+    --surface-elevated: rgba(255, 255, 255, 0.95);
+    --shadow-strong: rgba(168, 85, 247, 0.25);
+}
+
 body {
     background: var(--background);
     min-height: 100vh;
@@ -62,6 +68,15 @@ body,
     backdrop-filter: blur(10px);
 }
 
+.navbar .navbar-toggler {
+    border: none;
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+.navbar .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml;charset=utf8,%3Csvg viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath stroke='rgba(255,255,255,0.85)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E");
+}
+
 .navbar-brand {
     font-weight: 700;
     color: #fff;
@@ -73,11 +88,53 @@ body,
     color: inherit;
 }
 
+.section-nav .nav-link {
+    color: rgba(255, 255, 255, 0.75);
+    font-weight: 500;
+    border-radius: 999px;
+    padding-inline: 1rem;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.section-nav .nav-link:hover,
+.section-nav .nav-link:focus {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.section-nav .nav-link.active {
+    color: #2c3e50;
+    background-color: #fff;
+}
+
 .navbar .badge,
 .navbar .btn {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
+}
+
+.navbar .btn-outline-light {
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    background: transparent;
+}
+
+.navbar .btn-outline-light:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.app-section {
+    display: none;
+    opacity: 0;
+    transform: translateY(16px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.app-section.is-active {
+    display: block;
+    opacity: 1;
+    transform: translateY(0);
 }
 
 main.container-fluid {
@@ -223,6 +280,11 @@ main.container-fluid {
 
 :root[data-theme='dark'] .btn-ghost:hover {
     background: rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='pastel'] .btn-ghost {
+    background: rgba(255, 255, 255, 0.6);
+    border-color: rgba(168, 85, 247, 0.25);
 }
 
 .btn i {
@@ -452,6 +514,103 @@ td.price-down {
     padding: 0.9rem 1.2rem;
     color: var(--text-primary);
     box-shadow: 6px 6px 12px var(--shadow), -6px -6px 12px rgba(255, 255, 255, 0.6);
+}
+
+.history-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 24px var(--shadow);
+}
+
+.widget-hidden {
+    display: none !important;
+}
+
+#analyticsStatus {
+    min-height: 1.5rem;
+}
+
+#analyticsTradesTable tbody tr {
+    transition: transform 0.2s ease, box-shadow 0.3s ease;
+}
+
+.analytics-preferences dt {
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+}
+
+.analytics-preferences dd {
+    margin-bottom: 1rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.ai-chat-window {
+    background: var(--surface);
+    border-radius: 16px;
+    border: 1px solid var(--border-subtle);
+    padding: 1rem;
+    height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.chat-message {
+    padding: 0.75rem 1rem;
+    border-radius: 16px;
+    max-width: 90%;
+    box-shadow: 0 6px 12px var(--shadow);
+    line-height: 1.4;
+}
+
+.chat-message--user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+    color: #fff;
+}
+
+.chat-message--assistant {
+    align-self: flex-start;
+    background: var(--surface-elevated);
+    color: var(--text-primary);
+}
+
+.chat-message--system {
+    align-self: center;
+    background: transparent;
+    color: var(--text-secondary);
+    box-shadow: none;
+}
+
+.ai-chat-form textarea {
+    resize: vertical;
+}
+
+.ai-report-output {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 1rem;
+    border: 1px solid var(--border-subtle);
+    min-height: 180px;
+    white-space: pre-wrap;
+}
+
+[data-open-service] {
+    justify-content: center;
+}
+
+@media (max-width: 991.98px) {
+    .section-nav .nav-link {
+        margin-bottom: 0.5rem;
+    }
+
+    .app-section {
+        transform: none;
+    }
 }
 
 .history-item .side-buy {
