@@ -176,9 +176,48 @@ if Flask:
 
         return realized_balance, realized_pnl_total, winners, losers
 
+    def _service_links() -> list[dict[str, str]]:
+        raw = getattr(config, "EXTERNAL_SERVICE_LINKS", "")
+        if not raw:
+            return []
+        tokens = raw.replace(";", "\n").splitlines()
+        links: list[dict[str, str]] = []
+        for token in tokens:
+            entry = token.strip()
+            if not entry:
+                continue
+            if "|" in entry:
+                label, url = entry.split("|", 1)
+            elif "," in entry:
+                label, url = entry.split(",", 1)
+            else:
+                label, url = entry, entry
+            label = label.strip() or url.strip()
+            url = url.strip()
+            if not url:
+                continue
+            links.append({"label": label, "url": url})
+        return links
+
     @app.route("/")
     def index():
-        return render_template("index.html", current_year=datetime.utcnow().year)
+        gateway_base = getattr(config, "DASHBOARD_GATEWAY_BASE", "").strip()
+        if not gateway_base:
+            gateway_base = request.url_root.rstrip("/")
+        analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip() or (
+            f"{gateway_base}/graphql"
+        )
+        ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip() or (
+            f"{gateway_base}/ai/chat"
+        )
+        return render_template(
+            "index.html",
+            current_year=datetime.utcnow().year,
+            api_base=gateway_base,
+            analytics_graphql_url=analytics_graphql,
+            ai_api_url=ai_endpoint,
+            service_links=_service_links(),
+        )
 
     @app.route("/manifest.json")
     def manifest():

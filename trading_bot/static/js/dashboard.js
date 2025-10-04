@@ -1,9 +1,14 @@
-const REFRESH_INTERVAL = 10000;
+const DEFAULT_REFRESH_INTERVAL = 10000;
+const MIN_REFRESH_INTERVAL = 5000;
+const MAX_REFRESH_INTERVAL = 300000;
 const MAX_POINTS = 60;
 const DASHBOARD_ORDER_KEY = 'dashboard:layout';
 const COLLAPSED_CARDS_KEY = 'dashboard:collapsed';
 const NOTIFICATION_REQUESTED_KEY = 'dashboard:notifications-requested';
 const THEME_STORAGE_KEY = 'dashboard:theme';
+const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
+const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
+const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
 
 const themePalettes = {
   light: {
@@ -31,6 +36,19 @@ const themePalettes = {
     '--text-secondary': 'rgba(189, 195, 199, 0.8)',
     '--shadow': 'rgba(0, 0, 0, 0.35)',
     '--border-subtle': 'rgba(255, 255, 255, 0.08)',
+  },
+  pastel: {
+    '--background': '#fef9ff',
+    '--surface': 'rgba(255, 255, 255, 0.78)',
+    '--surface-strong': 'rgba(255, 255, 255, 0.92)',
+    '--surface-elevated': 'rgba(255, 255, 255, 0.95)',
+    '--accent-primary': '#7f67ff',
+    '--accent-secondary': '#ff8fb1',
+    '--accent-tertiary': '#6dd5ed',
+    '--text-primary': '#413659',
+    '--text-secondary': 'rgba(65, 54, 89, 0.7)',
+    '--shadow': 'rgba(127, 103, 255, 0.2)',
+    '--border-subtle': 'rgba(127, 103, 255, 0.12)',
   },
 };
 
@@ -63,6 +81,88 @@ const percentFormatter = new Intl.NumberFormat(userLocale, {
   maximumFractionDigits: 1,
 });
 
+const integerFormatter = new Intl.NumberFormat(userLocale, {
+  maximumFractionDigits: 0,
+});
+
+const ANALYTICS_OVERVIEW_QUERY = `
+  query DashboardOverview {
+    performanceSummary {
+      totalTrades
+      winRate
+      sharpeRatio
+      profitFactor
+      bestSymbol
+      worstSymbol
+    }
+    volumeBySymbol(limit: 6) {
+      symbol
+      volume
+      change24h
+    }
+  }
+`;
+
+function initAppConfig() {
+  const { dataset } = document.body;
+  appConfig.apiBase = (dataset.apiBase || '').replace(/\/$/, '');
+  appConfig.analyticsGraphql = (dataset.analyticsGraphql || '').trim();
+  appConfig.aiEndpoint = (dataset.aiEndpoint || '').trim();
+  try {
+    const parsed = dataset.serviceLinks ? JSON.parse(dataset.serviceLinks) : [];
+    if (Array.isArray(parsed)) {
+      appConfig.serviceLinks = parsed
+        .map((item) => {
+          if (!item) return null;
+          if (typeof item === 'string') {
+            return { label: item, url: item };
+          }
+          const { label, url } = item;
+          if (!url) return null;
+          return {
+            label: label || url,
+            url,
+          };
+        })
+        .filter(Boolean);
+    } else {
+      appConfig.serviceLinks = [];
+    }
+  } catch (error) {
+    console.warn('No se pudieron analizar los enlaces de servicios externos', error);
+    appConfig.serviceLinks = [];
+  }
+}
+
+function resolveApiUrl(path) {
+  if (!path) {
+    return appConfig.apiBase || '';
+  }
+  if (/^https?:/i.test(path)) {
+    return path;
+  }
+  const base = appConfig.apiBase;
+  if (!base) {
+    return path;
+  }
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${normalized}`;
+}
+
+function getAnalyticsEndpoint() {
+  if (appConfig.analyticsGraphql) {
+    return appConfig.analyticsGraphql;
+  }
+  if (appConfig.apiBase) {
+    return `${appConfig.apiBase}/graphql`;
+  }
+  return '/graphql';
+}
+
+function isAiConfigured() {
+  return Boolean(appConfig.aiEndpoint);
+}
+
 const state = {
   trades: [],
   summary: null,
@@ -78,6 +178,9 @@ const state = {
   collapsedCards: new Set(),
   isInitialLoad: true,
   theme: 'light',
+  refreshInterval: DEFAULT_REFRESH_INTERVAL,
+  activeSection: 'dashboard',
+  preferences: null,
 };
 
 let pnlChart = null;
@@ -85,6 +188,45 @@ let socket = null;
 let partialModal = null;
 let partialTradeContext = null;
 let notificationsRequested = false;
+let preferencesModal = null;
+let refreshTimer = null;
+
+const appConfig = {
+  apiBase: '',
+  analyticsGraphql: '',
+  aiEndpoint: '',
+  serviceLinks: [],
+};
+
+const DEFAULT_PREFERENCES = {
+  sections: {
+    dashboard: true,
+    analytics: true,
+    assistant: true,
+    services: true,
+  },
+  widgets: {
+    metricsPrimary: true,
+    metricsSecondary: true,
+    pnlCard: true,
+    symbolCard: true,
+    tradesCard: true,
+    historyCard: true,
+  },
+  refreshInterval: DEFAULT_REFRESH_INTERVAL,
+};
+
+const analyticsState = {
+  lastUpdated: null,
+  loading: false,
+};
+
+const aiState = {
+  conversation: [],
+  busy: false,
+};
+
+let currentServiceUrl = null;
 
 function getCssVariable(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name)?.trim();
@@ -184,19 +326,259 @@ function applyThemeVariables(theme) {
 function updateThemeToggleButton(theme) {
   const toggle = document.getElementById('themeToggleBtn');
   if (!toggle) return;
-  const isDark = theme === 'dark';
-  toggle.setAttribute('aria-pressed', String(isDark));
+  toggle.setAttribute('aria-pressed', String(theme === 'dark'));
   const icon = toggle.querySelector('i');
   if (icon) {
-    icon.classList.toggle('bi-moon-stars', !isDark);
-    icon.classList.toggle('bi-sun', isDark);
+    icon.className = 'bi';
+    if (theme === 'dark') {
+      icon.classList.add('bi-sun');
+    } else if (theme === 'pastel') {
+      icon.classList.add('bi-palette');
+    } else {
+      icon.classList.add('bi-moon-stars');
+    }
   }
-  toggle.setAttribute('title', isDark ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro');
+  let title = 'Cambiar tema';
+  if (theme === 'dark') {
+    title = 'Cambiar a tema pastel';
+  } else if (theme === 'pastel') {
+    title = 'Cambiar a tema claro';
+  } else {
+    title = 'Cambiar a tema oscuro';
+  }
+  toggle.setAttribute('title', title);
+  toggle.setAttribute('aria-label', title);
+}
+
+function getNextTheme(current) {
+  const index = AVAILABLE_THEMES.indexOf(current);
+  const nextIndex = index >= 0 ? (index + 1) % AVAILABLE_THEMES.length : 0;
+  return AVAILABLE_THEMES[nextIndex] || 'light';
 }
 
 function toggleTheme() {
-  const next = state.theme === 'dark' ? 'light' : 'dark';
-  applyThemeVariables(next);
+  applyThemeVariables(getNextTheme(state.theme));
+}
+
+function sanitizeRefreshInterval(value) {
+  let numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_REFRESH_INTERVAL;
+  }
+  if (numeric < MIN_REFRESH_INTERVAL && numeric >= 5) {
+    numeric *= 1000;
+  }
+  numeric = Math.max(MIN_REFRESH_INTERVAL, Math.min(MAX_REFRESH_INTERVAL, numeric));
+  return Math.round(numeric);
+}
+
+function loadPreferences() {
+  const stored = getStoredJSON(PREFERENCES_STORAGE_KEY);
+  const preferences = {
+    sections: { ...DEFAULT_PREFERENCES.sections },
+    widgets: { ...DEFAULT_PREFERENCES.widgets },
+    refreshInterval: DEFAULT_PREFERENCES.refreshInterval,
+  };
+  if (stored && typeof stored === 'object') {
+    if (stored.sections && typeof stored.sections === 'object') {
+      Object.assign(preferences.sections, stored.sections);
+    }
+    if (stored.widgets && typeof stored.widgets === 'object') {
+      Object.assign(preferences.widgets, stored.widgets);
+    }
+    if (stored.refreshInterval) {
+      preferences.refreshInterval = sanitizeRefreshInterval(stored.refreshInterval);
+    }
+  }
+  preferences.refreshInterval = sanitizeRefreshInterval(preferences.refreshInterval);
+  state.preferences = preferences;
+  state.refreshInterval = preferences.refreshInterval;
+}
+
+function savePreferences() {
+  if (!state.preferences) {
+    return;
+  }
+  setStoredJSON(PREFERENCES_STORAGE_KEY, state.preferences);
+}
+
+function isSectionEnabled(sectionId) {
+  if (!state.preferences) {
+    return true;
+  }
+  const value = state.preferences.sections?.[sectionId];
+  return value !== false;
+}
+
+function isWidgetEnabled(widgetId) {
+  if (!state.preferences) {
+    return true;
+  }
+  const value = state.preferences.widgets?.[widgetId];
+  return value !== false;
+}
+
+function getFirstEnabledSection() {
+  const fallback = document.querySelector('.app-section');
+  const preferred = ORDERED_SECTIONS.find((section) => isSectionEnabled(section));
+  return preferred || fallback?.dataset.section || 'dashboard';
+}
+
+function setActiveSection(sectionId, options = {}) {
+  const { force = false } = options;
+  if (!force && !isSectionEnabled(sectionId)) {
+    return;
+  }
+  state.activeSection = sectionId;
+  document.querySelectorAll('.app-section').forEach((section) => {
+    const id = section.dataset.section;
+    const enabled = !section.classList.contains('section-hidden');
+    const isActive = enabled && id === sectionId;
+    section.classList.toggle('active', isActive);
+    section.classList.toggle('d-none', !isActive);
+  });
+  document.querySelectorAll('[data-section-target]').forEach((link) => {
+    const target = link.dataset.sectionTarget;
+    const enabled = isSectionEnabled(target);
+    const isActive = enabled && target === sectionId;
+    link.classList.toggle('active', isActive);
+    link.setAttribute('aria-current', isActive ? 'page' : 'false');
+  });
+}
+
+function updateWidgetVisibility() {
+  document.querySelectorAll('[data-widget-id]').forEach((element) => {
+    const id = element.dataset.widgetId;
+    if (!id) return;
+    const enabled = isWidgetEnabled(id);
+    element.classList.toggle('section-hidden', !enabled);
+    element.classList.toggle('d-none', !enabled);
+  });
+}
+
+function updateSectionVisibility() {
+  document.querySelectorAll('.app-section').forEach((section) => {
+    const id = section.dataset.section;
+    const enabled = isSectionEnabled(id);
+    section.classList.toggle('section-hidden', !enabled);
+    if (!enabled) {
+      section.classList.add('d-none');
+      section.classList.remove('active');
+    }
+  });
+  document.querySelectorAll('[data-section-target]').forEach((link) => {
+    const target = link.dataset.sectionTarget;
+    const enabled = isSectionEnabled(target);
+    link.classList.toggle('disabled', !enabled);
+    link.setAttribute('aria-disabled', String(!enabled));
+    link.tabIndex = enabled ? 0 : -1;
+    if (!enabled) {
+      link.classList.remove('active');
+    }
+  });
+  const active = state.activeSection;
+  const nextSection = isSectionEnabled(active) ? active : getFirstEnabledSection();
+  setActiveSection(nextSection, { force: true });
+}
+
+function updateRefreshIntervalPreview(intervalMs) {
+  const preview = document.getElementById('refreshIntervalPreview');
+  if (!preview) return;
+  const seconds = Math.round((intervalMs || state.refreshInterval || DEFAULT_REFRESH_INTERVAL) / 1000);
+  preview.innerHTML = `Los datos se actualizarán cada <strong>${seconds}</strong> segundos.`;
+}
+
+function scheduleAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+  }
+  const interval = sanitizeRefreshInterval(state.refreshInterval || DEFAULT_REFRESH_INTERVAL);
+  state.refreshInterval = interval;
+  updateRefreshIntervalPreview(interval);
+  refreshTimer = window.setInterval(() => {
+    if (!document.hidden) {
+      refreshDashboard();
+      if (isSectionEnabled('analytics')) {
+        refreshAnalytics();
+      }
+    }
+  }, interval);
+}
+
+function applyPreferences({ persist = true } = {}) {
+  if (!state.preferences) {
+    loadPreferences();
+  }
+  updateWidgetVisibility();
+  updateSectionVisibility();
+  scheduleAutoRefresh();
+  if (persist) {
+    savePreferences();
+  }
+  if (isSectionEnabled('analytics')) {
+    refreshAnalytics();
+  }
+}
+
+function populatePreferencesForm() {
+  if (!state.preferences) {
+    return;
+  }
+  document.querySelectorAll('[data-pref-section]').forEach((input) => {
+    const section = input.dataset.prefSection;
+    input.checked = isSectionEnabled(section);
+  });
+  document.querySelectorAll('[data-pref-widget]').forEach((input) => {
+    const widget = input.dataset.prefWidget;
+    input.checked = isWidgetEnabled(widget);
+  });
+  const refreshInput = document.getElementById('prefRefreshInterval');
+  if (refreshInput) {
+    refreshInput.value = Math.round((state.refreshInterval || DEFAULT_REFRESH_INTERVAL) / 1000);
+  }
+  updateRefreshIntervalPreview(state.refreshInterval);
+}
+
+function openPreferencesModal() {
+  if (!preferencesModal && window.bootstrap) {
+    const modalElement = document.getElementById('preferencesModal');
+    if (modalElement) {
+      preferencesModal = new bootstrap.Modal(modalElement);
+    }
+  }
+  populatePreferencesForm();
+  preferencesModal?.show();
+}
+
+function handlePreferencesSubmit(event) {
+  event.preventDefault();
+  const nextPreferences = {
+    sections: { ...DEFAULT_PREFERENCES.sections },
+    widgets: { ...DEFAULT_PREFERENCES.widgets },
+    refreshInterval: state.refreshInterval,
+  };
+  document.querySelectorAll('[data-pref-section]').forEach((input) => {
+    const section = input.dataset.prefSection;
+    if (!section) return;
+    nextPreferences.sections[section] = input.checked;
+  });
+  document.querySelectorAll('[data-pref-widget]').forEach((input) => {
+    const widget = input.dataset.prefWidget;
+    if (!widget) return;
+    nextPreferences.widgets[widget] = input.checked;
+  });
+  const refreshInput = document.getElementById('prefRefreshInterval');
+  if (refreshInput) {
+    const seconds = Number(refreshInput.value);
+    nextPreferences.refreshInterval = sanitizeRefreshInterval(seconds * 1000);
+  }
+  state.preferences = nextPreferences;
+  state.refreshInterval = nextPreferences.refreshInterval;
+  applyPreferences();
+  if (preferencesModal) {
+    preferencesModal.hide();
+  }
+  showToast('Preferencias actualizadas', 'success');
 }
 
 function initTheme() {
@@ -206,10 +588,11 @@ function initTheme() {
   } catch (error) {
     storedTheme = null;
   }
-  if (storedTheme !== 'dark' && storedTheme !== 'light') {
-    storedTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-      ? 'dark'
-      : 'light';
+  if (!AVAILABLE_THEMES.includes(storedTheme)) {
+    storedTheme =
+      window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light';
   }
   applyThemeVariables(storedTheme);
 }
@@ -972,6 +1355,328 @@ function renderHistory() {
   clearSkeleton(container);
 }
 
+function showAnalyticsStatus(message, variant = 'info') {
+  const element = document.getElementById('analyticsStatus');
+  if (!element) return;
+  if (!message) {
+    element.classList.add('d-none');
+    element.textContent = '';
+    element.classList.remove('alert-warning', 'alert-danger', 'alert-info', 'alert-success');
+    return;
+  }
+  element.textContent = message;
+  element.classList.remove('d-none');
+  element.classList.remove('alert-warning', 'alert-danger', 'alert-info', 'alert-success');
+  element.classList.add(`alert-${variant}`);
+}
+
+function renderAnalyticsOverview(overview) {
+  const container = document.getElementById('analyticsOverview');
+  if (!container) return;
+  clearSkeleton(container);
+  if (!overview) {
+    container.innerHTML = '<p class="text-muted mb-0">Sin datos recientes. Ejecuta el microservicio de analítica para ver estadísticas.</p>';
+    return;
+  }
+  const metrics = [
+    { label: 'Operaciones totales', value: formatNumber(overview.totalTrades, integerFormatter) },
+    {
+      label: 'Win rate',
+      value:
+        typeof overview.winRate === 'number' && !Number.isNaN(overview.winRate)
+          ? percentFormatter.format(overview.winRate)
+          : '—',
+    },
+    { label: 'Sharpe', value: formatNumber(overview.sharpeRatio) },
+    { label: 'Profit factor', value: formatNumber(overview.profitFactor) },
+    { label: 'Mejor símbolo', value: overview.bestSymbol || '—' },
+    { label: 'Peor símbolo', value: overview.worstSymbol || '—' },
+  ];
+  container.innerHTML = `
+    <dl class="row gy-2 gx-1 analytics-overview">
+      ${metrics
+        .map(
+          (metric) => `
+            <dt class="col-7 text-muted small">${metric.label}</dt>
+            <dd class="col-5 text-end fw-semibold">${metric.value ?? '—'}</dd>
+          `,
+        )
+        .join('')}
+    </dl>`;
+}
+
+function renderAnalyticsSymbols(items) {
+  const list = document.getElementById('analyticsSymbols');
+  if (!list) return;
+  clearSkeleton(list);
+  if (!Array.isArray(items) || items.length === 0) {
+    list.innerHTML = `
+      <li class="list-group-item d-flex justify-content-between text-muted">
+        <span>Sin datos de volumen disponibles.</span>
+        <i class="bi bi-broadcast"></i>
+      </li>`;
+    return;
+  }
+  const rows = items
+    .map((item) => {
+      const change = Number(item.change24h);
+      const changeLabel = Number.isFinite(change)
+        ? `${change >= 0 ? '+' : ''}${numberFormatter.format(change)}%`
+        : '—';
+      const changeClass = Number.isFinite(change)
+        ? change >= 0
+          ? 'text-success'
+          : 'text-danger'
+        : 'text-muted';
+      const volumeLabel = formatNumber(item.volume);
+      return `
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <span class="fw-semibold">${item.symbol || '—'}</span>
+          <span class="d-flex align-items-center gap-2">
+            <span class="badge">${volumeLabel}</span>
+            <small class="${changeClass}">${changeLabel}</small>
+          </span>
+        </li>`;
+    })
+    .join('');
+  list.innerHTML = rows;
+}
+
+async function refreshAnalytics(manual = false) {
+  if (!isSectionEnabled('analytics')) {
+    return;
+  }
+  const endpoint = getAnalyticsEndpoint();
+  if (!endpoint) {
+    showAnalyticsStatus('Configura ANALYTICS_GRAPHQL_URL para habilitar la analítica.', 'warning');
+    return;
+  }
+  if (analyticsState.loading) {
+    return;
+  }
+  clearSkeleton(document.getElementById('analyticsOverview'));
+  clearSkeleton(document.getElementById('analyticsSymbols'));
+  analyticsState.loading = true;
+  if (manual) {
+    showAnalyticsStatus('Actualizando analítica…', 'info');
+  }
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: ANALYTICS_OVERVIEW_QUERY }),
+    });
+    const payload = await response.json();
+    if (payload.errors && payload.errors.length) {
+      throw new Error(payload.errors[0]?.message || 'Error del microservicio de analítica');
+    }
+    if (!response.ok) {
+      throw new Error('Respuesta inesperada del microservicio de analítica');
+    }
+    const data = payload.data || {};
+    renderAnalyticsOverview(data.performanceSummary);
+    renderAnalyticsSymbols(data.volumeBySymbol);
+    analyticsState.lastUpdated = new Date();
+    const badge = document.getElementById('analyticsLastUpdated');
+    if (badge) {
+      badge.textContent = analyticsState.lastUpdated.toLocaleTimeString(userLocale);
+    }
+    showAnalyticsStatus('');
+  } catch (error) {
+    console.error(error);
+    showAnalyticsStatus(error.message || 'No se pudo cargar la analítica.', 'warning');
+  } finally {
+    analyticsState.loading = false;
+  }
+}
+
+function ensureAiContainerReady() {
+  const container = document.getElementById('aiChatMessages');
+  if (!container) {
+    return null;
+  }
+  clearSkeleton(container);
+  const placeholder = container.querySelector('.ai-chat-placeholder');
+  if (placeholder) {
+    placeholder.remove();
+  }
+  return container;
+}
+
+function updateAiStatus(label, variant = 'secondary') {
+  const badge = document.getElementById('aiStatus');
+  if (!badge) return;
+  badge.textContent = label;
+  badge.className = `badge bg-${variant}`;
+}
+
+function setAssistantBusy(isBusy) {
+  aiState.busy = isBusy;
+  const sendBtn = document.getElementById('aiChatSendBtn');
+  if (sendBtn) {
+    sendBtn.disabled = isBusy || !isAiConfigured();
+  }
+  const input = document.getElementById('aiMessageInput');
+  if (input) {
+    input.disabled = !isAiConfigured();
+  }
+}
+
+function appendAiMessage(role, content) {
+  const container = ensureAiContainerReady();
+  if (!container) {
+    return;
+  }
+  const message = document.createElement('div');
+  message.className = `ai-chat-message ai-chat-message--${role}`;
+  const roleSpan = document.createElement('span');
+  roleSpan.className = 'ai-chat-message__role';
+  roleSpan.textContent = role === 'assistant' ? 'Asistente' : 'Tú';
+  const bubble = document.createElement('div');
+  bubble.className = 'ai-chat-message__bubble';
+  bubble.textContent = content;
+  message.append(roleSpan, bubble);
+  container.appendChild(message);
+  container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+}
+
+async function sendAiMessage(message) {
+  if (!message.trim()) {
+    return;
+  }
+  if (!isAiConfigured()) {
+    showToast('Configura AI_ASSISTANT_URL para habilitar el asistente.', 'warning');
+    return;
+  }
+  setAssistantBusy(true);
+  updateAiStatus('Pensando…', 'info');
+  appendAiMessage('user', message);
+  aiState.conversation.push({ role: 'user', content: message });
+  try {
+    const response = await fetch(appConfig.aiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        conversation: aiState.conversation,
+      }),
+    });
+    const data = await readJsonResponse(response, 'No se pudo obtener respuesta del asistente');
+    if (!response.ok) {
+      throw new Error(data.error || 'El asistente devolvió un error');
+    }
+    const reply = data.reply || data.answer || data.message;
+    if (reply) {
+      aiState.conversation.push({ role: 'assistant', content: reply });
+      appendAiMessage('assistant', reply);
+      updateAiStatus('Listo', 'success');
+    } else {
+      updateAiStatus('Sin respuesta', 'warning');
+      showToast('El asistente no generó respuesta.', 'warning');
+    }
+  } catch (error) {
+    console.error(error);
+    updateAiStatus('Error', 'danger');
+    showToast(error.message || 'Error al contactar al asistente', 'danger');
+  } finally {
+    setAssistantBusy(false);
+  }
+}
+
+function initializeAssistant() {
+  const container = document.getElementById('aiChatMessages');
+  if (container) {
+    clearSkeleton(container);
+  }
+  const input = document.getElementById('aiMessageInput');
+  if (input) {
+    input.placeholder = isAiConfigured()
+      ? '¿Cómo va el momentum de BTC/USDT?'
+      : 'Configura AI_ASSISTANT_URL para habilitar el asistente.';
+    input.disabled = !isAiConfigured();
+  }
+  const sendBtn = document.getElementById('aiChatSendBtn');
+  if (sendBtn) {
+    sendBtn.disabled = !isAiConfigured();
+  }
+  updateAiStatus(isAiConfigured() ? 'Listo' : 'Sin configurar', isAiConfigured() ? 'success' : 'warning');
+}
+
+function initializeServices() {
+  const listContainer = document.getElementById('servicesButtons');
+  const emptyAlert = document.getElementById('servicesEmpty');
+  const preview = document.getElementById('servicePreview');
+  const placeholder = document.getElementById('servicePlaceholder');
+  const openBtn = document.getElementById('serviceOpenExternal');
+  if (preview) {
+    preview.src = 'about:blank';
+    preview.classList.remove('is-visible');
+  }
+  if (placeholder) {
+    placeholder.classList.remove('d-none');
+  }
+  currentServiceUrl = null;
+  if (openBtn) {
+    openBtn.disabled = true;
+  }
+  if (!listContainer) {
+    return;
+  }
+  clearSkeleton(listContainer);
+  listContainer.innerHTML = '';
+  if (!Array.isArray(appConfig.serviceLinks) || appConfig.serviceLinks.length === 0) {
+    if (emptyAlert) {
+      emptyAlert.classList.remove('d-none');
+    }
+    return;
+  }
+  if (emptyAlert) {
+    emptyAlert.classList.add('d-none');
+  }
+  appConfig.serviceLinks.forEach((service) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-secondary';
+    button.textContent = service.label || service.url;
+    button.addEventListener('click', () => {
+      loadServicePreview(service);
+    });
+    listContainer.appendChild(button);
+  });
+  if (appConfig.serviceLinks.length > 0) {
+    loadServicePreview(appConfig.serviceLinks[0]);
+  }
+}
+
+function loadServicePreview(service) {
+  const iframe = document.getElementById('servicePreview');
+  const placeholder = document.getElementById('servicePlaceholder');
+  const openBtn = document.getElementById('serviceOpenExternal');
+  if (!iframe || !placeholder || !openBtn) {
+    return;
+  }
+  if (!service) {
+    iframe.src = 'about:blank';
+    iframe.classList.remove('is-visible');
+    placeholder.classList.remove('d-none');
+    openBtn.disabled = true;
+    currentServiceUrl = null;
+    return;
+  }
+  currentServiceUrl = service.url;
+  openBtn.disabled = false;
+  placeholder.classList.add('d-none');
+  iframe.classList.remove('is-visible');
+  iframe.src = service.url;
+  iframe.addEventListener(
+    'load',
+    () => {
+      iframe.classList.add('is-visible');
+    },
+    { once: true },
+  );
+}
+
 async function refreshDashboard(manual = false) {
   try {
     if (manual) {
@@ -979,10 +1684,11 @@ async function refreshDashboard(manual = false) {
     }
     clearAlert();
 
-    const trades = (await fetchJSON('/api/trades', { silent: !manual })) ?? [];
+    const trades = (await fetchJSON(resolveApiUrl('/api/trades'), { silent: !manual })) ?? [];
     const summarySilent = manual ? false : state.summary !== null;
-    const summary = await fetchJSON('/api/summary', { silent: summarySilent });
-    const history = (await fetchJSON('/api/history?limit=50', { silent: true })) ?? [];
+    const summary = await fetchJSON(resolveApiUrl('/api/summary'), { silent: summarySilent });
+    const history =
+      (await fetchJSON(resolveApiUrl('/api/history?limit=50'), { silent: true })) ?? [];
 
     state.trades = Array.isArray(trades) ? trades : [];
     state.summary = summary;
@@ -1010,6 +1716,9 @@ async function refreshDashboard(manual = false) {
       setStatus('Datos incompletos', 'warning');
     }
     state.isInitialLoad = false;
+    if (manual && isSectionEnabled('analytics')) {
+      refreshAnalytics(true);
+    }
   } catch (error) {
     console.error(error);
     showAlert('No se pudieron sincronizar los datos del bot. Reintentaremos automáticamente.', 'danger');
@@ -1030,7 +1739,9 @@ function attachEvents() {
 
   const refreshBtn = document.getElementById('refreshTradesBtn');
   if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => refreshDashboard(true));
+    refreshBtn.addEventListener('click', () => {
+      refreshDashboard(true);
+    });
   }
 
   const themeToggle = document.getElementById('themeToggleBtn');
@@ -1038,12 +1749,99 @@ function attachEvents() {
     themeToggle.addEventListener('click', toggleTheme);
   }
 
+  const navCollapse = document.getElementById('navbarSections');
+  const collapseInstance =
+    navCollapse && window.bootstrap
+      ? window.bootstrap.Collapse.getOrCreateInstance(navCollapse, { toggle: false })
+      : null;
+
+  document.querySelectorAll('[data-section-target]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      const { sectionTarget } = link.dataset;
+      if (!sectionTarget) return;
+      if (!isSectionEnabled(sectionTarget)) {
+        showToast('Activa la sección desde la configuración para poder visualizarla.', 'info');
+        return;
+      }
+      setActiveSection(sectionTarget);
+      if (collapseInstance && navCollapse?.classList.contains('show')) {
+        collapseInstance.hide();
+      }
+    });
+  });
+
+  const preferencesBtn = document.getElementById('preferencesBtn');
+  if (preferencesBtn) {
+    preferencesBtn.addEventListener('click', openPreferencesModal);
+  }
+
+  const preferencesForm = document.getElementById('preferencesForm');
+  if (preferencesForm) {
+    preferencesForm.addEventListener('submit', handlePreferencesSubmit);
+  }
+
+  const refreshInput = document.getElementById('prefRefreshInterval');
+  if (refreshInput) {
+    refreshInput.addEventListener('input', (event) => {
+      const seconds = Number(event.target.value);
+      updateRefreshIntervalPreview(sanitizeRefreshInterval(seconds * 1000));
+    });
+  }
+
+  const refreshAnalyticsBtn = document.getElementById('refreshAnalyticsBtn');
+  if (refreshAnalyticsBtn) {
+    refreshAnalyticsBtn.addEventListener('click', () => refreshAnalytics(true));
+  }
+
+  const aiForm = document.getElementById('aiChatForm');
+  if (aiForm) {
+    aiForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (aiState.busy) return;
+      const input = document.getElementById('aiMessageInput');
+      const message = input?.value?.trim() || '';
+      if (!message) {
+        showToast('Escribe un mensaje para el asistente.', 'warning');
+        return;
+      }
+      if (input) {
+        input.value = '';
+      }
+      await sendAiMessage(message);
+      input?.focus();
+    });
+  }
+
+  document.querySelectorAll('[data-ai-prompt]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const prompt = button.dataset.aiPrompt || '';
+      const input = document.getElementById('aiMessageInput');
+      if (input) {
+        input.value = prompt;
+        input.focus();
+      }
+      if (!aiState.busy && isAiConfigured()) {
+        sendAiMessage(prompt);
+      }
+    });
+  });
+
+  const openServiceBtn = document.getElementById('serviceOpenExternal');
+  if (openServiceBtn) {
+    openServiceBtn.addEventListener('click', () => {
+      if (currentServiceUrl) {
+        window.open(currentServiceUrl, '_blank', 'noopener');
+      }
+    });
+  }
+
   const toggleBtn = document.getElementById('toggleTradeBtn');
   if (toggleBtn) {
     toggleBtn.addEventListener('click', async () => {
       toggleBtn.disabled = true;
       try {
-        const response = await fetch('/api/toggle-trading', { method: 'POST' });
+        const response = await fetch(resolveApiUrl('/api/toggle-trading'), { method: 'POST' });
         const data = await readJsonResponse(response, 'No se pudo cambiar el estado del bot');
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'No se pudo cambiar el estado del bot');
@@ -1076,18 +1874,30 @@ function attachEvents() {
 }
 
 function initialize() {
+  initAppConfig();
   initTheme();
+  loadPreferences();
   registerServiceWorker();
   applyDashboardLayout();
   setupCollapsibles();
   registerHotkeys();
   ensureChart();
+  applyPreferences({ persist: false });
   attachEvents();
+  initializeAssistant();
+  initializeServices();
   refreshDashboard();
+  refreshAnalytics();
   setStatus('Sincronizando…', 'warning');
-  setInterval(refreshDashboard, REFRESH_INTERVAL);
+  scheduleAutoRefresh();
   connectSocket();
   scheduleNotificationRequest();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      refreshDashboard();
+      refreshAnalytics();
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', initialize);
@@ -1102,7 +1912,7 @@ function attachTradeRowEvents() {
       }
       setRowBusy(tradeId, true);
       try {
-        const response = await fetch(`/api/trades/${tradeId}/close`, {
+        const response = await fetch(resolveApiUrl(`/api/trades/${tradeId}/close`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason: 'manual_close_ui' }),
@@ -1159,7 +1969,7 @@ async function handlePartialConfirm() {
   const { tradeId } = partialTradeContext;
   setRowBusy(tradeId, true);
   try {
-    const response = await fetch(`/api/trades/${tradeId}/close-partial`, {
+    const response = await fetch(resolveApiUrl(`/api/trades/${tradeId}/close-partial`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ percent: value, reason: 'manual_partial_ui' }),

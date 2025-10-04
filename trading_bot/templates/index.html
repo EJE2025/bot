@@ -35,14 +35,30 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/dashboard.css') }}" rel="stylesheet">
 </head>
-<body>
-    <nav class="navbar navbar-expand-lg">
+<body
+    data-api-base="{{ api_base }}"
+    data-analytics-graphql="{{ analytics_graphql_url }}"
+    data-ai-endpoint="{{ ai_api_url }}"
+    data-service-links='{{ service_links | tojson }}'
+>
+    <nav class="navbar navbar-expand-lg navbar-light">
         <div class="container-fluid px-4">
             <a class="navbar-brand d-flex align-items-center gap-2" href="#">
                 <i class="bi bi-robot"></i>
                 <span>Patatabot</span>
             </a>
-            <div class="d-flex align-items-center gap-3 ms-auto">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSections" aria-controls="navbarSections" aria-expanded="false" aria-label="Alternar navegación">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse order-lg-2 mt-3 mt-lg-0" id="navbarSections">
+                <div class="navbar-nav gap-lg-2" role="tablist">
+                    <a class="nav-link active" href="#dashboard" data-section-target="dashboard" role="tab" aria-controls="dashboardSection">Dashboard</a>
+                    <a class="nav-link" href="#analytics" data-section-target="analytics" role="tab" aria-controls="analyticsSection">Analítica</a>
+                    <a class="nav-link" href="#assistant" data-section-target="assistant" role="tab" aria-controls="assistantSection">Asistente IA</a>
+                    <a class="nav-link" href="#services" data-section-target="services" role="tab" aria-controls="servicesSection">Servicios</a>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-3 ms-auto order-lg-3 navbar-actions">
                 <span class="badge d-none" id="modeBadge" aria-live="polite">Demo</span>
                 <span class="badge badge-status" id="connectionStatus">Sincronizando…</span>
                 <button class="btn btn-sm btn-secondary" id="toggleTradeBtn" type="button">
@@ -53,7 +69,10 @@
                     <i class="bi bi-arrow-repeat"></i>
                     Actualizar ahora
                 </button>
-                <button class="btn btn-sm btn-ghost" id="themeToggleBtn" type="button" aria-pressed="false" aria-label="Cambiar tema">
+                <button class="btn btn-sm btn-ghost" id="preferencesBtn" type="button" aria-haspopup="dialog" aria-controls="preferencesModal" title="Abrir configuración">
+                    <i class="bi bi-sliders"></i>
+                </button>
+                <button class="btn btn-sm btn-ghost" id="themeToggleBtn" type="button" aria-pressed="false" aria-label="Cambiar tema" title="Cambiar tema">
                     <i class="bi bi-moon-stars"></i>
                 </button>
             </div>
@@ -63,169 +82,294 @@
     <main class="container-fluid py-4 px-4 px-xl-5">
         <div id="globalAlerts" class="mb-3"></div>
 
-        <div class="row g-3">
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">Posiciones abiertas</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricPositions">0</div>
-                        <div class="metric-delta text-muted">Número total de operaciones activas</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">PnL no realizado</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricPnL">0.00</div>
-                        <div class="metric-delta text-muted">Actualizado en tiempo real</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">Capital invertido</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricExposure">0.00</div>
-                        <div class="metric-delta text-muted">Suma de USDT en riesgo</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">Win rate</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricWinRate">0%</div>
-                        <div class="metric-delta text-muted">Operaciones en verde vs. en rojo</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row g-3 mt-1">
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">Saldo realizado</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricRealizedBalance">0.00</div>
-                        <div class="metric-delta text-muted">Capital recuperado de operaciones cerradas</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12 col-md-6 col-xl-3">
-                <div class="card metric-card h-100">
-                    <div class="card-body">
-                        <div class="metric-label">PnL realizado</div>
-                        <div class="metric-value skeleton" data-skeleton id="metricRealizedPnL">0.00</div>
-                        <div class="metric-delta text-muted">Ganancias y pérdidas materializadas</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div id="dashboardGrid" class="row g-3 mt-1" aria-live="polite">
-            <div class="col-12 col-xl-8" data-id="pnlCard">
-                <div class="card h-100 collapsible-card" data-card-id="pnlCard">
-                    <div class="card-header d-flex align-items-center justify-content-between">
-                        <div>
-                            <h2 class="h5 mb-0">Evolución del PnL total</h2>
-                            <p class="text-muted mb-0 small">Incluye PnL realizado y no realizado</p>
+        <section id="dashboardSection" class="app-section" data-section="dashboard">
+            <div class="row g-3" data-widget-id="metricsPrimary">
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">Posiciones abiertas</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricPositions">0</div>
+                            <div class="metric-delta text-muted">Número total de operaciones activas</div>
                         </div>
-                        <div class="d-flex align-items-center gap-2">
-                            <small class="text-muted" id="lastUpdated">Sin datos</small>
-                            <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="pnlCard" aria-expanded="true" aria-controls="pnlCardContent" aria-label="Colapsar gráfico de PnL">
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">PnL no realizado</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricPnL">0.00</div>
+                            <div class="metric-delta text-muted">Actualizado en tiempo real</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">Capital invertido</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricExposure">0.00</div>
+                            <div class="metric-delta text-muted">Suma de USDT en riesgo</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">Win rate</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricWinRate">0%</div>
+                            <div class="metric-delta text-muted">Operaciones en verde vs. en rojo</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mt-1" data-widget-id="metricsSecondary">
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">Saldo realizado</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricRealizedBalance">0.00</div>
+                            <div class="metric-delta text-muted">Capital recuperado de operaciones cerradas</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6 col-xl-3">
+                    <div class="card metric-card h-100">
+                        <div class="card-body">
+                            <div class="metric-label">PnL realizado</div>
+                            <div class="metric-value skeleton" data-skeleton id="metricRealizedPnL">0.00</div>
+                            <div class="metric-delta text-muted">Ganancias y pérdidas materializadas</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="dashboardGrid" class="row g-3 mt-1" aria-live="polite">
+                <div class="col-12 col-xl-8" data-id="pnlCard" data-widget-id="pnlCard">
+                    <div class="card h-100 collapsible-card" data-card-id="pnlCard">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <div>
+                                <h2 class="h5 mb-0">Evolución del PnL total</h2>
+                                <p class="text-muted mb-0 small">Incluye PnL realizado y no realizado</p>
+                            </div>
+                            <div class="d-flex align-items-center gap-2">
+                                <small class="text-muted" id="lastUpdated">Sin datos</small>
+                                <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="pnlCard" aria-expanded="true" aria-controls="pnlCardContent" aria-label="Colapsar gráfico de PnL">
+                                    <i class="bi bi-arrows-collapse"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="collapsible-content" id="pnlCardContent">
+                            <div class="card-body" style="height: 320px;">
+                                <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-xl-4" data-id="symbolCard" data-widget-id="symbolCard">
+                    <div class="card h-100 collapsible-card" data-card-id="symbolCard">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h2 class="h5 mb-0">Capital invertido por símbolo</h2>
+                            <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="symbolCard" aria-expanded="true" aria-controls="symbolCardContent" aria-label="Colapsar resumen por símbolo">
                                 <i class="bi bi-arrows-collapse"></i>
                             </button>
                         </div>
-                    </div>
-                    <div class="collapsible-content" id="pnlCardContent">
-                        <div class="card-body" style="height: 320px;">
-                            <canvas id="pnlChart" aria-label="Gráfico de PnL"></canvas>
+                        <div class="collapsible-content" id="symbolCardContent">
+                            <div class="card-body">
+                                <ul class="list-group list-group-flush symbol-breakdown" id="symbolBreakdown" data-skeleton>
+                                    <li class="list-group-item skeleton">Sin posiciones abiertas.</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="col-12 col-xl-4" data-id="symbolCard">
-                <div class="card h-100 collapsible-card" data-card-id="symbolCard">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h2 class="h5 mb-0">Capital invertido por símbolo</h2>
-                        <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="symbolCard" aria-expanded="true" aria-controls="symbolCardContent" aria-label="Colapsar resumen por símbolo">
-                            <i class="bi bi-arrows-collapse"></i>
-                        </button>
-                    </div>
-                    <div class="collapsible-content" id="symbolCardContent">
-                        <div class="card-body">
-                            <ul class="list-group list-group-flush symbol-breakdown" id="symbolBreakdown" data-skeleton>
-                                <li class="list-group-item skeleton">Sin posiciones abiertas.</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12" data-id="tradesCard">
-                <div class="card collapsible-card" data-card-id="tradesCard">
-                    <div class="card-header d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
-                        <div>
-                            <h2 class="h5 mb-0">Operaciones abiertas</h2>
-                            <p class="text-muted small mb-0">Filtra por símbolo o revisa los últimos cambios en las posiciones activas</p>
-                        </div>
-                        <div class="d-flex flex-column flex-sm-row align-items-sm-center gap-2">
-                            <label for="symbolFilter" class="small text-muted text-uppercase">Filtrar por símbolo</label>
-                            <input type="search" id="symbolFilter" class="form-control form-control-sm" placeholder="Ej: BTCUSDT">
-                        </div>
-                        <button class="btn btn-sm btn-ghost card-toggle ms-lg-2" type="button" data-card-toggle="tradesCard" aria-expanded="true" aria-controls="tradesCardContent" aria-label="Colapsar tabla de operaciones">
-                            <i class="bi bi-arrows-collapse"></i>
-                        </button>
-                    </div>
-                    <div class="collapsible-content" id="tradesCardContent">
-                        <div class="table-responsive">
-                            <table class="table table-hover align-middle mb-0 text-center" id="tradesTable" data-skeleton>
-                                <thead>
-                                    <tr>
-                                        <th>Símbolo</th>
-                                        <th>Side</th>
-                                        <th>Cantidad</th>
-                                        <th>Entrada</th>
-                                        <th>Precio Actual</th>
-                                        <th>Take Profit</th>
-                                        <th>Stop Loss</th>
-                                        <th>PnL</th>
-                                        <th>PnL Realizado</th>
-                                        <th>Abierta</th>
-                                        <th>Acciones</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="tradesTableBody">
-                                    <tr class="skeleton-row">
-                                        <td colspan="11" class="text-muted py-4 skeleton">Sin operaciones abiertas.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-12" data-id="historyCard">
-                <div class="card h-100 collapsible-card" data-card-id="historyCard">
-                    <div class="card-header d-flex justify-content-between align-items-center">
-                        <h2 class="h5 mb-0">Historial reciente</h2>
-                        <div class="d-flex align-items-center gap-2">
-                            <span class="badge bg-info text-dark">Últimas 50 operaciones</span>
-                            <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="historyCard" aria-expanded="true" aria-controls="historyCardContent" aria-label="Colapsar historial reciente">
+                <div class="col-12" data-id="tradesCard" data-widget-id="tradesCard">
+                    <div class="card collapsible-card" data-card-id="tradesCard">
+                        <div class="card-header d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+                            <div>
+                                <h2 class="h5 mb-0">Operaciones abiertas</h2>
+                                <p class="text-muted small mb-0">Filtra por símbolo o revisa los últimos cambios en las posiciones activas</p>
+                            </div>
+                            <div class="d-flex flex-column flex-sm-row align-items-sm-center gap-2">
+                                <label for="symbolFilter" class="small text-muted text-uppercase">Filtrar por símbolo</label>
+                                <input type="search" id="symbolFilter" class="form-control form-control-sm" placeholder="Ej: BTCUSDT">
+                            </div>
+                            <button class="btn btn-sm btn-ghost card-toggle ms-lg-2" type="button" data-card-toggle="tradesCard" aria-expanded="true" aria-controls="tradesCardContent" aria-label="Colapsar tabla de operaciones">
                                 <i class="bi bi-arrows-collapse"></i>
                             </button>
                         </div>
+                        <div class="collapsible-content" id="tradesCardContent">
+                            <div class="table-responsive">
+                                <table class="table table-hover align-middle mb-0 text-center" id="tradesTable" data-skeleton>
+                                    <thead>
+                                        <tr>
+                                            <th>Símbolo</th>
+                                            <th>Side</th>
+                                            <th>Cantidad</th>
+                                            <th>Entrada</th>
+                                            <th>Precio Actual</th>
+                                            <th>Take Profit</th>
+                                            <th>Stop Loss</th>
+                                            <th>PnL</th>
+                                            <th>PnL Realizado</th>
+                                            <th>Abierta</th>
+                                            <th>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tradesTableBody">
+                                        <tr class="skeleton-row">
+                                            <td colspan="11" class="text-muted py-4 skeleton">Sin operaciones abiertas.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
-                    <div class="collapsible-content" id="historyCardContent">
-                        <div class="card-body">
-                            <div id="historyList" class="history-list" data-skeleton>
-                                <div class="text-center text-muted skeleton">Sin operaciones cerradas recientes.</div>
+                </div>
+                <div class="col-12" data-id="historyCard" data-widget-id="historyCard">
+                    <div class="card h-100 collapsible-card" data-card-id="historyCard">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h2 class="h5 mb-0">Historial reciente</h2>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="badge bg-info text-dark">Últimas 50 operaciones</span>
+                                <button class="btn btn-sm btn-ghost card-toggle" type="button" data-card-toggle="historyCard" aria-expanded="true" aria-controls="historyCardContent" aria-label="Colapsar historial reciente">
+                                    <i class="bi bi-arrows-collapse"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="collapsible-content" id="historyCardContent">
+                            <div class="card-body">
+                                <div id="historyList" class="history-list" data-skeleton>
+                                    <div class="text-center text-muted skeleton">Sin operaciones cerradas recientes.</div>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
+
+        <section id="analyticsSection" class="app-section d-none" data-section="analytics">
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <div class="card h-100">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <h2 class="h5 mb-0">Resumen analítico</h2>
+                            <span class="badge bg-secondary" id="analyticsLastUpdated">Sin datos</span>
+                        </div>
+                        <div class="card-body" id="analyticsOverview" data-skeleton>
+                            <p class="text-muted small mb-0">Conecta con el microservicio de analítica para visualizar ratios clave y métricas agregadas del bot.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-8">
+                    <div class="card h-100">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <div>
+                                <h2 class="h5 mb-0">Volumen por símbolo</h2>
+                                <p class="text-muted small mb-0">Datos expuestos a través del gateway (GraphQL).</p>
+                            </div>
+                            <button class="btn btn-sm btn-ghost" id="refreshAnalyticsBtn" type="button">
+                                <i class="bi bi-arrow-clockwise"></i>
+                                Actualizar
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div id="analyticsStatus" class="alert alert-info d-none" role="status"></div>
+                            <ul class="list-group list-group-flush analytics-symbols" id="analyticsSymbols" data-skeleton>
+                                <li class="list-group-item d-flex justify-content-between text-muted">
+                                    <span>Conecta tu servicio de analítica para comenzar.</span>
+                                    <i class="bi bi-broadcast"></i>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="assistantSection" class="app-section d-none" data-section="assistant">
+            <div class="row g-3">
+                <div class="col-12 col-xl-8">
+                    <div class="card h-100">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <div>
+                                <h2 class="h5 mb-0">Asistente IA</h2>
+                                <p class="text-muted small mb-0">Formula preguntas y envíalas al microservicio de IA.</p>
+                            </div>
+                            <span class="badge bg-secondary" id="aiStatus">Inactivo</span>
+                        </div>
+                        <div class="card-body d-flex flex-column">
+                            <div id="aiChatMessages" class="ai-chat-messages" data-skeleton>
+                                <div class="ai-chat-placeholder text-muted">Inicia una conversación para recibir ideas de trading contextualizadas.</div>
+                            </div>
+                            <form id="aiChatForm" class="ai-chat-form mt-3" autocomplete="off">
+                                <label for="aiMessageInput" class="form-label small text-muted text-uppercase">Tu mensaje</label>
+                                <div class="input-group">
+                                    <textarea class="form-control" id="aiMessageInput" rows="2" placeholder="¿Cómo va el momentum de BTC/USDT?" required></textarea>
+                                    <button class="btn btn-primary" id="aiChatSendBtn" type="submit">
+                                        <i class="bi bi-send"></i>
+                                    </button>
+                                </div>
+                                <div class="form-text">Las conversaciones se procesan vía <code>/ai/chat</code> a través del gateway.</div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-xl-4">
+                    <div class="card h-100">
+                        <div class="card-header">
+                            <h2 class="h5 mb-0">Sugerencias rápidas</h2>
+                        </div>
+                        <div class="card-body ai-quick-prompts">
+                            <button class="btn btn-tertiary w-100 mb-2" type="button" data-ai-prompt="Resúmeme el rendimiento diario del bot.">
+                                Rendimiento diario
+                            </button>
+                            <button class="btn btn-tertiary w-100 mb-2" type="button" data-ai-prompt="¿Qué oportunidades ves en las altcoins con mayor volumen?">
+                                Ideas en altcoins
+                            </button>
+                            <button class="btn btn-tertiary w-100" type="button" data-ai-prompt="Genera una checklist para revisar antes de abrir una nueva posición.">
+                                Checklist de trading
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="servicesSection" class="app-section d-none" data-section="services">
+            <div class="row g-3">
+                <div class="col-12 col-xl-5">
+                    <div class="card h-100">
+                        <div class="card-header">
+                            <h2 class="h5 mb-0">Accesos rápidos</h2>
+                        </div>
+                        <div class="card-body" id="servicesList" data-skeleton>
+                            <p class="text-muted mb-2">Integra aquí los distintos microservicios publicados a través del gateway. Puedes abrirlos incrustados o en una pestaña nueva.</p>
+                            <div class="d-grid gap-2" id="servicesButtons"></div>
+                            <div class="alert alert-warning mt-3 d-none" id="servicesEmpty" role="status">
+                                Configura la variable <code>EXTERNAL_SERVICE_LINKS</code> para añadir accesos personalizados (usa el formato <em>Nombre|https://ruta</em>).</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12 col-xl-7">
+                    <div class="card h-100">
+                        <div class="card-header d-flex align-items-center justify-content-between">
+                            <h2 class="h5 mb-0">Vista previa del servicio</h2>
+                            <button class="btn btn-sm btn-ghost" id="serviceOpenExternal" type="button" disabled>
+                                <i class="bi bi-box-arrow-up-right"></i>
+                                Abrir en nueva pestaña
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <iframe id="servicePreview" title="Vista previa de servicio externo" class="service-iframe" src="about:blank" loading="lazy"></iframe>
+                            <div class="p-4 text-center text-muted" id="servicePlaceholder">
+                                Selecciona un servicio para mostrarlo incrustado.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
     </main>
 
     <footer class="footer py-4 text-center">
@@ -233,6 +377,102 @@
     </footer>
 
     <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer"></div>
+
+    <div class="modal fade" id="preferencesModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Preferencias del dashboard</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <form id="preferencesForm">
+                    <div class="modal-body">
+                        <p class="text-muted small">Personaliza qué secciones y widgets quieres ver, además de la frecuencia de actualización automática.</p>
+
+                        <div class="mb-4">
+                            <h6 class="text-uppercase small text-muted mb-2">Secciones</h6>
+                            <div class="row g-3">
+                                <div class="col-12 col-md-6">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="prefSectionDashboard" data-pref-section="dashboard">
+                                        <label class="form-check-label" for="prefSectionDashboard">Panel principal</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="prefSectionAnalytics" data-pref-section="analytics">
+                                        <label class="form-check-label" for="prefSectionAnalytics">Analítica avanzada</label>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="prefSectionAssistant" data-pref-section="assistant">
+                                        <label class="form-check-label" for="prefSectionAssistant">Asistente IA</label>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="prefSectionServices" data-pref-section="services">
+                                        <label class="form-check-label" for="prefSectionServices">Servicios externos</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-4">
+                            <h6 class="text-uppercase small text-muted mb-2">Widgets del dashboard</h6>
+                            <div class="row g-3">
+                                <div class="col-12 col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetMetricsPrimary" data-pref-widget="metricsPrimary">
+                                        <label class="form-check-label" for="prefWidgetMetricsPrimary">Métricas clave</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetMetricsSecondary" data-pref-widget="metricsSecondary">
+                                        <label class="form-check-label" for="prefWidgetMetricsSecondary">Métricas adicionales</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetPnl" data-pref-widget="pnlCard">
+                                        <label class="form-check-label" for="prefWidgetPnl">Gráfico de PnL</label>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetSymbol" data-pref-widget="symbolCard">
+                                        <label class="form-check-label" for="prefWidgetSymbol">Desglose por símbolo</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetTrades" data-pref-widget="tradesCard">
+                                        <label class="form-check-label" for="prefWidgetTrades">Operaciones abiertas</label>
+                                    </div>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="prefWidgetHistory" data-pref-widget="historyCard">
+                                        <label class="form-check-label" for="prefWidgetHistory">Historial reciente</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <h6 class="text-uppercase small text-muted mb-2">Actualización automática</h6>
+                            <div class="row g-3 align-items-center">
+                                <div class="col-12 col-md-6">
+                                    <label for="prefRefreshInterval" class="form-label">Intervalo de refresco (segundos)</label>
+                                    <input type="number" class="form-control" id="prefRefreshInterval" min="5" max="300" step="5" required>
+                                    <div class="form-text">Recomendado entre 5 y 120 segundos.</div>
+                                </div>
+                                <div class="col-12 col-md-6">
+                                    <div class="alert alert-info mb-0" id="refreshIntervalPreview" role="status">
+                                        Los datos se actualizarán cada <strong>10</strong> segundos.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-ghost" data-bs-dismiss="modal">Cancelar</button>
+                        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <div class="modal fade" id="partialCloseModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
