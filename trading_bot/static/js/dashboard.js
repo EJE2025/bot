@@ -693,32 +693,55 @@ function resolveSameOriginFallback(targetUrl) {
 async function fetchJSON(url, options = {}) {
   const { silent = false, allowFallback = true, ...fetchOptions } = options;
 
-  const attempt = async (target) => {
-    const response = await fetch(target, { cache: 'no-cache', ...fetchOptions });
-    const text = await response.text();
-    if (!response.ok) {
-      const snippet = text ? text.slice(0, 180) : response.statusText;
-      throw new Error(
-        `Error ${response.status} al llamar a ${target}: ${snippet || 'sin cuerpo de respuesta'}`,
-      );
-    }
-    if (!text) {
-      return null;
-    }
+  const fallback = allowFallback ? resolveSameOriginFallback(url) : null;
+
+  const attempt = async (target, context) => {
     try {
-      return JSON.parse(text);
-    } catch (parseError) {
-      throw new Error(`Respuesta JSON inválida desde ${target}`);
+      const response = await fetch(target, { cache: 'no-cache', ...fetchOptions });
+      const text = await response.text();
+      if (!response.ok) {
+        const snippet = text ? text.slice(0, 180) : response.statusText;
+        const error = new Error(
+          `Error ${response.status} al llamar a ${target}: ${snippet || 'sin cuerpo de respuesta'}`,
+        );
+        error.fetchFailure = {
+          source: context.source,
+          type: 'http',
+          status: response.status,
+        };
+        throw error;
+      }
+      if (!text) {
+        return null;
+      }
+      try {
+        return JSON.parse(text);
+      } catch (parseError) {
+        const error = new Error(`Respuesta JSON inválida desde ${target}`);
+        error.fetchFailure = {
+          source: context.source,
+          type: 'invalid-json',
+        };
+        throw error;
+      }
+    } catch (error) {
+      if (!error.fetchFailure) {
+        error.fetchFailure = {
+          source: context.source,
+          type: error instanceof TypeError ? 'network' : 'unknown',
+        };
+      }
+      throw error;
     }
   };
 
-  const fallback = allowFallback ? resolveSameOriginFallback(url) : null;
-
   try {
-    return await attempt(url);
+    return await attempt(url, { source: fallback ? 'remote' : 'local' });
   } catch (error) {
-    const isNetworkError = error instanceof TypeError;
-    if (!fallback || !isNetworkError) {
+    const failure = error.fetchFailure || { source: fallback ? 'remote' : 'local', type: 'unknown' };
+    const canFallback = Boolean(fallback && failure.source === 'remote');
+
+    if (!canFallback) {
       console.error(error);
       if (!silent) {
         showToast(error.message || 'Error de red', 'danger');
@@ -732,7 +755,7 @@ async function fetchJSON(url, options = {}) {
     );
 
     try {
-      const result = await attempt(fallback.url);
+      const result = await attempt(fallback.url, { source: 'local' });
       if (!appConfig.gatewayFallbackActive) {
         appConfig.gatewayFallbackActive = true;
         appConfig.apiBase = '';
