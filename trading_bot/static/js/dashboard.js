@@ -2128,22 +2128,46 @@ function loadServicePreview(service) {
 }
 
 async function refreshDashboard(manual = false) {
+  let hadFailure = false;
   try {
     if (manual) {
       setStatus('Actualizando…', 'info');
     }
     clearAlert();
 
-    const trades = (await fetchJSON(resolveApiUrl('/api/trades'), { silent: !manual })) ?? [];
-    const summarySilent = manual ? false : state.summary !== null;
-    const summary = await fetchJSON(resolveApiUrl('/api/summary'), { silent: summarySilent });
-    const history =
-      (await fetchJSON(resolveApiUrl('/api/history?limit=50'), { silent: true })) ?? [];
+    const tradesResponse = await fetchJSON(resolveApiUrl('/api/trades'), { silent: !manual });
+    if (Array.isArray(tradesResponse)) {
+      state.trades = tradesResponse;
+    } else if (tradesResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener la lista de operaciones desde /api/trades');
+    }
 
-    state.trades = Array.isArray(trades) ? trades : [];
-    state.summary = summary;
-    state.history = Array.isArray(history) ? history : [];
-    state.connectionHealthy = Boolean(summary);
+    const summarySilent = manual ? false : state.summary !== null;
+    const summaryResponse = await fetchJSON(resolveApiUrl('/api/summary'), {
+      silent: summarySilent,
+    });
+    let summary = state.summary;
+    const receivedSummary = summaryResponse && typeof summaryResponse === 'object';
+    if (receivedSummary) {
+      summary = summaryResponse;
+      state.summary = summaryResponse;
+    } else if (summaryResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener el resumen desde /api/summary');
+    }
+
+    const historyResponse = await fetchJSON(resolveApiUrl('/api/history?limit=50'), {
+      silent: true,
+    });
+    if (Array.isArray(historyResponse)) {
+      state.history = historyResponse;
+    } else if (historyResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener el historial desde /api/history');
+    }
+
+    state.connectionHealthy = receivedSummary && !hadFailure;
 
     const tradingActive =
       summary && Object.prototype.hasOwnProperty.call(summary, 'trading_active')
@@ -2160,12 +2184,12 @@ async function refreshDashboard(manual = false) {
 
     if (!state.connectionHealthy) {
       showAlert(
-        'No se pudieron obtener las métricas principales. Mostramos los últimos datos disponibles.',
-        'warning',
+        'No se pudo contactar con la API del bot. Verifica que el gateway esté en marcha y que las URLs configuradas sean correctas.',
+        'danger',
       );
-      setStatus('Datos incompletos', 'warning');
+      setStatus('Desconectado', 'danger');
     }
-    state.isInitialLoad = false;
+
     if (manual && isSectionEnabled('analytics')) {
       refreshAnalytics(true);
     }
@@ -2176,6 +2200,7 @@ async function refreshDashboard(manual = false) {
     updateTradingControls(state.tradingActive);
     setStatus('Desconectado', 'danger');
   } finally {
+    state.isInitialLoad = false;
     scheduleNextRefresh();
   }
 }
