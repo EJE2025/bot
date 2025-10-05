@@ -9,6 +9,7 @@ const THEME_STORAGE_KEY = 'dashboard:theme';
 const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
 const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
 const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
+const SECTION_IDS = ORDERED_SECTIONS;
 
 const themePalettes = {
   light: {
