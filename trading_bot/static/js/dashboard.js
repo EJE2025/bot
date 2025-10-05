@@ -500,15 +500,25 @@ function updateRefreshIntervalPreview(intervalMs) {
   preview.innerHTML = `Los datos se actualizarán cada <strong>${seconds}</strong> segundos.`;
 }
 
-function scheduleAutoRefresh() {
+function stopAutoRefresh() {
   if (refreshTimer) {
-    clearInterval(refreshTimer);
+    window.clearTimeout(refreshTimer);
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
   }
+}
+
+function scheduleAutoRefresh() {
+  stopAutoRefresh();
   const interval = sanitizeRefreshInterval(state.refreshInterval || DEFAULT_REFRESH_INTERVAL);
   state.refreshInterval = interval;
   updateRefreshIntervalPreview(interval);
   refreshTimer = window.setInterval(() => {
     if (!document.hidden) {
+      if (!state.connectionHealthy) {
+        stopAutoRefresh();
+        return;
+      }
       refreshDashboard();
       if (isSectionEnabled('analytics')) {
         refreshAnalytics();
@@ -870,6 +880,9 @@ function setRefreshInterval(value, { persist = true, reschedule = true } = {}) {
 }
 
 function scheduleNextRefresh() {
+  if (!state.connectionHealthy) {
+    return;
+  }
   if (refreshTimer) {
     clearTimeout(refreshTimer);
   }
@@ -2188,6 +2201,7 @@ async function refreshDashboard(manual = false) {
         'danger',
       );
       setStatus('Desconectado', 'danger');
+      stopAutoRefresh();
     }
 
     if (manual && isSectionEnabled('analytics')) {
