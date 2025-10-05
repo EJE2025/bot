@@ -9,7 +9,7 @@ const THEME_STORAGE_KEY = 'dashboard:theme';
 const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
 const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
 const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
-const SECTION_IDS = ORDERED_SECTIONS;
+const SECTION_IDS = [...ORDERED_SECTIONS];
 
 const themePalettes = {
   light: {
@@ -430,24 +430,32 @@ function getFirstEnabledSection() {
 
 function setActiveSection(sectionId, options = {}) {
   const { force = false } = options;
-  if (!force && !isSectionEnabled(sectionId)) {
+  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
+  if (!force && !isSectionEnabled(normalized)) {
     return;
   }
-  state.activeSection = sectionId;
+  const previous = state.activeSection;
+  state.activeSection = normalized;
   document.querySelectorAll('.app-section').forEach((section) => {
     const id = section.dataset.section;
     const enabled = !section.classList.contains('section-hidden');
-    const isActive = enabled && id === sectionId;
+    const isActive = enabled && id === normalized;
     section.classList.toggle('active', isActive);
+    section.classList.toggle('is-active', isActive);
     section.classList.toggle('d-none', !isActive);
+    if (isActive) {
+      section.removeAttribute('hidden');
+    } else {
+      section.setAttribute('hidden', 'hidden');
+    }
   });
-  document.querySelectorAll('[data-section-target]').forEach((link) => {
-    const target = link.dataset.sectionTarget;
-    const enabled = isSectionEnabled(target);
-    const isActive = enabled && target === sectionId;
-    link.classList.toggle('active', isActive);
-    link.setAttribute('aria-current', isActive ? 'page' : 'false');
-  });
+  updateNavLinks(normalized);
+  if (normalized === 'analytics' && previous !== 'analytics') {
+    ensureAnalyticsData();
+  }
+  if (normalized === 'assistant' && previous !== 'assistant') {
+    focusAiInput();
+  }
 }
 
 function updateWidgetVisibility() {
@@ -1081,7 +1089,7 @@ function updateNavLinks(activeSection) {
 }
 
 function focusAiInput() {
-  const input = document.getElementById('aiMessage');
+  const input = document.getElementById('aiMessageInput');
   if (input) {
     window.requestAnimationFrame(() => {
       input.focus();
@@ -1090,26 +1098,7 @@ function focusAiInput() {
 }
 
 function switchSection(sectionId) {
-  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
-  state.activeSection = normalized;
-  document.querySelectorAll('.app-section').forEach((section) => {
-    const isTarget = section.dataset.section === normalized;
-    section.classList.toggle('is-active', isTarget);
-    if (isTarget) {
-      section.classList.remove('d-none');
-      section.removeAttribute('hidden');
-    } else {
-      section.classList.add('d-none');
-      section.setAttribute('hidden', 'hidden');
-    }
-  });
-  updateNavLinks(normalized);
-  if (normalized === 'analytics') {
-    ensureAnalyticsData();
-  }
-  if (normalized === 'ai-assistant') {
-    focusAiInput();
-  }
+  setActiveSection(sectionId, { force: true });
 }
 
 function registerServiceWorker() {
