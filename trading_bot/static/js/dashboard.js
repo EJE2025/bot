@@ -197,6 +197,7 @@ const appConfig = {
   analyticsGraphql: '',
   aiEndpoint: '',
   serviceLinks: [],
+  gatewayFallbackActive: false,
 };
 
 const DEFAULT_PREFERENCES = {
@@ -500,15 +501,25 @@ function updateRefreshIntervalPreview(intervalMs) {
   preview.innerHTML = `Los datos se actualizarán cada <strong>${seconds}</strong> segundos.`;
 }
 
-function scheduleAutoRefresh() {
+function stopAutoRefresh() {
   if (refreshTimer) {
-    clearInterval(refreshTimer);
+    window.clearTimeout(refreshTimer);
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
   }
+}
+
+function scheduleAutoRefresh() {
+  stopAutoRefresh();
   const interval = sanitizeRefreshInterval(state.refreshInterval || DEFAULT_REFRESH_INTERVAL);
   state.refreshInterval = interval;
   updateRefreshIntervalPreview(interval);
   refreshTimer = window.setInterval(() => {
     if (!document.hidden) {
+      if (!state.connectionHealthy) {
+        stopAutoRefresh();
+        return;
+      }
       refreshDashboard();
       if (isSectionEnabled('analytics')) {
         refreshAnalytics();
@@ -640,15 +651,55 @@ function getTradeId(trade) {
   return trade.trade_id || trade.id || trade.uuid;
 }
 
-async function fetchJSON(url, options = {}) {
-  const { silent = false, ...fetchOptions } = options;
+function rewriteEndpointToSameOrigin(url, originToReplace) {
+  if (!url || !originToReplace || typeof url !== 'string') {
+    return url;
+  }
+  if (!/^https?:/i.test(url)) {
+    return url;
+  }
   try {
-    const response = await fetch(url, { cache: 'no-cache', ...fetchOptions });
+    const parsed = new URL(url);
+    if (parsed.origin !== originToReplace) {
+      return url;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch (error) {
+    return url;
+  }
+}
+
+function resolveSameOriginFallback(targetUrl) {
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return null;
+  }
+  if (!/^https?:/i.test(targetUrl)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.origin === window.location.origin) {
+      return null;
+    }
+    return {
+      origin: parsed.origin,
+      url: `${parsed.pathname}${parsed.search}${parsed.hash}`,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+async function fetchJSON(url, options = {}) {
+  const { silent = false, allowFallback = true, ...fetchOptions } = options;
+
+  const attempt = async (target) => {
+    const response = await fetch(target, { cache: 'no-cache', ...fetchOptions });
     const text = await response.text();
     if (!response.ok) {
       const snippet = text ? text.slice(0, 180) : response.statusText;
       throw new Error(
-        `Error ${response.status} al llamar a ${url}: ${snippet || 'sin cuerpo de respuesta'}`,
+        `Error ${response.status} al llamar a ${target}: ${snippet || 'sin cuerpo de respuesta'}`,
       );
     }
     if (!text) {
@@ -657,14 +708,66 @@ async function fetchJSON(url, options = {}) {
     try {
       return JSON.parse(text);
     } catch (parseError) {
-      throw new Error(`Respuesta JSON inválida desde ${url}`);
+      throw new Error(`Respuesta JSON inválida desde ${target}`);
     }
+  };
+
+  const fallback = allowFallback ? resolveSameOriginFallback(url) : null;
+
+  try {
+    return await attempt(url);
   } catch (error) {
-    console.error(error);
-    if (!silent) {
-      showToast(error.message || 'Error de red', 'danger');
+    const isNetworkError = error instanceof TypeError;
+    if (!fallback || !isNetworkError) {
+      console.error(error);
+      if (!silent) {
+        showToast(error.message || 'Error de red', 'danger');
+      }
+      return null;
     }
-    return null;
+
+    console.warn(
+      'No se pudo contactar con el gateway configurado. Intentando usar el mismo origen…',
+      error,
+    );
+
+    try {
+      const result = await attempt(fallback.url);
+      if (!appConfig.gatewayFallbackActive) {
+        appConfig.gatewayFallbackActive = true;
+        appConfig.apiBase = '';
+        appConfig.analyticsGraphql = rewriteEndpointToSameOrigin(
+          appConfig.analyticsGraphql,
+          fallback.origin,
+        );
+        appConfig.aiEndpoint = rewriteEndpointToSameOrigin(appConfig.aiEndpoint, fallback.origin);
+        if (Array.isArray(appConfig.serviceLinks)) {
+          appConfig.serviceLinks = appConfig.serviceLinks.map((service) => {
+            if (!service || typeof service !== 'object') {
+              return service;
+            }
+            return {
+              ...service,
+              url: rewriteEndpointToSameOrigin(service.url, fallback.origin),
+            };
+          });
+        }
+        if (!silent) {
+          showToast(
+            'Se utilizará el backend local porque el gateway configurado no responde.',
+            'warning',
+          );
+        }
+      }
+      return result;
+    } catch (fallbackError) {
+      console.error(error);
+      console.error(fallbackError);
+      if (!silent) {
+        showToast(fallbackError.message || 'Error de red', 'danger');
+      }
+      return null;
+    }
   }
 }
 
@@ -870,6 +973,9 @@ function setRefreshInterval(value, { persist = true, reschedule = true } = {}) {
 }
 
 function scheduleNextRefresh() {
+  if (!state.connectionHealthy) {
+    return;
+  }
   if (refreshTimer) {
     clearTimeout(refreshTimer);
   }
@@ -2188,6 +2294,7 @@ async function refreshDashboard(manual = false) {
         'danger',
       );
       setStatus('Desconectado', 'danger');
+      stopAutoRefresh();
     }
 
     if (manual && isSectionEnabled('analytics')) {
