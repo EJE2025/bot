@@ -9,6 +9,7 @@ const THEME_STORAGE_KEY = 'dashboard:theme';
 const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
 const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
 const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
+const SECTION_IDS = [...ORDERED_SECTIONS];
 
 const themePalettes = {
   light: {
@@ -429,24 +430,32 @@ function getFirstEnabledSection() {
 
 function setActiveSection(sectionId, options = {}) {
   const { force = false } = options;
-  if (!force && !isSectionEnabled(sectionId)) {
+  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
+  if (!force && !isSectionEnabled(normalized)) {
     return;
   }
-  state.activeSection = sectionId;
+  const previous = state.activeSection;
+  state.activeSection = normalized;
   document.querySelectorAll('.app-section').forEach((section) => {
     const id = section.dataset.section;
     const enabled = !section.classList.contains('section-hidden');
-    const isActive = enabled && id === sectionId;
+    const isActive = enabled && id === normalized;
     section.classList.toggle('active', isActive);
+    section.classList.toggle('is-active', isActive);
     section.classList.toggle('d-none', !isActive);
+    if (isActive) {
+      section.removeAttribute('hidden');
+    } else {
+      section.setAttribute('hidden', 'hidden');
+    }
   });
-  document.querySelectorAll('[data-section-target]').forEach((link) => {
-    const target = link.dataset.sectionTarget;
-    const enabled = isSectionEnabled(target);
-    const isActive = enabled && target === sectionId;
-    link.classList.toggle('active', isActive);
-    link.setAttribute('aria-current', isActive ? 'page' : 'false');
-  });
+  updateNavLinks(normalized);
+  if (normalized === 'analytics' && previous !== 'analytics') {
+    ensureAnalyticsData();
+  }
+  if (normalized === 'assistant' && previous !== 'assistant') {
+    focusAiInput();
+  }
 }
 
 function updateWidgetVisibility() {
@@ -692,6 +701,7 @@ function updateTradingControls(isActive) {
       const variant = isActive ? 'success' : 'warning';
       setStatus(label, variant);
     }
+  }
   if (toggleBtn) {
     toggleBtn.disabled = !state.connectionHealthy;
     toggleBtn.className = `btn btn-sm ${isActive ? 'btn-secondary' : 'btn-tertiary'}`;
@@ -699,7 +709,6 @@ function updateTradingControls(isActive) {
       ? '<i class="bi bi-pause-circle"></i> Pausar bot'
       : '<i class="bi bi-play-circle"></i> Reanudar bot';
   }
-}
 }
 
 function showAlert(message, variant = 'danger') {
@@ -1080,7 +1089,7 @@ function updateNavLinks(activeSection) {
 }
 
 function focusAiInput() {
-  const input = document.getElementById('aiMessage');
+  const input = document.getElementById('aiMessageInput');
   if (input) {
     window.requestAnimationFrame(() => {
       input.focus();
@@ -1089,26 +1098,7 @@ function focusAiInput() {
 }
 
 function switchSection(sectionId) {
-  const normalized = SECTION_IDS.includes(sectionId) ? sectionId : 'dashboard';
-  state.activeSection = normalized;
-  document.querySelectorAll('.app-section').forEach((section) => {
-    const isTarget = section.dataset.section === normalized;
-    section.classList.toggle('is-active', isTarget);
-    if (isTarget) {
-      section.classList.remove('d-none');
-      section.removeAttribute('hidden');
-    } else {
-      section.classList.add('d-none');
-      section.setAttribute('hidden', 'hidden');
-    }
-  });
-  updateNavLinks(normalized);
-  if (normalized === 'analytics') {
-    ensureAnalyticsData();
-  }
-  if (normalized === 'ai-assistant') {
-    focusAiInput();
-  }
+  setActiveSection(sectionId, { force: true });
 }
 
 function registerServiceWorker() {
@@ -2138,22 +2128,46 @@ function loadServicePreview(service) {
 }
 
 async function refreshDashboard(manual = false) {
+  let hadFailure = false;
   try {
     if (manual) {
       setStatus('Actualizando…', 'info');
     }
     clearAlert();
 
-    const trades = (await fetchJSON(resolveApiUrl('/api/trades'), { silent: !manual })) ?? [];
-    const summarySilent = manual ? false : state.summary !== null;
-    const summary = await fetchJSON(resolveApiUrl('/api/summary'), { silent: summarySilent });
-    const history =
-      (await fetchJSON(resolveApiUrl('/api/history?limit=50'), { silent: true })) ?? [];
+    const tradesResponse = await fetchJSON(resolveApiUrl('/api/trades'), { silent: !manual });
+    if (Array.isArray(tradesResponse)) {
+      state.trades = tradesResponse;
+    } else if (tradesResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener la lista de operaciones desde /api/trades');
+    }
 
-    state.trades = Array.isArray(trades) ? trades : [];
-    state.summary = summary;
-    state.history = Array.isArray(history) ? history : [];
-    state.connectionHealthy = Boolean(summary);
+    const summarySilent = manual ? false : state.summary !== null;
+    const summaryResponse = await fetchJSON(resolveApiUrl('/api/summary'), {
+      silent: summarySilent,
+    });
+    let summary = state.summary;
+    const receivedSummary = summaryResponse && typeof summaryResponse === 'object';
+    if (receivedSummary) {
+      summary = summaryResponse;
+      state.summary = summaryResponse;
+    } else if (summaryResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener el resumen desde /api/summary');
+    }
+
+    const historyResponse = await fetchJSON(resolveApiUrl('/api/history?limit=50'), {
+      silent: true,
+    });
+    if (Array.isArray(historyResponse)) {
+      state.history = historyResponse;
+    } else if (historyResponse === null) {
+      hadFailure = true;
+      console.warn('No se pudo obtener el historial desde /api/history');
+    }
+
+    state.connectionHealthy = receivedSummary && !hadFailure;
 
     const tradingActive =
       summary && Object.prototype.hasOwnProperty.call(summary, 'trading_active')
@@ -2170,12 +2184,12 @@ async function refreshDashboard(manual = false) {
 
     if (!state.connectionHealthy) {
       showAlert(
-        'No se pudieron obtener las métricas principales. Mostramos los últimos datos disponibles.',
-        'warning',
+        'No se pudo contactar con la API del bot. Verifica que el gateway esté en marcha y que las URLs configuradas sean correctas.',
+        'danger',
       );
-      setStatus('Datos incompletos', 'warning');
+      setStatus('Desconectado', 'danger');
     }
-    state.isInitialLoad = false;
+
     if (manual && isSectionEnabled('analytics')) {
       refreshAnalytics(true);
     }
@@ -2186,6 +2200,7 @@ async function refreshDashboard(manual = false) {
     updateTradingControls(state.tradingActive);
     setStatus('Desconectado', 'danger');
   } finally {
+    state.isInitialLoad = false;
     scheduleNextRefresh();
   }
 }
