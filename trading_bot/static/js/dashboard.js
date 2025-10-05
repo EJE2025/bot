@@ -701,6 +701,7 @@ function updateTradingControls(isActive) {
       const variant = isActive ? 'success' : 'warning';
       setStatus(label, variant);
     }
+  }
   if (toggleBtn) {
     toggleBtn.disabled = !state.connectionHealthy;
     toggleBtn.className = `btn btn-sm ${isActive ? 'btn-secondary' : 'btn-tertiary'}`;
@@ -708,7 +709,6 @@ function updateTradingControls(isActive) {
       ? '<i class="bi bi-pause-circle"></i> Pausar bot'
       : '<i class="bi bi-play-circle"></i> Reanudar bot';
   }
-}
 }
 
 function showAlert(message, variant = 'danger') {
