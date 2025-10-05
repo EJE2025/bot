@@ -107,7 +107,10 @@ SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Dashboard & web UI ---------------------------------------------------------
-_default_gateway = os.getenv("GATEWAY_BASE_URL", "http://localhost:8080")
+# Default to same-origin dashboard API unless explicitly configured to use the
+# gateway service. This keeps the standalone Flask dashboard functional when the
+# FastAPI gateway is not running locally.
+_default_gateway = os.getenv("GATEWAY_BASE_URL", "").strip()
 DASHBOARD_GATEWAY_BASE = _str_env("DASHBOARD_GATEWAY_BASE", _default_gateway).rstrip("/")
 ANALYTICS_GRAPHQL_URL = _str_env(
     "ANALYTICS_GRAPHQL_URL", f"{DASHBOARD_GATEWAY_BASE}/graphql"
