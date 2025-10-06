@@ -205,12 +205,10 @@ if Flask:
         gateway_base = getattr(config, "DASHBOARD_GATEWAY_BASE", "").strip()
         if not gateway_base:
             gateway_base = request.url_root.rstrip("/")
-        analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip() or (
-            f"{gateway_base}/graphql"
-        )
-        ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip() or (
-            f"{gateway_base}/ai/chat"
-        )
+
+        analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip()
+
+        ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip()
         return render_template(
             "index.html",
             current_year=datetime.utcnow().year,

@@ -107,12 +107,19 @@ SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 # Dashboard & web UI ---------------------------------------------------------
-_default_gateway = os.getenv("GATEWAY_BASE_URL", "http://localhost:8080")
-DASHBOARD_GATEWAY_BASE = _str_env("DASHBOARD_GATEWAY_BASE", _default_gateway).rstrip("/")
-ANALYTICS_GRAPHQL_URL = _str_env(
-    "ANALYTICS_GRAPHQL_URL", f"{DASHBOARD_GATEWAY_BASE}/graphql"
+# Default to the same origin as the Flask app unless explicitly configured to
+# use the external FastAPI gateway. This keeps the standalone dashboard
+# functional out of the box.
+_default_gateway = os.getenv("GATEWAY_BASE_URL", "").strip().rstrip("/")
+DASHBOARD_GATEWAY_BASE = (
+    _str_env("DASHBOARD_GATEWAY_BASE", _default_gateway).strip().rstrip("/")
 )
-AI_ASSISTANT_URL = _str_env("AI_ASSISTANT_URL", f"{DASHBOARD_GATEWAY_BASE}/ai/chat")
+_default_graphql = f"{DASHBOARD_GATEWAY_BASE}/graphql" if DASHBOARD_GATEWAY_BASE else ""
+_default_ai_endpoint = (
+    f"{DASHBOARD_GATEWAY_BASE}/ai/chat" if DASHBOARD_GATEWAY_BASE else ""
+)
+ANALYTICS_GRAPHQL_URL = _str_env("ANALYTICS_GRAPHQL_URL", _default_graphql).strip()
+AI_ASSISTANT_URL = _str_env("AI_ASSISTANT_URL", _default_ai_endpoint).strip()
 EXTERNAL_SERVICE_LINKS = _str_env("EXTERNAL_SERVICE_LINKS", "")
 
 # Trading mode and permissions -------------------------------------------------

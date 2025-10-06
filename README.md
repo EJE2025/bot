@@ -97,6 +97,12 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
 - `WEBAPP_PORT` dashboard port (default `8000`)
+- `DASHBOARD_GATEWAY_BASE` URL base del gateway FastAPI (déjalo vacío para usar el
+  mismo origen que el dashboard; default cadena vacía)
+- `ANALYTICS_GRAPHQL_URL` endpoint opcional de analítica GraphQL (default
+  `${DASHBOARD_GATEWAY_BASE}/graphql` cuando el gateway está configurado)
+- `AI_ASSISTANT_URL` endpoint opcional del asistente IA (default
+  `${DASHBOARD_GATEWAY_BASE}/ai/chat` cuando el gateway está configurado)
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
