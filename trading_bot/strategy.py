@@ -379,6 +379,13 @@ def decidir_entrada(
         if decision == "BUY"
         else entry_price + atr_mult * atr_val
     )
+    if decision == "BUY":
+        max_loss_price = entry_price * (1 - config.MAX_STOP_LOSS_PCT)
+        stop_loss = max(stop_loss, max_loss_price)
+        stop_loss = max(stop_loss, 0.0)
+    else:
+        max_loss_price = entry_price * (1 + config.MAX_STOP_LOSS_PCT)
+        stop_loss = min(stop_loss, max_loss_price)
     trend_strength = abs(macd_val) + abs(rsi_val - 50)
     tp_factor = 3.0 if trend_strength > 20 else 2.0
     take_profit = (

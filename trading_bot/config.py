@@ -308,6 +308,8 @@ LATENCY_SLO_MS = _int_env("LATENCY_SLO_MS", 1000, clamp=(10, 10000))
 
 # ATR multiple for stop loss calculation
 STOP_ATR_MULT = float(os.getenv("STOP_ATR_MULT", "1.5"))
+# Maximum relative loss (as fraction of entry price) allowed for stop loss levels
+MAX_STOP_LOSS_PCT = _float_env("MAX_STOP_LOSS_PCT", 1.0, clamp=(0.0, 10.0))
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
 RSI_OVERSOLD = _float_env("RSI_OVERSOLD", 45.0, clamp=(1.0, 99.0))
 RSI_OVERBOUGHT = _float_env("RSI_OVERBOUGHT", 55.0, clamp=(1.0, 99.0))

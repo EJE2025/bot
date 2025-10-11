@@ -4,8 +4,11 @@ import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
+import numpy as np
+
 import trading_bot.bot as bot
 from trading_bot import config, trade_manager, execution, data
+import trading_bot.strategy as strategy
 from trading_bot.exchanges import MockExchange
 
 
@@ -57,3 +60,54 @@ def test_trade_cooldown(monkeypatch):
     # before cooldown expires should not open again
     bot.run_one_iteration_open()
     assert trade_manager.count_open_trades() == 0
+
+
+def test_stop_loss_respects_max_pct(monkeypatch):
+    base_prices = [100 + i * 0.1 for i in range(20)]
+    entry_price = base_prices[-1]
+    info = {
+        "close": base_prices,
+        "high": [p + 1 for p in base_prices],
+        "low": [p - 1 for p in base_prices],
+        "vol": [1000 for _ in base_prices],
+    }
+
+    monkeypatch.setattr(config, "STOP_ATR_MULT", 2.0)
+    monkeypatch.setattr(config, "MAX_STOP_LOSS_PCT", 0.05)
+
+    monkeypatch.setattr(strategy, "calculate_support_resistance", lambda closes: (None, None))
+    monkeypatch.setattr(strategy, "compute_rsi", lambda closes, period: np.array([40.0]))
+    monkeypatch.setattr(
+        strategy, "compute_macd", lambda closes: (np.array([1.0]), np.array([0.0]), np.array([0.0]))
+    )
+    monkeypatch.setattr(
+        strategy,
+        "calculate_atr",
+        lambda highs, lows, closes: entry_price,
+    )
+    monkeypatch.setattr(strategy, "sentiment_score", lambda symbol: 0.0)
+    monkeypatch.setattr(
+        strategy.data,
+        "get_order_book",
+        lambda symbol: {"bids": [(entry_price - 1, 1)], "asks": [(entry_price + 1, 1)]},
+    )
+    monkeypatch.setattr(strategy.data, "order_book_imbalance", lambda book, price: 1.0)
+    monkeypatch.setattr(
+        strategy.data,
+        "top_liquidity_levels",
+        lambda book: ([(entry_price - 1, 1)], [(entry_price + 1, 1)]),
+    )
+    monkeypatch.setattr(strategy, "position_sizer", lambda symbol, features, ctx: entry_price)
+    monkeypatch.setattr(strategy.execution, "fetch_balance", lambda: 1000.0)
+    monkeypatch.setattr(
+        strategy,
+        "passes_probability_threshold",
+        lambda prob, risk_reward, volatility=None: True,
+    )
+    monkeypatch.setattr(strategy, "probability_threshold", lambda risk_reward, volatility=None: 0.0)
+    monkeypatch.setattr(strategy, "log_signal_details", lambda *args, **kwargs: None)
+
+    signal = strategy.decidir_entrada("BTC/USDT", info=info)
+    assert signal is not None
+    expected_stop = entry_price * (1 - config.MAX_STOP_LOSS_PCT)
+    assert signal["stop_loss"] == pytest.approx(expected_stop)
