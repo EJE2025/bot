@@ -169,6 +169,29 @@ function resolveSocketUrl(path = '/ws') {
   return `${protocol}//${window.location.host}${normalized}`;
 }
 
+function buildSocketNamespaceUrl(baseUrl, namespace) {
+  if (!namespace.startsWith('/')) {
+    namespace = `/${namespace}`;
+  }
+  if (!baseUrl) {
+    return namespace;
+  }
+  return `${baseUrl.replace(/\/+$/, '')}${namespace}`;
+}
+
+function buildSocketOptions(baseUrl) {
+  try {
+    const parsed = new URL(baseUrl, window.location.origin);
+    const pathPrefix = parsed.pathname.replace(/\/$/, '');
+    const enginePath = `${pathPrefix ? `${pathPrefix}/` : ''}socket.io`;
+    return {
+      path: enginePath.startsWith('/') ? enginePath : `/${enginePath}`,
+    };
+  } catch (error) {
+    return { path: '/socket.io' };
+  }
+}
+
 function getAnalyticsEndpoint() {
   if (appConfig.analyticsGraphql) {
     return appConfig.analyticsGraphql;
@@ -2500,8 +2523,11 @@ function connectSocket() {
   if (!window.io) {
     return;
   }
-  const socketUrl = resolveSocketUrl('/ws');
-  socket = window.io(socketUrl);
+  const namespace = '/ws';
+  const baseUrl = resolveSocketUrl('');
+  const namespaceUrl = buildSocketNamespaceUrl(baseUrl, namespace);
+  const options = buildSocketOptions(baseUrl);
+  socket = window.io(namespaceUrl, options);
   socket.on('connect', () => {
     setStatus('En vivo', 'success');
   });
