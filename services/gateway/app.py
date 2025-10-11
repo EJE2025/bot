@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Iterable, Mapping, Tuple
+
+from starlette.datastructures import Headers
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -28,9 +30,27 @@ async def _close_bot_client() -> None:
         await bot_client.aclose()
 
 
+_HOP_BY_HOP_HEADERS = {
+    "host",
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+    "connection",
+}
+
+
+def _filter_hop_by_hop_header_items(
+    header_items: Iterable[Tuple[str, str]]
+) -> list[Tuple[str, str]]:
+    return [
+        (k, v)
+        for k, v in header_items
+        if k.lower() not in _HOP_BY_HOP_HEADERS
+    ]
+
+
 def _filtered_headers(headers: Mapping[str, str]) -> Dict[str, str]:
-    excluded = {"host", "content-length", "content-encoding", "transfer-encoding", "connection"}
-    return {k: v for k, v in headers.items() if k.lower() not in excluded}
+    return dict(_filter_hop_by_hop_header_items(headers.items()))
 
 
 async def _proxy_bot_request(request: Request, method: str, path: str) -> Response:
@@ -49,7 +69,12 @@ async def _proxy_bot_request(request: Request, method: str, path: str) -> Respon
         headers=headers,
     )
 
-    response_headers = _filtered_headers(bot_response.headers)
+    response_headers = Headers(
+        raw=[
+            (k.encode("latin-1"), v.encode("latin-1"))
+            for k, v in _filter_hop_by_hop_header_items(bot_response.headers.multi_items())
+        ]
+    )
     return Response(
         content=bot_response.content,
         status_code=bot_response.status_code,
