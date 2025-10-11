@@ -149,6 +149,26 @@ function resolveApiUrl(path) {
   return `${base}${normalized}`;
 }
 
+function resolveSocketUrl(path = '/ws') {
+  const httpUrl = resolveApiUrl(path);
+  if (httpUrl) {
+    try {
+      const url = new URL(httpUrl, window.location.origin);
+      if (url.protocol === 'http:') {
+        url.protocol = 'ws:';
+      } else if (url.protocol === 'https:') {
+        url.protocol = 'wss:';
+      }
+      return url.toString();
+    } catch (error) {
+      return httpUrl.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+    }
+  }
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${normalized}`;
+}
+
 function getAnalyticsEndpoint() {
   if (appConfig.analyticsGraphql) {
     return appConfig.analyticsGraphql;
@@ -2480,7 +2500,8 @@ function connectSocket() {
   if (!window.io) {
     return;
   }
-  socket = window.io('/ws');
+  const socketUrl = resolveSocketUrl('/ws');
+  socket = window.io(socketUrl);
   socket.on('connect', () => {
     setStatus('En vivo', 'success');
   });
