@@ -127,3 +127,24 @@ async def test_gateway_propagates_errors(method: str, path: str, bot_path: str) 
 
     assert response.status_code == 503
     assert response.text == "bot down"
+
+
+@pytest.mark.asyncio
+async def test_gateway_preserves_multiple_set_cookie_headers() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"",
+            headers=[
+                ("set-cookie", "session=abc; Path=/"),
+                ("set-cookie", "csrftoken=def; Path=/"),
+            ],
+        )
+
+    response = await _call_gateway("GET", "/api/history", handler)
+
+    assert response.status_code == 200
+    assert response.headers.get_list("set-cookie") == [
+        "session=abc; Path=/",
+        "csrftoken=def; Path=/",
+    ]
