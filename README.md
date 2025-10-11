@@ -103,6 +103,8 @@ variables definidas en `trading_bot/config.py`:
   `${DASHBOARD_GATEWAY_BASE}/graphql` cuando el gateway está configurado)
 - `AI_ASSISTANT_URL` endpoint opcional del asistente IA (default
   `${DASHBOARD_GATEWAY_BASE}/ai/chat` cuando el gateway está configurado)
+- `BOT_SERVICE_URL` URL base que utilizará el gateway para reenviar llamadas al
+  dashboard Flask del bot (default `http://trading_bot:8000`)
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
