@@ -896,13 +896,31 @@ def run():
                 status="active",
             )
         else:
+            side_raw = str(pos.get("side", "")).lower()
+            is_long = side_raw == "long"
+            try:
+                entry_price = float(pos.get("entryPrice") or 0.0)
+            except (TypeError, ValueError):
+                entry_price = 0.0
+            try:
+                stop_loss_exchange = float(pos.get("stopLossPrice") or 0.0)
+            except (TypeError, ValueError):
+                stop_loss_exchange = 0.0
+            try:
+                take_profit_exchange = float(pos.get("takeProfitPrice") or 0.0)
+            except (TypeError, ValueError):
+                take_profit_exchange = 0.0
+
+            stop_loss_fallback = entry_price * (0.98 if is_long else 1.02)
+            take_profit_fallback = entry_price * (1.02 if is_long else 0.98)
+
             trade = {
                 "symbol": symbol,
-                "side": "BUY" if pos.get("side") == "long" else "SELL",
+                "side": "BUY" if is_long else "SELL",
                 "quantity": qty,
-                "entry_price": float(pos.get("entryPrice", 0)),
-                "stop_loss": float(pos.get("stopLossPrice", 0)) or float(pos.get("entryPrice", 0)) * 0.98,
-                "take_profit": float(pos.get("takeProfitPrice", 0)) or float(pos.get("entryPrice", 0)) * 1.02,
+                "entry_price": entry_price,
+                "stop_loss": stop_loss_exchange or stop_loss_fallback,
+                "take_profit": take_profit_exchange or take_profit_fallback,
                 "leverage": int(pos.get("leverage", 1)),
                 "status": "active",
             }
