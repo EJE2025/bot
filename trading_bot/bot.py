@@ -1,7 +1,28 @@
+import os
+
+USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
+_EVENTLET_IMPORT_ERROR: str | None = None
+
+if USE_EVENTLET:
+    try:
+        import eventlet  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        eventlet = None  # type: ignore[assignment]
+        USE_EVENTLET = False
+        _EVENTLET_IMPORT_ERROR = str(exc)
+    else:  # pragma: no cover - only executed when eventlet is installed
+        eventlet.monkey_patch(
+            os=True,
+            select=True,
+            socket=True,
+            thread=True,
+            time=True,
+            subprocess=True,
+        )
+
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 import uuid
@@ -68,6 +89,12 @@ logging.basicConfig(
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+if _EVENTLET_IMPORT_ERROR:
+    logger.warning(
+        "USE_EVENTLET=1 pero eventlet no está instalado: %s. Se usará el modo threading.",
+        _EVENTLET_IMPORT_ERROR,
+    )
 
 
 def _parse_snapshot_interval(raw: str | None) -> int:
