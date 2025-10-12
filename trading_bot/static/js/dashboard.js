@@ -168,6 +168,30 @@ function resolveApiUrl(path) {
   return `${base}${normalized}`;
 }
 
+function resolveSocketUrl() {
+  const namespace = '/ws';
+  const base = (appConfig.apiBase || '').trim();
+  if (!base) {
+    return namespace;
+  }
+  if (/^https?:/i.test(base)) {
+    return `${base.replace(/\/$/, '')}${namespace}`;
+  }
+  if (base.startsWith('//')) {
+    return `${window.location.protocol}${base.replace(/\/$/, '')}${namespace}`;
+  }
+  if (base.startsWith('/')) {
+    return `${base.replace(/\/$/, '')}${namespace}`;
+  }
+  try {
+    const resolved = new URL(base, window.location.origin);
+    return `${resolved.origin}${resolved.pathname.replace(/\/$/, '')}${namespace}`;
+  } catch (error) {
+    console.warn('No se pudo resolver la URL del socket a partir de', base, error);
+    return namespace;
+  }
+}
+
 function getAnalyticsEndpoint() {
   if (appConfig.analyticsGraphql) {
     return appConfig.analyticsGraphql;
@@ -788,6 +812,7 @@ async function fetchJSON(url, options = {}) {
             };
           });
         }
+        restartSocketConnection('gateway-fallback');
         if (!silent) {
           showToast(
             'Se utilizará el backend local porque el gateway configurado no responde.',
@@ -2637,6 +2662,37 @@ function removeTradeFromState(tradeId) {
   }
 }
 
+function restartSocketConnection(reason = 'manual') {
+  if (!socket) {
+    connectSocket();
+    return;
+  }
+  try {
+    if (typeof socket.removeAllListeners === 'function') {
+      socket.removeAllListeners();
+    } else if (typeof socket.off === 'function') {
+      ['connect', 'disconnect', 'connect_error', 'trades_refresh', 'trade_updated', 'trade_closed', 'bot_status'].forEach(
+        (eventName) => {
+          try {
+            socket.off(eventName);
+          } catch (listenerError) {
+            console.warn('No se pudo quitar el listener del socket', eventName, listenerError);
+          }
+        },
+      );
+    }
+    if (typeof socket.disconnect === 'function') {
+      socket.disconnect();
+    }
+  } catch (error) {
+    console.warn('No se pudo reiniciar la conexión de socket', reason, error);
+  }
+  socket = null;
+  window.setTimeout(() => {
+    connectSocket();
+  }, 200);
+}
+
 function connectSocket() {
   if (!window.io) {
     window.setTimeout(() => {
@@ -2646,7 +2702,9 @@ function connectSocket() {
     }, 500);
     return;
   }
-  socket = window.io('/ws');
+  const socketUrl = resolveSocketUrl();
+  const options = { transports: ['websocket', 'polling'] };
+  socket = window.io(socketUrl, options);
   socket.on('connect', () => {
     state.connectionHealthy = true;
     setStatus('En vivo', 'success');
