@@ -10,6 +10,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:  # Flask-SocketIO puede aprovechar eventlet si está disponible
+    import eventlet
+except ImportError:  # eventlet es opcional en entornos sin panel en vivo
+    eventlet = None  # type: ignore[assignment]
+
+_EVENTLET_MONKEY_PATCHED = False
+
+
+def _ensure_eventlet_monkey_patch() -> bool:
+    """Activa el monkey patch de eventlet solo cuando el dashboard lo necesita."""
+
+    global _EVENTLET_MONKEY_PATCHED
+    if eventlet is None:
+        return False
+    if not _EVENTLET_MONKEY_PATCHED:
+        eventlet.monkey_patch()
+        _EVENTLET_MONKEY_PATCHED = True
+    return True
+
 try:
     from flask import Flask, render_template, jsonify, request, send_from_directory
 except ImportError:  # Flask not installed
@@ -464,6 +483,7 @@ if Flask:
     def start_dashboard(host: str, port: int):
         """Run the Flask dashboard in real-time with trade data."""
         if socketio:
+            _ensure_eventlet_monkey_patch()
             socketio.run(app, host=host, port=port)
         else:
             app.run(host=host, port=port)
