@@ -169,26 +169,16 @@ function resolveApiUrl(path) {
 }
 
 function resolveSocketUrl() {
-  const namespace = '/ws';
   const base = (appConfig.apiBase || '').trim();
   if (!base) {
-    return namespace;
-  }
-  if (/^https?:/i.test(base)) {
-    return `${base.replace(/\/$/, '')}${namespace}`;
-  }
-  if (base.startsWith('//')) {
-    return `${window.location.protocol}${base.replace(/\/$/, '')}${namespace}`;
-  }
-  if (base.startsWith('/')) {
-    return `${base.replace(/\/$/, '')}${namespace}`;
+    return { url: '/ws', path: '/socket.io' };
   }
   try {
-    const resolved = new URL(base, window.location.origin);
-    return `${resolved.origin}${resolved.pathname.replace(/\/$/, '')}${namespace}`;
+    const origin = new URL(base, window.location.origin).origin;
+    return { url: `${origin}/ws`, path: '/socket.io' };
   } catch (error) {
     console.warn('No se pudo resolver la URL del socket a partir de', base, error);
-    return namespace;
+    return { url: '/ws', path: '/socket.io' };
   }
 }
 
@@ -236,6 +226,7 @@ const state = {
 
 let pnlChart = null;
 let socket = null;
+let socketConnectGuard = null;
 let partialModal = null;
 let partialTradeContext = null;
 let notificationsRequested = false;
@@ -812,7 +803,7 @@ async function fetchJSON(url, options = {}) {
             };
           });
         }
-        restartSocketConnection('gateway-fallback');
+        connectSocket();
         if (!silent) {
           showToast(
             'Se utilizará el backend local porque el gateway configurado no responde.',
@@ -2662,35 +2653,42 @@ function removeTradeFromState(tradeId) {
   }
 }
 
-function restartSocketConnection(reason = 'manual') {
+function clearSocketConnectGuard() {
+  if (socketConnectGuard) {
+    window.clearTimeout(socketConnectGuard);
+    socketConnectGuard = null;
+  }
+}
+
+function cleanupSocket(reason = 'manual') {
+  clearSocketConnectGuard();
   if (!socket) {
-    connectSocket();
     return;
   }
   try {
     if (typeof socket.removeAllListeners === 'function') {
       socket.removeAllListeners();
     } else if (typeof socket.off === 'function') {
-      ['connect', 'disconnect', 'connect_error', 'trades_refresh', 'trade_updated', 'trade_closed', 'bot_status'].forEach(
-        (eventName) => {
-          try {
-            socket.off(eventName);
-          } catch (listenerError) {
-            console.warn('No se pudo quitar el listener del socket', eventName, listenerError);
-          }
-        },
-      );
+      socket.off();
     }
-    if (typeof socket.disconnect === 'function') {
+  } catch (error) {
+    console.warn('No se pudieron limpiar los listeners del socket', reason, error);
+  }
+  try {
+    if (typeof socket.close === 'function') {
+      socket.close();
+    } else if (typeof socket.disconnect === 'function') {
       socket.disconnect();
     }
   } catch (error) {
-    console.warn('No se pudo reiniciar la conexión de socket', reason, error);
+    console.warn('No se pudo cerrar la conexión de socket', reason, error);
   }
   socket = null;
-  window.setTimeout(() => {
-    connectSocket();
-  }, 200);
+}
+
+function restartSocketConnection(reason = 'manual') {
+  cleanupSocket(reason);
+  connectSocket();
 }
 
 function connectSocket() {
@@ -2702,20 +2700,39 @@ function connectSocket() {
     }, 500);
     return;
   }
-  const socketUrl = resolveSocketUrl();
-  const options = { transports: ['websocket', 'polling'] };
-  socket = window.io(socketUrl, options);
+  cleanupSocket('prepare-connection');
+  const { url, path } = resolveSocketUrl();
+  setStatus('Sincronizando…', 'warning');
+  state.connectionHealthy = false;
+  updateTradingControls(state.tradingActive);
+  socket = window.io(url, {
+    path,
+    transports: ['websocket', 'polling'],
+    timeout: 8000,
+    reconnectionAttempts: 5,
+    withCredentials: false,
+  });
+  socketConnectGuard = window.setTimeout(() => {
+    socketConnectGuard = null;
+    state.connectionHealthy = false;
+    setStatus('Desconectado', 'danger');
+    updateTradingControls(state.tradingActive);
+  }, 7000);
   socket.on('connect', () => {
+    clearSocketConnectGuard();
     state.connectionHealthy = true;
     setStatus('En vivo', 'success');
     updateTradingControls(state.tradingActive);
   });
   socket.on('disconnect', () => {
+    clearSocketConnectGuard();
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
   });
-  socket.on('connect_error', () => {
+  socket.on('connect_error', (err) => {
+    clearSocketConnectGuard();
+    console.error('connect_error', err?.message || err);
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
