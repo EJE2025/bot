@@ -10,24 +10,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-try:  # Flask-SocketIO puede aprovechar eventlet si está disponible
-    import eventlet
-except ImportError:  # eventlet es opcional en entornos sin panel en vivo
+USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
+_EVENTLET_IMPORT_ERROR: str | None = None
+
+if USE_EVENTLET:
+    try:  # pragma: no cover - optional dependency en producción
+        import eventlet  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - eventlet opcional
+        eventlet = None  # type: ignore[assignment]
+        USE_EVENTLET = False
+        _EVENTLET_IMPORT_ERROR = str(exc)
+else:
     eventlet = None  # type: ignore[assignment]
-
-_EVENTLET_MONKEY_PATCHED = False
-
-
-def _ensure_eventlet_monkey_patch() -> bool:
-    """Activa el monkey patch de eventlet solo cuando el dashboard lo necesita."""
-
-    global _EVENTLET_MONKEY_PATCHED
-    if eventlet is None:
-        return False
-    if not _EVENTLET_MONKEY_PATCHED:
-        eventlet.monkey_patch()
-        _EVENTLET_MONKEY_PATCHED = True
-    return True
 
 try:
     from flask import Flask, render_template, jsonify, request, send_from_directory
@@ -52,9 +46,21 @@ from trading_bot.history import HISTORY_FILE, FIELDS as HISTORY_FIELDS
 
 logger = logging.getLogger(__name__)
 
+if _EVENTLET_IMPORT_ERROR:
+    logger.warning(
+        "USE_EVENTLET=1 pero eventlet no está instalado: %s. El dashboard usará threading.",
+        _EVENTLET_IMPORT_ERROR,
+    )
+
+ASYNC_MODE = "eventlet" if USE_EVENTLET else "threading"
+
 if Flask:
     app = Flask(__name__)
-    socketio = SocketIO(app, cors_allowed_origins="*") if SocketIO else None
+    socketio = (
+        SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
+        if SocketIO
+        else None
+    )
 
     _trade_locks: dict[str, threading.Lock] = {}
     _locks_lock = threading.Lock()
@@ -483,7 +489,6 @@ if Flask:
     def start_dashboard(host: str, port: int):
         """Run the Flask dashboard in real-time with trade data."""
         if socketio:
-            _ensure_eventlet_monkey_patch()
             socketio.run(app, host=host, port=port)
         else:
             app.run(host=host, port=port)
