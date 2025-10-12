@@ -10,6 +10,24 @@ const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
 const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
 const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
 const SECTION_IDS = [...ORDERED_SECTIONS];
+const WIDGET_VISIBILITY_KEY = 'dashboard:widget-visibility';
+const DEFAULT_WIDGET_VISIBILITY = {
+  metricsPrimary: true,
+  metricsSecondary: true,
+  pnlCard: true,
+  symbolCard: true,
+  tradesCard: true,
+  historyCard: true,
+};
+const widgetSelectors = {
+  metricsPrimary: '[data-widget-id="metricsPrimary"]',
+  metricsSecondary: '[data-widget-id="metricsSecondary"]',
+  pnlCard: '[data-widget-id="pnlCard"]',
+  symbolCard: '[data-widget-id="symbolCard"]',
+  tradesCard: '[data-widget-id="tradesCard"]',
+  historyCard: '[data-widget-id="historyCard"]',
+};
+const REFRESH_INTERVAL_STORAGE_KEY = 'dashboard:refresh-interval';
 
 const themePalettes = {
   light: {
@@ -182,6 +200,14 @@ const state = {
   refreshInterval: DEFAULT_REFRESH_INTERVAL,
   activeSection: 'dashboard',
   preferences: null,
+  widgetVisibility: { ...DEFAULT_WIDGET_VISIBILITY },
+  analytics: {
+    trades: [],
+    preferences: null,
+    symbolFilter: '',
+    loading: false,
+    error: null,
+  },
 };
 
 let pnlChart = null;
@@ -191,6 +217,8 @@ let partialTradeContext = null;
 let notificationsRequested = false;
 let preferencesModal = null;
 let refreshTimer = null;
+let settingsModal = null;
+let analyticsInitialized = false;
 
 const appConfig = {
   apiBase: '',
@@ -207,14 +235,7 @@ const DEFAULT_PREFERENCES = {
     assistant: true,
     services: true,
   },
-  widgets: {
-    metricsPrimary: true,
-    metricsSecondary: true,
-    pnlCard: true,
-    symbolCard: true,
-    tradesCard: true,
-    historyCard: true,
-  },
+  widgets: { ...DEFAULT_WIDGET_VISIBILITY },
   refreshInterval: DEFAULT_REFRESH_INTERVAL,
 };
 
@@ -602,14 +623,6 @@ function handlePreferencesSubmit(event) {
     preferencesModal.hide();
   }
   showToast('Preferencias actualizadas', 'success');
-}
-
-function getNextTheme(current) {
-  const index = themeOrder.indexOf(current);
-  if (index === -1) {
-    return themeOrder[0];
-  }
-  return themeOrder[(index + 1) % themeOrder.length];
 }
 
 function initTheme() {
@@ -1086,11 +1099,11 @@ function handleSettingsSubmit(event) {
 }
 
 function openExternalService(key) {
-  const base = GATEWAY_BASE || '';
+  const base = appConfig.apiBase || '';
   const serviceMap = {
     orders: base ? `${base}/orders` : null,
     docs: base ? `${base}/docs` : null,
-    analytics: GRAPHQL_URL || (base ? `${base}/graphql` : null),
+    analytics: appConfig.analyticsGraphql || (base ? `${base}/graphql` : null),
   };
   const url = serviceMap[key];
   if (!url) {
@@ -1574,11 +1587,11 @@ const ANALYTICS_SETTINGS_QUERY = `
   }
 `;
 
-async function postGraphQL(query, variables = {}) {
-  if (!GRAPHQL_URL) {
+async function postGraphQL(query, variables = {}, endpoint = getAnalyticsEndpoint()) {
+  if (!endpoint) {
     throw new Error('No se configuró el endpoint de GraphQL.');
   }
-  const response = await fetch(GRAPHQL_URL, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, variables }),
@@ -1701,7 +1714,8 @@ function renderAnalyticsPreferences() {
 }
 
 async function loadAnalyticsTrades(symbol = state.analytics.symbolFilter || '') {
-  if (!GRAPHQL_URL) {
+  const endpoint = getAnalyticsEndpoint();
+  if (!endpoint) {
     setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
     state.analytics.trades = [];
     renderAnalyticsTrades();
@@ -1713,7 +1727,7 @@ async function loadAnalyticsTrades(symbol = state.analytics.symbolFilter || '') 
   try {
     setAnalyticsStatus('Consultando operaciones…', 'info');
     const variables = state.analytics.symbolFilter ? { symbol: state.analytics.symbolFilter } : {};
-    const data = await postGraphQL(ANALYTICS_TRADES_QUERY, variables);
+    const data = await postGraphQL(ANALYTICS_TRADES_QUERY, variables, endpoint);
     const trades = data?.trades || data?.Trades || [];
     state.analytics.trades = Array.isArray(trades) ? trades : [];
     state.analytics.error = null;
@@ -1734,11 +1748,12 @@ async function loadAnalyticsTrades(symbol = state.analytics.symbolFilter || '') 
 }
 
 async function loadAnalyticsPreferences(userId = getAnalyticsUserId()) {
-  if (!GRAPHQL_URL) {
+  const endpoint = getAnalyticsEndpoint();
+  if (!endpoint) {
     return;
   }
   try {
-    const data = await postGraphQL(ANALYTICS_SETTINGS_QUERY, { userId });
+    const data = await postGraphQL(ANALYTICS_SETTINGS_QUERY, { userId }, endpoint);
     const preferences = data?.userSettings || data?.user_settings || null;
     state.analytics.preferences = preferences;
     renderAnalyticsPreferences();
@@ -1756,7 +1771,7 @@ async function loadAnalyticsData({ force = false } = {}) {
 }
 
 function ensureAnalyticsData(force = false) {
-  if (!GRAPHQL_URL) {
+  if (!getAnalyticsEndpoint()) {
     setAnalyticsStatus('Configura la URL del gateway para consultar analítica.', 'warning');
     return;
   }
@@ -2484,6 +2499,7 @@ function initialize() {
   initAppConfig();
   initTheme();
   loadPreferences();
+  loadWidgetPreferences();
   registerServiceWorker();
   switchSection(state.activeSection);
   applyDashboardLayout();
@@ -2623,14 +2639,28 @@ function removeTradeFromState(tradeId) {
 
 function connectSocket() {
   if (!window.io) {
+    window.setTimeout(() => {
+      state.connectionHealthy = false;
+      setStatus('Desconectado', 'danger');
+      updateTradingControls(state.tradingActive);
+    }, 500);
     return;
   }
   socket = window.io('/ws');
   socket.on('connect', () => {
+    state.connectionHealthy = true;
     setStatus('En vivo', 'success');
+    updateTradingControls(state.tradingActive);
   });
   socket.on('disconnect', () => {
+    state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
+    updateTradingControls(state.tradingActive);
+  });
+  socket.on('connect_error', () => {
+    state.connectionHealthy = false;
+    setStatus('Desconectado', 'danger');
+    updateTradingControls(state.tradingActive);
   });
   socket.on('trades_refresh', (trades) => {
     if (Array.isArray(trades)) {
