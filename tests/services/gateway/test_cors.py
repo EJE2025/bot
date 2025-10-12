@@ -29,7 +29,8 @@ async def test_cors_preflight_allows_configured_origin(monkeypatch: pytest.Monke
     gateway_module = importlib.import_module("services.gateway.app")
 
     with monkeypatch.context() as m:
-        m.setenv("DASHBOARD_GATEWAY_BASE", "https://dashboard.example.com")
+        m.setenv("DASHBOARD_ALLOWED_ORIGINS", "https://dashboard.example.com")
+        m.delenv("DASHBOARD_GATEWAY_BASE", raising=False)
         m.delenv("GATEWAY_BASE_URL", raising=False)
         gateway_module = importlib.reload(gateway_module)
 
