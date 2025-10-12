@@ -25,3 +25,5 @@ flask-graphql==2.0.1
 openai
 redis>=5.0
 httpx
+flask_socketio>=5.3
+eventlet>=0.33
