@@ -99,6 +99,8 @@ variables definidas en `trading_bot/config.py`:
 - `WEBAPP_PORT` dashboard port (default `8000`)
 - `DASHBOARD_GATEWAY_BASE` URL base del gateway FastAPI (déjalo vacío para usar el
   mismo origen que el dashboard; default cadena vacía)
+- `DASHBOARD_ALLOWED_ORIGINS` lista separada por comas de orígenes permitidos para
+  el gateway (default cadena vacía, usa `*` si no se especifica ningún origen)
 - `ANALYTICS_GRAPHQL_URL` endpoint opcional de analítica GraphQL (default
   `${DASHBOARD_GATEWAY_BASE}/graphql` cuando el gateway está configurado)
 - `AI_ASSISTANT_URL` endpoint opcional del asistente IA (default

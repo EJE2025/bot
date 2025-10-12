@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Sequence
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -16,12 +16,24 @@ BOT_SERVICE_URL = os.getenv("BOT_SERVICE_URL", "http://trading_bot:8000")
 
 app = FastAPI(title="Gateway")
 
-dashboard_origin = os.getenv("DASHBOARD_GATEWAY_BASE") or os.getenv("GATEWAY_BASE_URL")
-allowed_origins = []
-if dashboard_origin:
-    allowed_origins.append(dashboard_origin.rstrip("/"))
-else:
-    allowed_origins = ["*"]
+
+def _parse_origins(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
+def _allowed_origins() -> Sequence[str]:
+    configured_origins = _parse_origins(os.getenv("DASHBOARD_ALLOWED_ORIGINS"))
+    if not configured_origins:
+        configured_origins = _parse_origins(
+            os.getenv("DASHBOARD_GATEWAY_BASE") or os.getenv("GATEWAY_BASE_URL")
+        )
+
+    return configured_origins or ["*"]
+
+
+allowed_origins = list(_allowed_origins())
 
 app.add_middleware(
     CORSMiddleware,
