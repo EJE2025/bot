@@ -6,6 +6,7 @@ from typing import Any, Dict, Mapping
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 ANALYTICS_URL = os.getenv("ANALYTICS_URL", "http://analytics:5002/graphql")
@@ -14,6 +15,17 @@ TRADING_URL = os.getenv("TRADING_URL", "http://trading_engine:8000")
 BOT_SERVICE_URL = os.getenv("BOT_SERVICE_URL", "http://trading_bot:8000")
 
 app = FastAPI(title="Gateway")
+
+dashboard_origin = os.getenv("DASHBOARD_GATEWAY_BASE") or os.getenv("GATEWAY_BASE_URL")
+allowed_origins = [dashboard_origin] if dashboard_origin else ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"]
+)
 
 
 @app.on_event("startup")

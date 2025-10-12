@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -11,6 +12,8 @@ if str(ROOT) not in sys.path:
 
 import httpx
 import pytest
+
+os.environ.setdefault("DASHBOARD_GATEWAY_BASE", "https://dashboard.example.com")
 
 from services.gateway.app import BOT_SERVICE_URL, app
 TransportHandler = Callable[[httpx.Request], httpx.Response]
@@ -127,3 +130,31 @@ async def test_gateway_propagates_errors(method: str, path: str, bot_path: str) 
 
     assert response.status_code == 503
     assert response.text == "bot down"
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_includes_expected_headers() -> None:
+    origin = os.environ["DASHBOARD_GATEWAY_BASE"]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as test_client:
+        response = await test_client.options(
+            "/api/trades",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Content-Type",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == origin
+
+    allow_methods = response.headers.get("access-control-allow-methods", "")
+    assert "GET" in allow_methods
+    assert "POST" in allow_methods
+
+    allow_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in allow_headers
