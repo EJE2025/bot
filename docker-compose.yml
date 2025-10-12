@@ -39,6 +39,27 @@ services:
     depends_on:
       - redis
 
+  trading_bot:
+    build:
+      context: .
+      dockerfile: services/trading_bot/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - TEST_MODE=1
+      - AUTO_TRADE=0
+      - WEBAPP_HOST=0.0.0.0
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
+      - ./models:/app/models
+    expose:
+      - "8000"
+    ports:
+      - "8004:8000"
+    depends_on:
+      - redis
+
   analytics:
     build:
       context: .
@@ -74,6 +95,7 @@ services:
       - trading_engine
       - ai_service
       - analytics
+      - trading_bot
 
 volumes:
   postgres_data:
