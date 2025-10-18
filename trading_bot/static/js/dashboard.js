@@ -146,6 +146,11 @@ function initAppConfig() {
   appConfig.apiBase = (dataset.apiBase || '').replace(/\/$/, '');
   appConfig.analyticsGraphql = (dataset.analyticsGraphql || '').trim();
   appConfig.aiEndpoint = (dataset.aiEndpoint || '').trim();
+  appConfig.socketBase = (dataset.socketBase || '').trim();
+  if (appConfig.socketBase) {
+    appConfig.socketBase = appConfig.socketBase.replace(/\/+$/, '');
+  }
+  appConfig.socketPath = (dataset.socketPath || '').trim();
   try {
     const parsed = dataset.serviceLinks ? JSON.parse(dataset.serviceLinks) : [];
     if (Array.isArray(parsed)) {
@@ -188,16 +193,55 @@ function resolveApiUrl(path) {
 }
 
 function resolveSocketUrl() {
-  const base = (appConfig.apiBase || '').trim();
+  const defaultEndpoint = '/ws';
+  const defaultIoPath = '/socket.io';
+
+  const ensureAbsolutePath = (value, fallback) => {
+    if (!value) {
+      return fallback;
+    }
+    const trimmed = `${value}`.trim();
+    if (!trimmed) {
+      return fallback;
+    }
+    const prefixed = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    const sanitized = prefixed.replace(/\/+$/, '');
+    if (!sanitized || sanitized === '/') {
+      return fallback;
+    }
+    return sanitized;
+  };
+
+  const socketBaseRaw = (appConfig.socketBase || '').trim();
+  const socketPathRaw = (appConfig.socketPath || '').trim();
+  const apiBaseRaw = (appConfig.apiBase || '').trim();
+  const preferSocketBase = Boolean(socketBaseRaw);
+  const base = preferSocketBase ? socketBaseRaw : apiBaseRaw;
+
+  const normalizedEndpoint = ensureAbsolutePath(socketPathRaw, defaultEndpoint);
+
   if (!base) {
-    return { url: '/ws', path: '/socket.io' };
+    return { url: normalizedEndpoint, path: defaultIoPath };
   }
+
   try {
-    const origin = new URL(base, window.location.origin).origin;
-    return { url: `${origin}/ws`, path: '/socket.io' };
+    const parsed = new URL(base, window.location.origin);
+    const origin = parsed.origin;
+    let endpoint = defaultEndpoint;
+    if (preferSocketBase) {
+      if (socketPathRaw) {
+        endpoint = normalizedEndpoint;
+      } else if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
+        endpoint = ensureAbsolutePath(
+          `${parsed.pathname}${parsed.search || ''}${parsed.hash || ''}`,
+          defaultEndpoint,
+        );
+      }
+    }
+    return { url: `${origin}${endpoint}`, path: defaultIoPath };
   } catch (error) {
     console.warn('No se pudo resolver la URL del socket a partir de', base, error);
-    return { url: '/ws', path: '/socket.io' };
+    return { url: normalizedEndpoint, path: defaultIoPath };
   }
 }
 
@@ -258,6 +302,8 @@ const appConfig = {
   apiBase: '',
   analyticsGraphql: '',
   aiEndpoint: '',
+  socketBase: '',
+  socketPath: '',
   serviceLinks: [],
   gatewayFallbackActive: false,
 };
