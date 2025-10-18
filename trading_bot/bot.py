@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import socket
 
 USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
 _EVENTLET_IMPORT_ERROR: str | None = None
@@ -33,6 +34,7 @@ from pathlib import Path
 from statistics import mean
 from threading import RLock, Thread
 from typing import Any
+import webbrowser
 
 try:
     from scipy.stats import binomtest
@@ -109,6 +111,81 @@ _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
     os.getenv("EXCEL_SNAPSHOT_INTERVAL")
 )
 _last_excel_snapshot = 0.0
+_dashboard_launch_scheduled = False
+_dashboard_launch_lock = RLock()
+
+
+def _normalize_dashboard_host(host: str) -> str:
+    host = (host or "").strip()
+    if not host:
+        return "127.0.0.1"
+
+    normalized = host.lower()
+    if normalized in {"0.0.0.0", "::", "::1", "localhost"}:
+        return "127.0.0.1"
+
+    return host
+
+
+def _dashboard_url(host: str, port: int) -> str:
+    if host.startswith("http://") or host.startswith("https://"):
+        return host
+
+    safe_host = _normalize_dashboard_host(host)
+    if ":" in safe_host and not safe_host.startswith("["):
+        safe_host = f"[{safe_host}]"
+
+    return f"http://{safe_host}:{port}"
+
+
+def _should_auto_launch_dashboard() -> bool:
+    override = os.getenv("AUTO_OPEN_DASHBOARD")
+    if override is not None:
+        normalized = override.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+
+    stdin = sys.stdin
+    return bool(stdin and stdin.isatty())
+
+
+def _launch_dashboard_browser(host: str, port: int, *, attempts: int = 20, delay: float = 0.5) -> None:
+    url = _dashboard_url(host, port)
+    connect_host = _normalize_dashboard_host(host)
+
+    for _ in range(max(1, attempts)):
+        try:
+            with socket.create_connection((connect_host, port), timeout=2):
+                webbrowser.open(url, new=1, autoraise=True)
+                return
+        except OSError:
+            time.sleep(max(0.0, delay))
+
+    webbrowser.open(url, new=1, autoraise=True)
+
+
+def _schedule_dashboard_launch(host: str, port: int) -> None:
+    global _dashboard_launch_scheduled
+
+    if not _should_auto_launch_dashboard():
+        return
+
+    with _dashboard_launch_lock:
+        if _dashboard_launch_scheduled:
+            return
+        _dashboard_launch_scheduled = True
+
+    Thread(
+        target=_launch_dashboard_browser,
+        args=(host, port),
+        kwargs={"attempts": 30, "delay": 0.5},
+        daemon=True,
+    ).start()
 
 
 # No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
@@ -1025,6 +1102,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
             args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
             daemon=True,
         ).start()
+        _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
     # Expose Prometheus metrics and start system monitor
     Thread(target=start_metrics_server, args=(config.METRICS_PORT,), daemon=True).start()
