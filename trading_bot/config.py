@@ -132,6 +132,9 @@ _default_gateway = os.getenv("GATEWAY_BASE_URL", "").strip().rstrip("/")
 DASHBOARD_GATEWAY_BASE = (
     _str_env("DASHBOARD_GATEWAY_BASE", _default_gateway).strip().rstrip("/")
 )
+_socket_base = _str_env("DASHBOARD_SOCKET_BASE", "").strip()
+DASHBOARD_SOCKET_BASE = _socket_base.rstrip("/") if _socket_base else ""
+DASHBOARD_SOCKET_PATH = _str_env("DASHBOARD_SOCKET_PATH", "").strip()
 _default_graphql = f"{DASHBOARD_GATEWAY_BASE}/graphql" if DASHBOARD_GATEWAY_BASE else ""
 _default_ai_endpoint = (
     f"{DASHBOARD_GATEWAY_BASE}/ai/chat" if DASHBOARD_GATEWAY_BASE else ""

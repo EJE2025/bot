@@ -404,12 +404,16 @@ if Flask:
         analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip()
 
         ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip()
+        socket_base = getattr(config, "DASHBOARD_SOCKET_BASE", "")
+        socket_path = getattr(config, "DASHBOARD_SOCKET_PATH", "")
         return render_template(
             "index.html",
             current_year=datetime.utcnow().year,
             api_base=gateway_base,
             analytics_graphql_url=analytics_graphql,
             ai_api_url=ai_endpoint,
+            socket_base=socket_base,
+            socket_path=socket_path,
             service_links=_service_links(),
         )
 
