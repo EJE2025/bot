@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
 _EVENTLET_IMPORT_ERROR: str | None = None
@@ -24,14 +25,49 @@ else:
     eventlet = None  # type: ignore[assignment]
 
 try:
-    from flask import Flask, render_template, jsonify, request, send_from_directory
+    from flask import (
+        Flask,
+        jsonify,
+        redirect,
+        render_template,
+        request,
+        send_from_directory,
+        url_for,
+    )
 except ImportError:  # Flask not installed
     Flask = None
 
 try:
-    from flask_socketio import SocketIO
+    from flask_socketio import SocketIO, disconnect
 except ImportError:  # SocketIO optional
     SocketIO = None
+    disconnect = None  # type: ignore[assignment]
+
+try:
+    from flask_login import (
+        LoginManager,
+        current_user,
+        login_required,
+        login_user,
+        logout_user,
+    )
+except ImportError:  # pragma: no cover - optional dependency
+    LoginManager = None
+
+    def login_required(func):  # type: ignore[misc]
+        return func
+
+    def login_user(*_args, **_kwargs):  # pragma: no cover - safety fallback
+        raise RuntimeError("Flask-Login no está instalado")
+
+    def logout_user(*_args, **_kwargs):  # pragma: no cover - safety fallback
+        raise RuntimeError("Flask-Login no está instalado")
+
+    class _FallbackUser:
+        is_authenticated = False
+        username = ""
+
+    current_user = _FallbackUser()  # type: ignore[assignment]
 
 from trading_bot import config
 from trading_bot.trade_manager import (
@@ -43,6 +79,8 @@ from trading_bot.trade_manager import (
 )
 from trading_bot import data
 from trading_bot.history import HISTORY_FILE, FIELDS as HISTORY_FIELDS
+from trading_bot.authentication import authenticate, ensure_default_admin, has_any_user, load_user
+from trading_bot.db import init_db, remove_session
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +94,76 @@ ASYNC_MODE = "eventlet" if USE_EVENTLET else "threading"
 
 if Flask:
     app = Flask(__name__)
+
+    secret_key = config.DASHBOARD_SECRET_KEY.strip()
+    if not secret_key:
+        secret_key = os.getenv("FLASK_SECRET_KEY", "") or os.getenv("SECRET_KEY", "")
+    if not secret_key:
+        secret_key = os.urandom(32).hex()
+        logger.warning(
+            "No se proporcionó DASHBOARD_SECRET_KEY. Se generó uno temporal en memoria."
+        )
+    app.secret_key = secret_key
+
+    init_db()
+    _AUTH_ENABLED = False
+    _default_admin_created = False
+    try:
+        _default_admin_created = ensure_default_admin()
+    except Exception:  # pragma: no cover - setup guard
+        logger.exception("Error al inicializar el usuario administrador predeterminado")
+    try:
+        _existing_users = has_any_user()
+    except Exception:  # pragma: no cover - setup guard
+        logger.exception("No se pudo verificar usuarios existentes del dashboard")
+        _existing_users = False
+
     socketio = (
         SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
         if SocketIO
         else None
     )
+
+    if LoginManager:
+        _AUTH_ENABLED = bool(
+            config.DASHBOARD_REQUIRE_AUTH or _default_admin_created or _existing_users
+        )
+        login_manager = LoginManager(app)
+        login_manager.login_view = "login"
+
+        @login_manager.user_loader
+        def _load_user(user_id: str):
+            return load_user(user_id)
+
+        if _AUTH_ENABLED:
+            @login_manager.unauthorized_handler
+            def _unauthorized():
+                if request.path.startswith("/api/"):
+                    return jsonify({"ok": False, "error": "authentication_required"}), 401
+                next_url = request.full_path if request.method == "GET" else request.path
+                if next_url.endswith("?"):
+                    next_url = next_url[:-1]
+                if not _is_safe_redirect(next_url):
+                    next_url = url_for("index")
+                return redirect(url_for("login", next=next_url))
+        else:
+            if config.DASHBOARD_REQUIRE_AUTH:
+                logger.warning(
+                    "DASHBOARD_REQUIRE_AUTH=1 pero no hay usuarios configurados. El acceso no se protegerá hasta crear usuarios."
+                )
+            logger.info("Autenticación del dashboard deshabilitada (sin usuarios registrados).")
+    else:
+        _AUTH_ENABLED = False
+
+    if socketio and disconnect and _AUTH_ENABLED:
+        @socketio.on("connect", namespace="/ws")
+        def _ws_connect():  # pragma: no cover - simple guard
+            if not getattr(current_user, "is_authenticated", False):
+                disconnect()
+
+    @app.teardown_appcontext
+    def _cleanup_session(exception: Exception | None) -> None:  # pragma: no cover - glue code
+        remove_session()
 
     _trade_locks: dict[str, threading.Lock] = {}
     _locks_lock = threading.Lock()
@@ -202,6 +305,16 @@ if Flask:
 
         return realized_balance, realized_pnl_total, winners, losers
 
+    def _is_safe_redirect(target: str) -> bool:
+        if not target:
+            return False
+        parsed = urlparse(target)
+        if parsed.netloc:
+            return False
+        if parsed.scheme and parsed.scheme not in {"http", "https"}:
+            return False
+        return not target.startswith("//")
+
     def _service_links() -> list[dict[str, str]]:
         raw = getattr(config, "EXTERNAL_SERVICE_LINKS", "")
         if not raw:
@@ -225,7 +338,44 @@ if Flask:
             links.append({"label": label, "url": url})
         return links
 
+    def _maybe_login_required(func):
+        if not _AUTH_ENABLED:
+            return func
+        return login_required(func)
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        safe_next = request.args.get("next") or ""
+        if not _is_safe_redirect(safe_next):
+            safe_next = ""
+        if not _AUTH_ENABLED:
+            return redirect(safe_next or url_for("index"))
+        if getattr(current_user, "is_authenticated", False):
+            return redirect(safe_next or url_for("index"))
+        if request.method == "POST":
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            raw_next = request.args.get("next") or request.form.get("next") or ""
+            next_url = raw_next if _is_safe_redirect(raw_next) else url_for("index")
+            user = authenticate(username, password)
+            if user:
+                login_user(user)
+                return redirect(next_url)
+            error = "Credenciales inválidas"
+        else:
+            error = None
+        return render_template("login.html", error=error, next=safe_next)
+
+    @app.route("/logout")
+    @_maybe_login_required
+    def logout():
+        if not _AUTH_ENABLED:
+            return redirect(url_for("index"))
+        logout_user()
+        return redirect(url_for("login"))
+
     @app.route("/")
+    @_maybe_login_required
     def index():
         gateway_base = getattr(config, "DASHBOARD_GATEWAY_BASE", "").strip()
         if not gateway_base:
@@ -252,11 +402,13 @@ if Flask:
         return send_from_directory(app.static_folder, "service-worker.js")
 
     @app.route("/api/trades")
+    @_maybe_login_required
     def api_trades():
         """Return open trades with current price and unrealized PnL."""
         return jsonify(_trades_with_metrics())
 
     @app.post("/api/toggle-trading")
+    @_maybe_login_required
     def api_toggle_trading():
         """Permite pausar o reanudar el trading automático desde el dashboard."""
 
@@ -285,6 +437,7 @@ if Flask:
         _emit("trades_refresh", _trades_with_metrics())
 
     @app.post("/api/trades/<trade_id>/close")
+    @_maybe_login_required
     def api_close_trade(trade_id: str):
         lock = _get_trade_lock(trade_id)
         with lock:
@@ -304,6 +457,7 @@ if Flask:
         return jsonify({"ok": True, "trade": result})
 
     @app.post("/api/trades/<trade_id>/close-partial")
+    @_maybe_login_required
     def api_close_trade_partial(trade_id: str):
         lock = _get_trade_lock(trade_id)
         with lock:
@@ -369,6 +523,7 @@ if Flask:
         return jsonify({"ok": True, "trade": result})
 
     @app.route("/api/summary")
+    @_maybe_login_required
     def api_summary():
         """Aggregate metrics that power the dashboard widgets."""
         trades = _trades_with_metrics()
@@ -455,6 +610,7 @@ if Flask:
         return jsonify(payload)
 
     @app.route("/api/history")
+    @_maybe_login_required
     def api_history():
         """Return the latest closed trades from the CSV history file."""
         try:
