@@ -97,6 +97,10 @@ if _EVENTLET_IMPORT_ERROR:
     )
 
 
+_broadcast_trades_refresh = getattr(webapp, "broadcast_trades_refresh", None)
+_socketio_emit = getattr(webapp, "_emit", None)
+
+
 def _parse_snapshot_interval(raw: str | None) -> int:
     try:
         value = int(raw) if raw is not None else 60
@@ -706,7 +710,15 @@ def open_new_trade(signal: dict):
             update_trade(trade["trade_id"], open_time=opened_at)
             set_trade_state(trade["trade_id"], TradeState.OPEN)
             save_trades()
-            return find_trade(trade_id=trade["trade_id"])
+            trade_details = find_trade(trade_id=trade["trade_id"])
+            try:
+                if callable(_broadcast_trades_refresh):
+                    _broadcast_trades_refresh()
+                if trade_details and callable(_socketio_emit):
+                    _socketio_emit("trade_updated", {"trade": trade_details})
+            except Exception as exc:
+                logger.debug("No se pudo notificar la apertura de %s: %s", symbol, exc)
+            return trade_details
 
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
         if status == "filled":
@@ -734,7 +746,15 @@ def open_new_trade(signal: dict):
                     update_trade(trade["trade_id"], **updates)
 
         save_trades()
-        return find_trade(trade_id=trade["trade_id"])
+        trade_details = find_trade(trade_id=trade["trade_id"])
+        try:
+            if callable(_broadcast_trades_refresh):
+                _broadcast_trades_refresh()
+            if trade_details and callable(_socketio_emit):
+                _socketio_emit("trade_updated", {"trade": trade_details})
+        except Exception as exc:
+            logger.debug("No se pudo notificar la apertura de %s: %s", symbol, exc)
+        return trade_details
 
     except permissions.PermissionError as exc:
         logger.error("Permission denied opening %s: %s", symbol, exc)
