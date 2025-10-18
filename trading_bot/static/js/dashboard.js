@@ -212,33 +212,24 @@ function resolveSocketUrl() {
     return sanitized;
   };
 
-  const socketBaseRaw = (appConfig.socketBase || '').trim();
-  const socketPathRaw = (appConfig.socketPath || '').trim();
-  const preferSocketBase = Boolean(socketBaseRaw);
-  const fallbackBase = window.location.origin;
-  const base = preferSocketBase ? socketBaseRaw : fallbackBase;
+  const socketBaseRaw = (appConfig.socketBase || window.location.origin || '').trim();
+  const normalizedEndpoint = ensureAbsolutePath(appConfig.socketPath, defaultEndpoint);
 
-  const normalizedEndpoint = ensureAbsolutePath(socketPathRaw, defaultEndpoint);
-
-  if (!base) {
+  if (!socketBaseRaw) {
     return { url: normalizedEndpoint, path: defaultIoPath };
   }
 
+  const sanitizedBase = socketBaseRaw.replace(/\/+$/, '');
+
   try {
-    const parsed = new URL(base, window.location.origin);
+    const parsed = new URL(sanitizedBase, window.location.origin);
     const origin = parsed.origin;
-    let endpoint = normalizedEndpoint;
-    if (preferSocketBase && !socketPathRaw) {
-      if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
-        endpoint = ensureAbsolutePath(
-          `${parsed.pathname}${parsed.search || ''}${parsed.hash || ''}`,
-          normalizedEndpoint,
-        );
-      }
-    }
-    return { url: `${origin}${endpoint}`, path: defaultIoPath };
+    return { url: `${origin}${normalizedEndpoint}`, path: defaultIoPath };
   } catch (error) {
-    console.warn('No se pudo resolver la URL del socket a partir de', base, error);
+    console.warn('No se pudo resolver la URL del socket a partir de', sanitizedBase, error);
+    if (/^https?:/i.test(sanitizedBase)) {
+      return { url: `${sanitizedBase}${normalizedEndpoint}`, path: defaultIoPath };
+    }
     return { url: normalizedEndpoint, path: defaultIoPath };
   }
 }
