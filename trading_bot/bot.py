@@ -1,3 +1,6 @@
+import argparse
+import json
+import logging
 import os
 
 USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
@@ -20,9 +23,6 @@ if USE_EVENTLET:
             subprocess=True,
         )
 
-import argparse
-import json
-import logging
 import sys
 import time
 import uuid
@@ -89,10 +89,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-if _EVENTLET_IMPORT_ERROR:
+if globals().get("_EVENTLET_IMPORT_ERROR"):
     logger.warning(
         "USE_EVENTLET=1 pero eventlet no está instalado: %s. Se usará el modo threading.",
-        _EVENTLET_IMPORT_ERROR,
+        globals()["_EVENTLET_IMPORT_ERROR"],
     )
 
 
@@ -110,6 +110,7 @@ _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
 _last_excel_snapshot = 0.0
 
 
+# No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
 def _notify_dashboard_trade_opened(
     trade_id: str,
     *,
@@ -744,12 +745,9 @@ def open_new_trade(signal: dict):
             save_trades()
             details = find_trade(trade_id=trade["trade_id"])
             # Notificar SIEMPRE antes de salir
-            return (
-                _notify_dashboard_trade_opened(
-                    trade["trade_id"], trade_details=details
-                )
-                or details
-            )
+            return _notify_dashboard_trade_opened(
+                trade["trade_id"], trade_details=details
+            ) or details
 
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
         if status == "filled":
@@ -779,12 +777,9 @@ def open_new_trade(signal: dict):
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
         # Notificar SIEMPRE antes de salir
-        return (
-            _notify_dashboard_trade_opened(
-                trade["trade_id"], trade_details=details
-            )
-            or details
-        )
+        return _notify_dashboard_trade_opened(
+            trade["trade_id"], trade_details=details
+        ) or details
 
     except permissions.PermissionError as exc:
         logger.error("Permission denied opening %s: %s", symbol, exc)
