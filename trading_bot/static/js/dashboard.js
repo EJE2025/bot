@@ -196,42 +196,24 @@ function resolveSocketUrl() {
   const defaultEndpoint = '/ws';
   const defaultIoPath = '/socket.io';
 
-  const ensureAbsolutePath = (value, fallback) => {
-    if (!value) {
-      return fallback;
-    }
-    const trimmed = `${value}`.trim();
-    if (!trimmed) {
-      return fallback;
-    }
-    const prefixed = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
-    const sanitized = prefixed.replace(/\/+$/, '');
-    if (!sanitized || sanitized === '/') {
-      return fallback;
-    }
-    return sanitized;
-  };
+  const rawEndpoint = (appConfig.socketPath || '').trim();
+  const normalizedEndpoint = rawEndpoint
+    ? rawEndpoint.startsWith('/')
+      ? rawEndpoint.replace(/\/+$/, '') || defaultEndpoint
+      : `/${rawEndpoint.replace(/\/+$/, '')}`
+    : defaultEndpoint;
 
-  const socketBaseRaw = (appConfig.socketBase || window.location.origin || '').trim();
-  const normalizedEndpoint = ensureAbsolutePath(appConfig.socketPath, defaultEndpoint);
+  let socketBase = (appConfig.socketBase || '').trim();
+  if (!socketBase && window.location?.origin) {
+    socketBase = window.location.origin;
+  }
 
-  if (!socketBaseRaw) {
+  if (!socketBase) {
     return { url: normalizedEndpoint, path: defaultIoPath };
   }
 
-  const sanitizedBase = socketBaseRaw.replace(/\/+$/, '');
-
-  try {
-    const parsed = new URL(sanitizedBase, window.location.origin);
-    const origin = parsed.origin;
-    return { url: `${origin}${normalizedEndpoint}`, path: defaultIoPath };
-  } catch (error) {
-    console.warn('No se pudo resolver la URL del socket a partir de', sanitizedBase, error);
-    if (/^https?:/i.test(sanitizedBase)) {
-      return { url: `${sanitizedBase}${normalizedEndpoint}`, path: defaultIoPath };
-    }
-    return { url: normalizedEndpoint, path: defaultIoPath };
-  }
+  const sanitizedBase = socketBase.replace(/\/+$/, '');
+  return { url: `${sanitizedBase}${normalizedEndpoint}`, path: defaultIoPath };
 }
 
 function getAnalyticsEndpoint() {
@@ -2780,13 +2762,21 @@ function connectSocket() {
   setStatus('Sincronizando…', 'warning');
   state.connectionHealthy = false;
   updateTradingControls(state.tradingActive);
-  socket = window.io(url, {
-    path,
-    transports: ['websocket', 'polling'],
-    timeout: 8000,
-    reconnectionAttempts: 5,
-    withCredentials: false,
-  });
+  try {
+    socket = window.io(url, {
+      path,
+      transports: ['websocket', 'polling'],
+      timeout: 8000,
+      reconnectionAttempts: 5,
+      withCredentials: false,
+    });
+  } catch (error) {
+    console.error('No se pudo inicializar la conexión de socket', error);
+    state.connectionHealthy = false;
+    setStatus('Desconectado', 'danger');
+    updateTradingControls(state.tradingActive);
+    return;
+  }
   socketConnectGuard = window.setTimeout(() => {
     socketConnectGuard = null;
     state.connectionHealthy = false;
