@@ -459,9 +459,37 @@ if Flask:
         _emit("bot_status", {"trading_active": new_status})
         return jsonify(payload)
 
+    def _push_to_webview(event: str, payload: Any) -> None:
+        """Mirror dashboard events to the desktop bridge when available."""
+
+        try:
+            from . import desktop  # noqa: WPS433 - optional dependency
+        except Exception:
+            return
+
+        evaluator = getattr(desktop, "eval_js", None)
+        if not callable(evaluator):
+            return
+
+        try:
+            js_payload = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            logger.debug("No se pudo serializar payload para PyWebview: %s", event)
+            return
+
+        script = (
+            "window.__pybridge && window.__pybridge.emit("
+            f"{json.dumps(event)}, {js_payload});"
+        )
+        try:
+            evaluator(script)
+        except Exception:
+            logger.debug("Fallo al emitir evento %s hacia PyWebview", event)
+
     def _emit(event: str, payload: Any) -> None:
         if socketio:
             socketio.emit(event, payload, namespace="/ws")
+        _push_to_webview(event, payload)
 
     def broadcast_trades_refresh() -> None:
         """Emit a trades refresh event if Socket.IO is active."""

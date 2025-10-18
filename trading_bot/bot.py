@@ -55,6 +55,7 @@ from . import (
     mode as bot_mode,
     exporter,
 )
+from . import webapp
 from .trade_manager import (
     add_trade,
     close_trade,
@@ -659,6 +660,11 @@ def parse_args():
         type=str,
         help="Ruta al CSV con datos para el backtest (modo backtest)",
     )
+    parser.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Abre el dashboard como aplicación de escritorio (PyWebview)",
+    )
     return parser.parse_args()
 
 
@@ -933,7 +939,7 @@ def run_one_iteration_open(model=None):
         except Exception as exc:
             logger.error("Error processing %s: %s", sig.get("symbol"), exc)
 
-def run():
+def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> None:
     global _last_excel_snapshot
     load_trades()  # Restaurar operaciones guardadas
     permissions.audit_environment(execution.exchange)
@@ -1013,13 +1019,12 @@ def run():
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
-    from . import webapp  # noqa: WPS433 - delayed import to avoid circular issues
-
-    Thread(
-        target=webapp.start_dashboard,
-        args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
-        daemon=True,
-    ).start()
+    if not use_desktop:
+        Thread(
+            target=webapp.start_dashboard,
+            args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
+            daemon=True,
+        ).start()
 
     # Expose Prometheus metrics and start system monitor
     Thread(target=start_metrics_server, args=(config.METRICS_PORT,), daemon=True).start()
@@ -1031,7 +1036,8 @@ def run():
     stop_event.clear()
     trainer = auto_trainer.start_auto_trainer(stop_event)
 
-    shutdown.install_signal_handlers()
+    if install_signal_handlers:
+        shutdown.install_signal_handlers()
     shutdown.register_callback(save_trades)
     shutdown.register_callback(execution.cancel_all_orders)
     if trainer is not None:
@@ -1477,10 +1483,39 @@ def main() -> None:
 
     bot_mode.apply_mode_to_config(chosen, config)
 
+    desktop_mode = bool(getattr(args, "desktop", False))
+    desktop_module = None
+    if desktop_mode:
+        try:
+            from . import desktop as desktop_module  # noqa: WPS433 - optional import
+        except Exception as exc:
+            logger.exception("No se pudo iniciar el modo escritorio: %s", exc)
+            desktop_mode = False
+
     if config.RUN_BACKTEST_ON_START:
         _run_backtest_startup(args)
         return
 
+    if desktop_mode and desktop_module:
+        shutdown.install_signal_handlers()
+        trading_thread = Thread(
+            target=run,
+            kwargs={"use_desktop": True, "install_signal_handlers": False},
+            daemon=True,
+        )
+        trading_thread.start()
+        try:
+            desktop_module.launch_desktop()
+        except Exception:
+            logger.exception("Error al lanzar la interfaz de escritorio")
+        finally:
+            shutdown.request_shutdown()
+            trading_thread.join(timeout=30)
+            if trading_thread.is_alive():
+                logger.warning(
+                    "El hilo de trading sigue activo tras cerrar la ventana de escritorio"
+                )
+        return
 
     run()
 
