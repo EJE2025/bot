@@ -277,6 +277,13 @@ if Flask:
         if socketio:
             socketio.emit(event, payload, namespace="/ws")
 
+    def broadcast_trades_refresh() -> None:
+        """Emit a trades refresh event if Socket.IO is active."""
+
+        if not socketio:
+            return
+        _emit("trades_refresh", _trades_with_metrics())
+
     @app.post("/api/trades/<trade_id>/close")
     def api_close_trade(trade_id: str):
         lock = _get_trade_lock(trade_id)
@@ -493,5 +500,12 @@ if Flask:
         else:
             app.run(host=host, port=port)
 else:
+    socketio = None
+
+    def broadcast_trades_refresh() -> None:
+        """Fallback helper when the dashboard is unavailable."""
+
+        return None
+
     def start_dashboard(host: str, port: int):
         raise ImportError("Flask is required to run the dashboard")
