@@ -743,10 +743,13 @@ def open_new_trade(signal: dict):
             set_trade_state(trade["trade_id"], TradeState.OPEN)
             save_trades()
             details = find_trade(trade_id=trade["trade_id"])
-            notified = _notify_dashboard_trade_opened(
-                trade["trade_id"], trade_details=details
+            # Notificar SIEMPRE antes de salir
+            return (
+                _notify_dashboard_trade_opened(
+                    trade["trade_id"], trade_details=details
+                )
+                or details
             )
-            return notified or details
 
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
         if status == "filled":
@@ -775,8 +778,13 @@ def open_new_trade(signal: dict):
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
-        notified = _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details)
-        return notified or details
+        # Notificar SIEMPRE antes de salir
+        return (
+            _notify_dashboard_trade_opened(
+                trade["trade_id"], trade_details=details
+            )
+            or details
+        )
 
     except permissions.PermissionError as exc:
         logger.error("Permission denied opening %s: %s", symbol, exc)
