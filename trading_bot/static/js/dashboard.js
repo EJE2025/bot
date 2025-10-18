@@ -214,9 +214,9 @@ function resolveSocketUrl() {
 
   const socketBaseRaw = (appConfig.socketBase || '').trim();
   const socketPathRaw = (appConfig.socketPath || '').trim();
-  const apiBaseRaw = (appConfig.apiBase || '').trim();
   const preferSocketBase = Boolean(socketBaseRaw);
-  const base = preferSocketBase ? socketBaseRaw : apiBaseRaw;
+  const fallbackBase = window.location.origin;
+  const base = preferSocketBase ? socketBaseRaw : fallbackBase;
 
   const normalizedEndpoint = ensureAbsolutePath(socketPathRaw, defaultEndpoint);
 
@@ -227,14 +227,12 @@ function resolveSocketUrl() {
   try {
     const parsed = new URL(base, window.location.origin);
     const origin = parsed.origin;
-    let endpoint = defaultEndpoint;
-    if (preferSocketBase) {
-      if (socketPathRaw) {
-        endpoint = normalizedEndpoint;
-      } else if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
+    let endpoint = normalizedEndpoint;
+    if (preferSocketBase && !socketPathRaw) {
+      if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
         endpoint = ensureAbsolutePath(
           `${parsed.pathname}${parsed.search || ''}${parsed.hash || ''}`,
-          defaultEndpoint,
+          normalizedEndpoint,
         );
       }
     }
