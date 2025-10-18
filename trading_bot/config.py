@@ -5,6 +5,16 @@ from typing import Tuple
 from .secret_manager import get_secret
 
 
+def _secret_or_env(name: str, default: str = "") -> str:
+    """Return secrets from the secret manager falling back to environment vars."""
+
+    secret_value = get_secret(name)
+    if secret_value:
+        return secret_value
+    env_value = os.getenv(name)
+    return env_value if env_value is not None else default
+
+
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     """Clamp ``value`` between ``minimum`` and ``maximum``."""
     return max(minimum, min(maximum, value))
@@ -79,6 +89,14 @@ except ImportError:  # pragma: no cover - optional dependency
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
 if load_dotenv is not None:
     load_dotenv(env_path)
+
+_default_sqlite_path = Path(__file__).resolve().parent / "dashboard.sqlite3"
+DATABASE_URL = _secret_or_env("DATABASE_URL", f"sqlite:///{_default_sqlite_path}")
+DASHBOARD_SECRET_KEY = _secret_or_env("DASHBOARD_SECRET_KEY")
+DASHBOARD_ADMIN_USERNAME = _str_env("DASHBOARD_ADMIN_USERNAME", "")
+DASHBOARD_ADMIN_PASSWORD = _secret_or_env("DASHBOARD_ADMIN_PASSWORD")
+DASHBOARD_ADMIN_PASSWORD_HASH = _secret_or_env("DASHBOARD_ADMIN_PASSWORD_HASH")
+DASHBOARD_REQUIRE_AUTH = _bool_env("DASHBOARD_REQUIRE_AUTH", False)
 
 BITGET_API_KEY = get_secret("BITGET_API_KEY") or ""
 BITGET_API_SECRET = get_secret("BITGET_API_SECRET") or ""

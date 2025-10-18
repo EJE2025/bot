@@ -19,6 +19,25 @@ const DEFAULT_WIDGET_VISIBILITY = {
   tradesCard: true,
   historyCard: true,
 };
+
+function redirectToLogin() {
+  if (window.location.pathname === '/login') {
+    return;
+  }
+  const next = encodeURIComponent(
+    `${window.location.pathname}${window.location.search}${window.location.hash}`,
+  );
+  window.location.href = `/login?next=${next}`;
+}
+
+function ensureAuthorized(response) {
+  if (response && response.status === 401) {
+    redirectToLogin();
+    return false;
+  }
+  return true;
+}
+
 const widgetSelectors = {
   metricsPrimary: '[data-widget-id="metricsPrimary"]',
   metricsSecondary: '[data-widget-id="metricsSecondary"]',
@@ -726,6 +745,9 @@ async function fetchJSON(url, options = {}) {
   const attempt = async (target, context) => {
     try {
       const response = await fetch(target, { cache: 'no-cache', ...fetchOptions });
+      if (!ensureAuthorized(response)) {
+        return null;
+      }
       const text = await response.text();
       if (!response.ok) {
         const snippet = text ? text.slice(0, 180) : response.statusText;
@@ -1612,6 +1634,9 @@ async function postGraphQL(query, variables = {}, endpoint = getAnalyticsEndpoin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, variables }),
   });
+  if (!ensureAuthorized(response)) {
+    return null;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = payload?.errors?.[0]?.message || response.statusText || 'Error en la petición GraphQL';
@@ -2076,6 +2101,9 @@ async function refreshAnalytics(manual = false) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: ANALYTICS_OVERVIEW_QUERY }),
     });
+    if (!ensureAuthorized(response)) {
+      return;
+    }
     const payload = await response.json();
     if (payload.errors && payload.errors.length) {
       throw new Error(payload.errors[0]?.message || 'Error del microservicio de analítica');
@@ -2171,6 +2199,9 @@ async function sendAiMessage(message) {
         conversation: aiState.conversation,
       }),
     });
+    if (!ensureAuthorized(response)) {
+      return;
+    }
     const data = await readJsonResponse(response, 'No se pudo obtener respuesta del asistente');
     if (!response.ok) {
       throw new Error(data.error || 'El asistente devolvió un error');
@@ -2480,6 +2511,9 @@ function attachEvents() {
       toggleBtn.disabled = true;
       try {
         const response = await fetch(resolveApiUrl('/api/toggle-trading'), { method: 'POST' });
+        if (!ensureAuthorized(response)) {
+          return;
+        }
         const data = await readJsonResponse(response, 'No se pudo cambiar el estado del bot');
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'No se pudo cambiar el estado del bot');
@@ -2557,6 +2591,9 @@ function attachTradeRowEvents() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason: 'manual_close_ui' }),
         });
+        if (!ensureAuthorized(response)) {
+          return;
+        }
         const data = await readJsonResponse(response, 'No se pudo cerrar la operación');
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'No se pudo cerrar la operación');
@@ -2614,6 +2651,9 @@ async function handlePartialConfirm() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ percent: value, reason: 'manual_partial_ui' }),
     });
+    if (!ensureAuthorized(response)) {
+      return;
+    }
     const data = await readJsonResponse(response, 'No se pudo cerrar parcialmente');
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'No se pudo cerrar parcialmente');
