@@ -38,10 +38,11 @@ except ImportError:  # Flask not installed
     Flask = None
 
 try:
-    from flask_socketio import SocketIO, disconnect
+    from flask_socketio import SocketIO, disconnect, emit
 except ImportError:  # SocketIO optional
     SocketIO = None
     disconnect = None  # type: ignore[assignment]
+    emit = None  # type: ignore[assignment]
 
 try:
     from flask_login import (
@@ -119,7 +120,13 @@ if Flask:
         _existing_users = False
 
     socketio = (
-        SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
+        SocketIO(
+            app,
+            cors_allowed_origins="*",
+            async_mode=ASYNC_MODE,
+            ping_timeout=30,
+            ping_interval=15,
+        )
         if SocketIO
         else None
     )
@@ -155,11 +162,24 @@ if Flask:
     else:
         _AUTH_ENABLED = False
 
-    if socketio and disconnect and _AUTH_ENABLED:
+    if socketio:
         @socketio.on("connect", namespace="/ws")
-        def _ws_connect():  # pragma: no cover - simple guard
-            if not getattr(current_user, "is_authenticated", False):
+        def _ws_connect():  # pragma: no cover - relies on Socket.IO runtime
+            if (
+                _AUTH_ENABLED
+                and disconnect
+                and not getattr(current_user, "is_authenticated", False)
+            ):
                 disconnect()
+                return
+
+            logger.info("WS connect: %s", getattr(request, "sid", "?"))
+            emit("bot_status", {"trading_active": bool(getattr(config, "AUTO_TRADE", True))})
+            emit("trades_refresh", _trades_with_metrics())
+
+        @socketio.on("disconnect", namespace="/ws")
+        def _ws_disconnect():  # pragma: no cover - relies on Socket.IO runtime
+            logger.info("WS disconnect: %s", getattr(request, "sid", "?"))
 
     @app.teardown_appcontext
     def _cleanup_session(exception: Exception | None) -> None:  # pragma: no cover - glue code
@@ -400,6 +420,16 @@ if Flask:
     @app.route("/service-worker.js")
     def service_worker():
         return send_from_directory(app.static_folder, "service-worker.js")
+
+    @app.get("/api/health")
+    def api_health():
+        return jsonify(
+            {
+                "ok": True,
+                "socketio": bool(socketio is not None),
+                "auto_trade": bool(getattr(config, "AUTO_TRADE", True)),
+            }
+        )
 
     @app.route("/api/trades")
     @_maybe_login_required
