@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import threading
 import time
 from typing import Any
@@ -24,10 +25,40 @@ def _start_dashboard() -> None:
     webapp.start_dashboard(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
 
+def _client_host() -> str:
+    """Return a routable host for client requests to the dashboard."""
+
+    host = config.WEBAPP_HOST.strip()
+    if not host:
+        return "127.0.0.1"
+
+    raw_host = host
+    if host.startswith("[") and host.endswith("]"):
+        raw_host = host[1:-1]
+
+    try:
+        address = ipaddress.ip_address(raw_host)
+    except ValueError:
+        # Non-IP values (e.g. DNS names) are assumed to be routable as-is.
+        return raw_host
+
+    if address.is_unspecified:
+        return "[::1]" if address.version == 6 else "127.0.0.1"
+
+    if address.version == 6:
+        return f"[{address.compressed}]"
+
+    return address.compressed
+
+
+def _client_base_url() -> str:
+    return f"http://{_client_host()}:{config.WEBAPP_PORT}"
+
+
 def _wait_health(timeout: float = 30.0) -> bool:
     """Wait until the dashboard health endpoint reports success."""
 
-    base = f"http://{config.WEBAPP_HOST}:{config.WEBAPP_PORT}"
+    base = _client_base_url()
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -49,7 +80,7 @@ def launch_desktop() -> None:
     server.start()
 
     ok = _wait_health(30.0)
-    base = f"http://{config.WEBAPP_HOST}:{config.WEBAPP_PORT}"
+    base = _client_base_url()
     if not ok:
         # Proceed anyway to allow inspecting potential startup errors.
         pass
