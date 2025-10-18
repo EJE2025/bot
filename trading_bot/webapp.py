@@ -155,11 +155,43 @@ if Flask:
     else:
         _AUTH_ENABLED = False
 
+    _active_sockets_by_user: dict[str, set[str]] = defaultdict(set)
+    _socket_user_by_sid: dict[str, str] = {}
+    _active_sockets_lock = threading.Lock()
+
     if socketio and disconnect and _AUTH_ENABLED:
         @socketio.on("connect", namespace="/ws")
         def _ws_connect():  # pragma: no cover - simple guard
             if not getattr(current_user, "is_authenticated", False):
                 disconnect()
+                return
+
+            get_id = getattr(current_user, "get_id", None)
+            user_id = get_id() if callable(get_id) else None
+            sid = getattr(request, "sid", None)
+            if not user_id or not sid:
+                disconnect()
+                return
+
+            with _active_sockets_lock:
+                _active_sockets_by_user[user_id].add(sid)
+                _socket_user_by_sid[sid] = user_id
+
+        @socketio.on("disconnect", namespace="/ws")
+        def _ws_disconnect():  # pragma: no cover - simple guard
+            sid = getattr(request, "sid", None)
+            if not sid:
+                return
+            with _active_sockets_lock:
+                user_id = _socket_user_by_sid.pop(sid, None)
+                if not user_id:
+                    return
+                sockets = _active_sockets_by_user.get(user_id)
+                if not sockets:
+                    return
+                sockets.discard(sid)
+                if not sockets:
+                    _active_sockets_by_user.pop(user_id, None)
 
     @app.teardown_appcontext
     def _cleanup_session(exception: Exception | None) -> None:  # pragma: no cover - glue code
@@ -371,7 +403,26 @@ if Flask:
     def logout():
         if not _AUTH_ENABLED:
             return redirect(url_for("index"))
+        sockets_to_disconnect: list[str] = []
+        if socketio:
+            get_id = getattr(current_user, "get_id", None)
+            user_id = get_id() if callable(get_id) else None
+            if user_id:
+                with _active_sockets_lock:
+                    sockets = _active_sockets_by_user.pop(user_id, set())
+                    sockets_to_disconnect = list(sockets)
+                    for sid in sockets_to_disconnect:
+                        _socket_user_by_sid.pop(sid, None)
         logout_user()
+        if socketio:
+            for sid in sockets_to_disconnect:
+                try:
+                    socketio.server.disconnect(sid, namespace="/ws")
+                except Exception:  # pragma: no cover - defensive guard
+                    try:
+                        socketio.disconnect(sid, namespace="/ws")
+                    except Exception:
+                        logger.debug("No se pudo desconectar el socket %s", sid)
         return redirect(url_for("login"))
 
     @app.route("/")
