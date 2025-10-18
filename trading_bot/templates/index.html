@@ -577,6 +577,83 @@
         </div>
     </div>
 
+    <script>
+      (function () {
+        if (window.__pybridge) {
+          return;
+        }
+        window.__pybridge = {
+          emit: function (event, payload) {
+            try {
+              const globalState = window.state || null;
+              if (event === 'trades_refresh') {
+                if (Array.isArray(payload) && globalState) {
+                  globalState.trades = payload.slice();
+                  globalState.connectionHealthy = true;
+                }
+                if (typeof window.renderTrades === 'function') {
+                  window.renderTrades();
+                }
+                if (typeof window.setStatus === 'function') {
+                  window.setStatus('En vivo', 'success');
+                }
+                if (typeof window.updateTradingControls === 'function') {
+                  const active = globalState ? Boolean(globalState.tradingActive) : undefined;
+                  window.updateTradingControls(active);
+                }
+                return;
+              }
+              if (event === 'trade_updated') {
+                const trade = payload && (payload.trade || payload);
+                if (trade && typeof window.updateTradeInState === 'function') {
+                  window.updateTradeInState(trade);
+                }
+                return;
+              }
+              if (event === 'trade_closed') {
+                const trade = payload && payload.trade;
+                if (!trade) {
+                  return;
+                }
+                const getTradeId = window.getTradeId;
+                const removeTrade = window.removeTradeFromState;
+                let tradeId = '';
+                if (typeof getTradeId === 'function' && typeof removeTrade === 'function') {
+                  tradeId = getTradeId(trade);
+                  removeTrade(tradeId);
+                }
+                const formatPnL = window.formatPnL;
+                const showToast = window.showToast;
+                const notifyTradeClosed = window.notifyTradeClosed;
+                const pnlValue = Number(trade.realized_pnl ?? trade.profit ?? 0);
+                if (typeof formatPnL === 'function' && typeof showToast === 'function') {
+                  const pnlLabel = formatPnL(pnlValue);
+                  const variant = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'success' : 'warning';
+                  const label = trade.symbol || tradeId || '';
+                  showToast(`Operación ${label} cerrada · PnL ${pnlLabel}`, variant);
+                }
+                if (typeof notifyTradeClosed === 'function') {
+                  notifyTradeClosed(trade);
+                }
+                return;
+              }
+              if (event === 'bot_status') {
+                const tradingActive = payload && payload.trading_active;
+                if (typeof window.updateTradingControls === 'function') {
+                  window.updateTradingControls(Boolean(tradingActive));
+                }
+                if (globalState) {
+                  globalState.connectionHealthy = true;
+                  globalState.tradingActive = Boolean(tradingActive);
+                }
+              }
+            } catch (error) {
+              console.error('pybridge emit error', error);
+            }
+          },
+        };
+      })();
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js" integrity="sha384-KA7m0DwgQGmeRC6Xre3hJO+ZxpanOauVh4Czdqbg8lDKJ3bZZYVYmP+y4F31x40L" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
