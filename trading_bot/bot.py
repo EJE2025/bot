@@ -46,7 +46,6 @@ from . import (
     execution,
     strategy,
     predictive_model,
-    webapp,
     notify,
     optimizer,
     permissions,
@@ -97,10 +96,6 @@ if _EVENTLET_IMPORT_ERROR:
     )
 
 
-_broadcast_trades_refresh = getattr(webapp, "broadcast_trades_refresh", None)
-_socketio_emit = getattr(webapp, "_emit", None)
-
-
 def _parse_snapshot_interval(raw: str | None) -> int:
     try:
         value = int(raw) if raw is not None else 60
@@ -113,6 +108,43 @@ _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
     os.getenv("EXCEL_SNAPSHOT_INTERVAL")
 )
 _last_excel_snapshot = 0.0
+
+
+def _notify_dashboard_trade_opened(
+    trade_id: str,
+    *,
+    trade_details: dict | None = None,
+) -> dict | None:
+    """Emit dashboard events after a trade is opened."""
+
+    try:
+        # Import lazily to avoid capturing stale references during module import.
+        from . import webapp  # noqa: WPS433 - delayed import by design
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug(
+            "No se pudo cargar el módulo webapp para notificar %s: %s",
+            trade_id,
+            exc,
+        )
+        return trade_details or find_trade(trade_id=trade_id)
+
+    details = trade_details or find_trade(trade_id=trade_id)
+
+    try:
+        broadcast = getattr(webapp, "broadcast_trades_refresh", None)
+        if callable(broadcast):
+            broadcast()
+        socketio_emit = getattr(webapp, "_emit", None)
+        if callable(socketio_emit) and details:
+            socketio_emit("trade_updated", {"trade": details})
+    except Exception as exc:  # pragma: no cover - notification best-effort
+        logger.debug(
+            "No se pudo notificar la apertura de %s al dashboard: %s",
+            trade_id,
+            exc,
+        )
+
+    return details
 
 
 class ModelPerformanceMonitor:
@@ -710,15 +742,11 @@ def open_new_trade(signal: dict):
             update_trade(trade["trade_id"], open_time=opened_at)
             set_trade_state(trade["trade_id"], TradeState.OPEN)
             save_trades()
-            trade_details = find_trade(trade_id=trade["trade_id"])
-            try:
-                if callable(_broadcast_trades_refresh):
-                    _broadcast_trades_refresh()
-                if trade_details and callable(_socketio_emit):
-                    _socketio_emit("trade_updated", {"trade": trade_details})
-            except Exception as exc:
-                logger.debug("No se pudo notificar la apertura de %s: %s", symbol, exc)
-            return trade_details
+            details = find_trade(trade_id=trade["trade_id"])
+            notified = _notify_dashboard_trade_opened(
+                trade["trade_id"], trade_details=details
+            )
+            return notified or details
 
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
         if status == "filled":
@@ -746,15 +774,9 @@ def open_new_trade(signal: dict):
                     update_trade(trade["trade_id"], **updates)
 
         save_trades()
-        trade_details = find_trade(trade_id=trade["trade_id"])
-        try:
-            if callable(_broadcast_trades_refresh):
-                _broadcast_trades_refresh()
-            if trade_details and callable(_socketio_emit):
-                _socketio_emit("trade_updated", {"trade": trade_details})
-        except Exception as exc:
-            logger.debug("No se pudo notificar la apertura de %s: %s", symbol, exc)
-        return trade_details
+        details = find_trade(trade_id=trade["trade_id"])
+        notified = _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details)
+        return notified or details
 
     except permissions.PermissionError as exc:
         logger.error("Permission denied opening %s: %s", symbol, exc)
@@ -992,6 +1014,8 @@ def run():
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
+    from . import webapp  # noqa: WPS433 - delayed import to avoid circular issues
+
     Thread(
         target=webapp.start_dashboard,
         args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
