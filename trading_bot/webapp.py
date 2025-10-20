@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import os
+import queue
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -27,6 +28,7 @@ else:
 try:
     from flask import (
         Flask,
+        Response,
         jsonify,
         redirect,
         render_template,
@@ -131,6 +133,50 @@ if Flask:
         else None
     )
 
+    _connected_clients = 0
+    _connected_lock = threading.Lock()
+
+    def _inc_clients() -> None:
+        global _connected_clients
+        with _connected_lock:
+            _connected_clients += 1
+
+    def _dec_clients() -> None:
+        global _connected_clients
+        with _connected_lock:
+            _connected_clients = max(0, _connected_clients - 1)
+
+    _sse_clients: set[queue.Queue[str]] = set()
+    _sse_lock = threading.Lock()
+
+    def _sse_register() -> queue.Queue[str]:
+        client_queue: queue.Queue[str] = queue.Queue()
+        with _sse_lock:
+            _sse_clients.add(client_queue)
+        return client_queue
+
+    def _sse_unregister(client_queue: queue.Queue[str]) -> None:
+        with _sse_lock:
+            _sse_clients.discard(client_queue)
+
+    def _push_to_sse(event: str, payload: Any) -> None:
+        try:
+            data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            logger.debug("No se pudo serializar payload para SSE: %s", event)
+            return
+
+        message = f"event: {event}\ndata: {data}\n\n"
+        with _sse_lock:
+            stale_clients: list[queue.Queue[str]] = []
+            for client_queue in _sse_clients:
+                try:
+                    client_queue.put_nowait(message)
+                except Exception:
+                    stale_clients.append(client_queue)
+            for client_queue in stale_clients:
+                _sse_clients.discard(client_queue)
+
     if LoginManager:
         _AUTH_ENABLED = bool(
             config.DASHBOARD_REQUIRE_AUTH or _default_admin_created or _existing_users
@@ -174,12 +220,14 @@ if Flask:
                 return
 
             logger.info("WS connect: %s", getattr(request, "sid", "?"))
+            _inc_clients()
             emit("bot_status", {"trading_active": bool(getattr(config, "AUTO_TRADE", True))})
             emit("trades_refresh", _trades_with_metrics())
 
         @socketio.on("disconnect", namespace="/ws")
         def _ws_disconnect():  # pragma: no cover - relies on Socket.IO runtime
             logger.info("WS disconnect: %s", getattr(request, "sid", "?"))
+            _dec_clients()
 
     @app.teardown_appcontext
     def _cleanup_session(exception: Exception | None) -> None:  # pragma: no cover - glue code
@@ -432,6 +480,7 @@ if Flask:
                 "ok": True,
                 "socketio": bool(socketio is not None),
                 "auto_trade": bool(getattr(config, "AUTO_TRADE", True)),
+                "ws_clients": _connected_clients,
             }
         )
 
@@ -489,14 +538,38 @@ if Flask:
     def _emit(event: str, payload: Any) -> None:
         if socketio:
             socketio.emit(event, payload, namespace="/ws")
+        _push_to_sse(event, payload)
         _push_to_webview(event, payload)
 
     def broadcast_trades_refresh() -> None:
         """Emit a trades refresh event if Socket.IO is active."""
 
-        if not socketio:
-            return
         _emit("trades_refresh", _trades_with_metrics())
+
+    @app.get("/events")
+    def sse_stream():
+        def generate():
+            client_queue = _sse_register()
+            try:
+                initial_status = {"trading_active": bool(getattr(config, "AUTO_TRADE", True))}
+                yield "event: bot_status\n"
+                yield f"data: {json.dumps(initial_status, ensure_ascii=False, separators=(",", ":"))}\n\n"
+                yield "event: trades_refresh\n"
+                yield f"data: {json.dumps(_trades_with_metrics(), ensure_ascii=False, separators=(",", ":"))}\n\n"
+                while True:
+                    chunk = client_queue.get()
+                    if chunk is None:
+                        break
+                    yield chunk
+            finally:
+                _sse_unregister(client_queue)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+        return Response(generate(), mimetype="text/event-stream", headers=headers)
 
     @app.post("/api/trades/<trade_id>/close")
     @_maybe_login_required
@@ -719,6 +792,9 @@ if Flask:
             app.run(host=host, port=port)
 else:
     socketio = None
+
+    def _push_to_sse(_event: str, _payload: Any) -> None:
+        return None
 
     def broadcast_trades_refresh() -> None:
         """Fallback helper when the dashboard is unavailable."""

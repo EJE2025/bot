@@ -261,6 +261,10 @@ const state = {
 let pnlChart = null;
 let socket = null;
 let socketConnectGuard = null;
+let eventSource = null;
+let sseFallbackTimer = null;
+let fallbackRefreshTimer = null;
+let realtimeTransport = 'socket';
 let partialModal = null;
 let partialTradeContext = null;
 let notificationsRequested = false;
@@ -891,8 +895,18 @@ function updateTradingControls(isActive) {
   if (typeof isActive === 'boolean') {
     state.tradingActive = isActive;
     if (state.connectionHealthy) {
-      const label = isActive ? 'En vivo' : 'Pausado';
-      const variant = isActive ? 'success' : 'warning';
+      let label;
+      let variant;
+      if (realtimeTransport === 'sse') {
+        label = isActive ? 'En vivo (SSE)' : 'Pausado (SSE)';
+        variant = isActive ? 'info' : 'warning';
+      } else if (realtimeTransport === 'socket') {
+        label = isActive ? 'En vivo' : 'Pausado';
+        variant = isActive ? 'success' : 'warning';
+      } else {
+        label = isActive ? 'En vivo (API)' : 'Pausado';
+        variant = isActive ? 'info' : 'warning';
+      }
       setStatus(label, variant);
     }
   }
@@ -2710,6 +2724,149 @@ function removeTradeFromState(tradeId) {
   }
 }
 
+function handleTradesRefresh(trades) {
+  if (!Array.isArray(trades)) {
+    return;
+  }
+  state.trades = trades;
+  renderTrades();
+}
+
+function handleTradeUpdated(trade) {
+  if (trade) {
+    updateTradeInState(trade);
+  }
+}
+
+function handleTradeClosed(trade) {
+  if (!trade) {
+    return;
+  }
+  const tradeId = getTradeId(trade);
+  removeTradeFromState(tradeId);
+  const pnlValue = Number(trade.realized_pnl ?? trade.profit ?? 0);
+  const pnlLabel = formatPnL(pnlValue);
+  const variant = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'success' : 'warning';
+  showToast(`Operación ${trade.symbol || tradeId} cerrada · PnL ${pnlLabel}`, variant);
+  notifyTradeClosed(trade);
+}
+
+function handleBotStatus(tradingActive) {
+  if (typeof tradingActive !== 'boolean') {
+    return;
+  }
+  state.connectionHealthy = true;
+  updateTradingControls(Boolean(tradingActive));
+}
+
+function clearSseFallbackTimer() {
+  if (sseFallbackTimer) {
+    window.clearTimeout(sseFallbackTimer);
+    sseFallbackTimer = null;
+  }
+}
+
+function scheduleFallbackRefresh(delay = 0) {
+  if (fallbackRefreshTimer) {
+    return;
+  }
+  fallbackRefreshTimer = window.setTimeout(() => {
+    fallbackRefreshTimer = null;
+    refreshDashboard(false);
+  }, Math.max(0, delay));
+}
+
+function stopEventStream() {
+  if (eventSource && typeof eventSource.close === 'function') {
+    eventSource.close();
+  }
+  eventSource = null;
+}
+
+function startEventStream() {
+  if (!window.EventSource || eventSource) {
+    return;
+  }
+  clearSseFallbackTimer();
+  const endpoint = resolveApiUrl('/events');
+  try {
+    eventSource = new EventSource(endpoint);
+  } catch (error) {
+    console.error('No se pudo iniciar la conexión SSE', error);
+    eventSource = null;
+    return;
+  }
+  eventSource.onopen = () => {
+    realtimeTransport = 'sse';
+    state.connectionHealthy = true;
+    updateTradingControls(state.tradingActive);
+    const label = state.tradingActive ? 'En vivo (SSE)' : 'Pausado (SSE)';
+    const variant = state.tradingActive ? 'info' : 'warning';
+    setStatus(label, variant);
+    scheduleFallbackRefresh(250);
+  };
+  eventSource.onerror = () => {
+    stopEventStream();
+    realtimeTransport = 'offline';
+    state.connectionHealthy = false;
+    setStatus('Desconectado', 'danger');
+    updateTradingControls(state.tradingActive);
+    scheduleEventStreamFallback(true);
+    scheduleFallbackRefresh(500);
+  };
+  eventSource.addEventListener('trades_refresh', (event) => {
+    try {
+      const payload = JSON.parse(event.data || '[]');
+      handleTradesRefresh(payload);
+    } catch (error) {
+      console.error('No se pudo procesar trades_refresh SSE', error);
+    }
+  });
+  eventSource.addEventListener('trade_updated', (event) => {
+    try {
+      const data = JSON.parse(event.data || '{}');
+      const trade = data && (data.trade || data);
+      handleTradeUpdated(trade);
+    } catch (error) {
+      console.error('No se pudo procesar trade_updated SSE', error);
+    }
+  });
+  eventSource.addEventListener('trade_closed', (event) => {
+    try {
+      const data = JSON.parse(event.data || '{}');
+      const trade = data && (data.trade || data);
+      handleTradeClosed(trade);
+    } catch (error) {
+      console.error('No se pudo procesar trade_closed SSE', error);
+    }
+  });
+  eventSource.addEventListener('bot_status', (event) => {
+    try {
+      const data = JSON.parse(event.data || '{}');
+      handleBotStatus(data?.trading_active);
+    } catch (error) {
+      console.error('No se pudo procesar bot_status SSE', error);
+    }
+  });
+}
+
+function scheduleEventStreamFallback(immediate = false) {
+  if (!window.EventSource) {
+    return;
+  }
+  if (eventSource) {
+    return;
+  }
+  clearSseFallbackTimer();
+  const delay = immediate ? 0 : 4000;
+  sseFallbackTimer = window.setTimeout(() => {
+    sseFallbackTimer = null;
+    if (!socket || !socket.connected) {
+      startEventStream();
+    }
+  }, delay);
+}
+
 function clearSocketConnectGuard() {
   if (socketConnectGuard) {
     window.clearTimeout(socketConnectGuard);
@@ -2754,6 +2911,9 @@ function connectSocket() {
       state.connectionHealthy = false;
       setStatus('Desconectado', 'danger');
       updateTradingControls(state.tradingActive);
+      realtimeTransport = 'offline';
+      scheduleEventStreamFallback(true);
+      scheduleFallbackRefresh(500);
     }, 500);
     return;
   }
@@ -2761,13 +2921,17 @@ function connectSocket() {
   const { url, path } = resolveSocketUrl();
   setStatus('Sincronizando…', 'warning');
   state.connectionHealthy = false;
+  realtimeTransport = 'socket';
   updateTradingControls(state.tradingActive);
   try {
     socket = window.io(url, {
       path,
       transports: ['websocket', 'polling'],
-      timeout: 8000,
-      reconnectionAttempts: 5,
+      timeout: 20000,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
       withCredentials: false,
     });
   } catch (error) {
@@ -2775,16 +2939,26 @@ function connectSocket() {
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
+    realtimeTransport = 'offline';
+    scheduleEventStreamFallback(true);
+    scheduleFallbackRefresh(500);
     return;
   }
+  scheduleEventStreamFallback(false);
   socketConnectGuard = window.setTimeout(() => {
     socketConnectGuard = null;
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
+    realtimeTransport = 'offline';
+    scheduleEventStreamFallback(true);
+    scheduleFallbackRefresh(500);
   }, 7000);
   socket.on('connect', () => {
     clearSocketConnectGuard();
+    clearSseFallbackTimer();
+    stopEventStream();
+    realtimeTransport = 'socket';
     state.connectionHealthy = true;
     setStatus('En vivo', 'success');
     updateTradingControls(state.tradingActive);
@@ -2794,6 +2968,9 @@ function connectSocket() {
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
+    realtimeTransport = 'offline';
+    scheduleEventStreamFallback(true);
+    scheduleFallbackRefresh(500);
   });
   socket.on('connect_error', (err) => {
     clearSocketConnectGuard();
@@ -2801,36 +2978,18 @@ function connectSocket() {
     state.connectionHealthy = false;
     setStatus('Desconectado', 'danger');
     updateTradingControls(state.tradingActive);
+    realtimeTransport = 'offline';
+    scheduleEventStreamFallback(true);
+    scheduleFallbackRefresh(500);
   });
-  socket.on('trades_refresh', (trades) => {
-    if (Array.isArray(trades)) {
-      state.trades = trades;
-      renderTrades();
-    }
-  });
+  socket.on('trades_refresh', handleTradesRefresh);
   socket.on('trade_updated', ({ trade }) => {
-    if (trade) {
-      updateTradeInState(trade);
-    }
+    handleTradeUpdated(trade);
   });
   socket.on('trade_closed', ({ trade }) => {
-    if (trade) {
-      const tradeId = getTradeId(trade);
-      removeTradeFromState(tradeId);
-      const pnlValue = Number(trade.realized_pnl ?? trade.profit ?? 0);
-      const pnlLabel = formatPnL(pnlValue);
-      const variant = Number.isFinite(pnlValue) && pnlValue >= 0 ? 'success' : 'warning';
-      showToast(
-        `Operación ${trade.symbol || tradeId} cerrada · PnL ${pnlLabel}`,
-        variant,
-      );
-      notifyTradeClosed(trade);
-    }
+    handleTradeClosed(trade);
   });
   socket.on('bot_status', ({ trading_active: tradingActive }) => {
-    if (typeof tradingActive === 'boolean') {
-      state.connectionHealthy = true;
-      updateTradingControls(Boolean(tradingActive));
-    }
+    handleBotStatus(tradingActive);
   });
 }
