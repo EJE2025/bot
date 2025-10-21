@@ -126,8 +126,7 @@ if Flask:
             app,
             cors_allowed_origins="*",
             async_mode=ASYNC_MODE,
-            ping_timeout=30,
-            ping_interval=15,
+            ping_timeout=60,
         )
         if SocketIO
         else None
@@ -209,7 +208,7 @@ if Flask:
         _AUTH_ENABLED = False
 
     if socketio:
-        @socketio.on("connect", namespace="/ws")
+        @socketio.on("connect")
         def _ws_connect():  # pragma: no cover - relies on Socket.IO runtime
             if (
                 _AUTH_ENABLED
@@ -224,7 +223,7 @@ if Flask:
             emit("bot_status", {"trading_active": bool(getattr(config, "AUTO_TRADE", True))})
             emit("trades_refresh", _trades_with_metrics())
 
-        @socketio.on("disconnect", namespace="/ws")
+        @socketio.on("disconnect")
         def _ws_disconnect():  # pragma: no cover - relies on Socket.IO runtime
             logger.info("WS disconnect: %s", getattr(request, "sid", "?"))
             _dec_clients()
@@ -537,7 +536,7 @@ if Flask:
 
     def _emit(event: str, payload: Any) -> None:
         if socketio:
-            socketio.emit(event, payload, namespace="/ws")
+            socketio.emit(event, payload)
         _push_to_sse(event, payload)
         _push_to_webview(event, payload)
 
@@ -787,7 +786,12 @@ if Flask:
     def start_dashboard(host: str, port: int):
         """Run the Flask dashboard in real-time with trade data."""
         if socketio:
-            socketio.run(app, host=host, port=port)
+            socketio.run(
+                app,
+                host=host,
+                port=port,
+                allow_unsafe_werkzeug=True,
+            )
         else:
             app.run(host=host, port=port)
 else:
