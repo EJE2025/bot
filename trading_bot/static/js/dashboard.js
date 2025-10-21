@@ -223,9 +223,14 @@ function sanitizeSocketPath(raw) {
 
 function resolveSocketUrl() {
   const defaultIoPath = '/socket.io';
+  const defaultNamespace = '/ws';
 
-  const rawPath = sanitizeSocketPath(appConfig.socketPath) || defaultIoPath;
-  const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  const rawNamespace = sanitizeSocketPath(appConfig.socketPath);
+  const namespace = rawNamespace
+    ? rawNamespace.startsWith('/')
+      ? rawNamespace
+      : `/${rawNamespace}`
+    : defaultNamespace;
 
   let socketBase = appConfig.socketBase;
   if (!socketBase && window.location?.origin) {
@@ -233,10 +238,11 @@ function resolveSocketUrl() {
   }
 
   const sanitizedBase = sanitizeSocketBase(socketBase);
+  const baseWithNamespace = sanitizedBase ? `${sanitizedBase}${namespace}` : namespace;
 
   return {
-    url: sanitizedBase,
-    path: normalizedPath || defaultIoPath,
+    url: baseWithNamespace,
+    path: defaultIoPath,
   };
 }
 
