@@ -146,11 +146,8 @@ function initAppConfig() {
   appConfig.apiBase = (dataset.apiBase || '').replace(/\/$/, '');
   appConfig.analyticsGraphql = (dataset.analyticsGraphql || '').trim();
   appConfig.aiEndpoint = (dataset.aiEndpoint || '').trim();
-  appConfig.socketBase = (dataset.socketBase || '').trim();
-  if (appConfig.socketBase) {
-    appConfig.socketBase = appConfig.socketBase.replace(/\/+$/, '');
-  }
-  appConfig.socketPath = (dataset.socketPath || '').trim();
+  appConfig.socketBase = sanitizeSocketBase(dataset.socketBase || '');
+  appConfig.socketPath = sanitizeSocketPath(dataset.socketPath || '');
   try {
     const parsed = dataset.serviceLinks ? JSON.parse(dataset.serviceLinks) : [];
     if (Array.isArray(parsed)) {
@@ -192,18 +189,50 @@ function resolveApiUrl(path) {
   return `${base}${normalized}`;
 }
 
+function sanitizeSocketBase(raw) {
+  if (!raw) {
+    return '';
+  }
+  const trimmed = `${raw}`.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const noFragment = trimmed.split('#', 1)[0];
+  const noQuery = noFragment.split('?', 1)[0];
+  if (!noQuery) {
+    return '';
+  }
+  return noQuery.replace(/\/+$/, '');
+}
+
+function sanitizeSocketPath(raw) {
+  if (!raw) {
+    return '';
+  }
+  const trimmed = `${raw}`.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const noFragment = trimmed.split('#', 1)[0];
+  const noQuery = noFragment.split('?', 1)[0];
+  if (!noQuery) {
+    return '';
+  }
+  return noQuery;
+}
+
 function resolveSocketUrl() {
   const defaultEndpoint = '/ws';
   const defaultIoPath = '/socket.io';
 
-  const rawEndpoint = (appConfig.socketPath || '').trim();
+  const rawEndpoint = appConfig.socketPath;
   const normalizedEndpoint = rawEndpoint
     ? rawEndpoint.startsWith('/')
       ? rawEndpoint.replace(/\/+$/, '') || defaultEndpoint
       : `/${rawEndpoint.replace(/\/+$/, '')}`
     : defaultEndpoint;
 
-  let socketBase = (appConfig.socketBase || '').trim();
+  let socketBase = appConfig.socketBase;
   if (!socketBase && window.location?.origin) {
     socketBase = window.location.origin;
   }
@@ -212,7 +241,7 @@ function resolveSocketUrl() {
     return { url: normalizedEndpoint, path: defaultIoPath };
   }
 
-  const sanitizedBase = socketBase.replace(/\/+$/, '');
+  const sanitizedBase = sanitizeSocketBase(socketBase);
   return { url: `${sanitizedBase}${normalizedEndpoint}`, path: defaultIoPath };
 }
 
