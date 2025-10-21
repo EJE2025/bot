@@ -21,6 +21,9 @@ _GEVENT_IMPORT_ERROR: str | None = None
 
 if USE_GEVENT:
     try:  # pragma: no cover - optional dependency en producción
+        from gevent import monkey  # type: ignore[import-not-found]
+
+        monkey.patch_all()
         import gevent  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - optional dependency
         gevent = None  # type: ignore[assignment]
