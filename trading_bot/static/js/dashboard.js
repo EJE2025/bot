@@ -233,9 +233,12 @@ function resolveSocketUrl() {
   }
 
   const sanitizedBase = sanitizeSocketBase(socketBase);
+  const fallbackBase = 'http://127.0.0.1:5000';
+  const isHttpBase = sanitizedBase && /^https?:/i.test(sanitizedBase);
+  const finalBase = isHttpBase ? sanitizedBase : fallbackBase;
 
   return {
-    url: sanitizedBase,
+    url: finalBase,
     path: normalizedPath || defaultIoPath,
   };
 }
@@ -2950,7 +2953,8 @@ function connectSocket() {
   try {
     const socketOptions = {
       path,
-      transports: ['websocket', 'polling'],
+      transports: ['websocket'],
+      upgrade: false,
       timeout: 20000,
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -2959,7 +2963,8 @@ function connectSocket() {
       withCredentials: false,
     };
 
-    socket = url ? window.io(url, socketOptions) : window.io(socketOptions);
+    const targetUrl = url || 'http://127.0.0.1:5000';
+    socket = window.io(targetUrl, socketOptions);
   } catch (error) {
     console.error('No se pudo inicializar la conexión de socket', error);
     state.connectionHealthy = false;
