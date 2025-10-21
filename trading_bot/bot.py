@@ -4,25 +4,22 @@ import logging
 import os
 import socket
 
-USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
-_EVENTLET_IMPORT_ERROR: str | None = None
+_raw_use_gevent = os.getenv("USE_GEVENT")
+if _raw_use_gevent is None:
+    _raw_use_gevent = os.getenv("USE_EVENTLET", "1")
 
-if USE_EVENTLET:
-    try:
-        import eventlet  # type: ignore[import-not-found]
+USE_GEVENT = _raw_use_gevent.strip().lower() not in {"0", "false", "no", "off"}
+_GEVENT_IMPORT_ERROR: str | None = None
+
+if USE_GEVENT:
+    try:  # pragma: no cover - optional dependency
+        import gevent  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - optional dependency
-        eventlet = None  # type: ignore[assignment]
-        USE_EVENTLET = False
-        _EVENTLET_IMPORT_ERROR = str(exc)
-    else:  # pragma: no cover - only executed when eventlet is installed
-        eventlet.monkey_patch(
-            os=True,
-            select=True,
-            socket=True,
-            thread=True,
-            time=True,
-            subprocess=True,
-        )
+        gevent = None  # type: ignore[assignment]
+        USE_GEVENT = False
+        _GEVENT_IMPORT_ERROR = str(exc)
+else:
+    gevent = None  # type: ignore[assignment]
 
 import sys
 import time
@@ -92,10 +89,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-if globals().get("_EVENTLET_IMPORT_ERROR"):
+if globals().get("_GEVENT_IMPORT_ERROR"):
     logger.warning(
-        "USE_EVENTLET=1 pero eventlet no está instalado: %s. Se usará el modo threading.",
-        globals()["_EVENTLET_IMPORT_ERROR"],
+        "USE_GEVENT=1 pero gevent no está instalado: %s. Se usará el modo threading.",
+        globals()["_GEVENT_IMPORT_ERROR"],
     )
 
 
