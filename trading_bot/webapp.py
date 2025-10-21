@@ -12,18 +12,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-USE_EVENTLET = os.getenv("USE_EVENTLET", "1") == "1"
-_EVENTLET_IMPORT_ERROR: str | None = None
+_raw_use_gevent = os.getenv("USE_GEVENT")
+if _raw_use_gevent is None:
+    _raw_use_gevent = os.getenv("USE_EVENTLET", "1")
 
-if USE_EVENTLET:
+USE_GEVENT = _raw_use_gevent.strip().lower() not in {"0", "false", "no", "off"}
+_GEVENT_IMPORT_ERROR: str | None = None
+
+if USE_GEVENT:
     try:  # pragma: no cover - optional dependency en producción
-        import eventlet  # type: ignore[import-not-found]
-    except ImportError as exc:  # pragma: no cover - eventlet opcional
-        eventlet = None  # type: ignore[assignment]
-        USE_EVENTLET = False
-        _EVENTLET_IMPORT_ERROR = str(exc)
+        import gevent  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        gevent = None  # type: ignore[assignment]
+        USE_GEVENT = False
+        _GEVENT_IMPORT_ERROR = str(exc)
 else:
-    eventlet = None  # type: ignore[assignment]
+    gevent = None  # type: ignore[assignment]
 
 try:
     from flask import (
@@ -87,13 +91,13 @@ from trading_bot.db import init_db, remove_session
 
 logger = logging.getLogger(__name__)
 
-if _EVENTLET_IMPORT_ERROR:
+if _GEVENT_IMPORT_ERROR:
     logger.warning(
-        "USE_EVENTLET=1 pero eventlet no está instalado: %s. El dashboard usará threading.",
-        _EVENTLET_IMPORT_ERROR,
+        "USE_GEVENT=1 pero gevent no está instalado: %s. El dashboard usará threading.",
+        _GEVENT_IMPORT_ERROR,
     )
 
-ASYNC_MODE = "eventlet" if USE_EVENTLET else "threading"
+ASYNC_MODE = "gevent" if USE_GEVENT else "threading"
 
 if Flask:
     app = Flask(__name__)
