@@ -222,27 +222,22 @@ function sanitizeSocketPath(raw) {
 }
 
 function resolveSocketUrl() {
-  const defaultEndpoint = '/ws';
   const defaultIoPath = '/socket.io';
 
-  const rawEndpoint = appConfig.socketPath;
-  const normalizedEndpoint = rawEndpoint
-    ? rawEndpoint.startsWith('/')
-      ? rawEndpoint.replace(/\/+$/, '') || defaultEndpoint
-      : `/${rawEndpoint.replace(/\/+$/, '')}`
-    : defaultEndpoint;
+  const rawPath = sanitizeSocketPath(appConfig.socketPath) || defaultIoPath;
+  const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 
   let socketBase = appConfig.socketBase;
   if (!socketBase && window.location?.origin) {
     socketBase = window.location.origin;
   }
 
-  if (!socketBase) {
-    return { url: normalizedEndpoint, path: defaultIoPath };
-  }
-
   const sanitizedBase = sanitizeSocketBase(socketBase);
-  return { url: `${sanitizedBase}${normalizedEndpoint}`, path: defaultIoPath };
+
+  return {
+    url: sanitizedBase,
+    path: normalizedPath || defaultIoPath,
+  };
 }
 
 function getAnalyticsEndpoint() {
@@ -2953,7 +2948,7 @@ function connectSocket() {
   realtimeTransport = 'socket';
   updateTradingControls(state.tradingActive);
   try {
-    socket = window.io(url, {
+    const socketOptions = {
       path,
       transports: ['websocket', 'polling'],
       timeout: 20000,
@@ -2962,7 +2957,9 @@ function connectSocket() {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
       withCredentials: false,
-    });
+    };
+
+    socket = url ? window.io(url, socketOptions) : window.io(socketOptions);
   } catch (error) {
     console.error('No se pudo inicializar la conexión de socket', error);
     state.connectionHealthy = false;
