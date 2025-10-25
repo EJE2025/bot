@@ -92,7 +92,7 @@ async def proxy_bot_events(request: Request) -> StreamingResponse:
         "/events",
         headers=headers,
         params=params if params else None,
-        timeout=None,
+        timeout=httpx.Timeout(connect=5.0, read=None, write=5.0, pool=5.0),
     )
     try:
         bot_response = await exit_stack.enter_async_context(stream_cm)
