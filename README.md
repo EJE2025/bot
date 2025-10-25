@@ -57,6 +57,13 @@ python -m trading_bot.bot
 python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
 
+Los antiguos envoltorios `run_backtest.py` (cargaba `backtest.yml` + `backtest.csv`
+y ejecutaba el motor) y `train_predictive_model.py` (envoltorio CLI sobre
+`trading_bot.predictive_model`) se eliminaron para evitar duplicar lógica de
+línea de comandos. Utiliza directamente los módulos `trading_bot.backtest` y
+`trading_bot.train_model`, que exponen las mismas interfaces desde un único
+punto de mantenimiento.
+
 `get_market_data` obtiene hasta 500 velas por defecto usando el endpoint
 `/fapi/v1/klines` de Binance. Puedes ajustar el parámetro `limit` (1‑1000)
 para cargar más o menos historial. Las velas descargadas se guardan en
