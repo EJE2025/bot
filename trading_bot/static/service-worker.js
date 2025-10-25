@@ -1,11 +1,5 @@
-const cacheVersionSource =
-  self.registration?.installing?.scriptURL ||
-  self.registration?.active?.scriptURL ||
-  'bot-cache-v20240606';
-const CACHE_NAME = `bot-cache-${cacheVersionSource
-  .split('/')
-  .pop()
-  ?.replace(/[^a-z0-9_-]/gi, '-') ?? 'default'}`;
+const CACHE_VERSION = 'v20240615';
+const CACHE_NAME = `bot-cache-${CACHE_VERSION}`;
 const RESOURCES = ['/', '/static/css/dashboard.css', '/static/js/dashboard.js'];
 
 self.addEventListener('install', (event) => {
@@ -14,6 +8,7 @@ self.addEventListener('install', (event) => {
       console.error('SW install error', error);
     }),
   );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -31,7 +26,44 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') {
+    return;
+  }
+
+  const url = new URL(request.url);
+  const isSameOrigin = url.origin === self.location.origin;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+
+  if (isSameOrigin && RESOURCES.includes(url.pathname)) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+
+  if (!isSameOrigin) {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((response) => response || fetch(event.request)),
+    caches.match(request).then((cached) => cached || fetch(request)),
   );
 });
+
+async function networkFirst(request) {
+  try {
+    const response = await fetch(request);
+    const cache = await caches.open(CACHE_NAME);
+    cache.put(request, response.clone());
+    return response;
+  } catch (error) {
+    const cached = await caches.match(request);
+    if (cached) {
+      return cached;
+    }
+    throw error;
+  }
+}
