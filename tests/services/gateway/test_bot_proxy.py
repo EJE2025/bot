@@ -16,6 +16,23 @@ from services.gateway.app import BOT_SERVICE_URL, app
 TransportHandler = Callable[[httpx.Request], httpx.Response]
 
 
+class _Stream(httpx.AsyncByteStream):
+    """Simple async byte stream used to simulate SSE responses in tests."""
+
+    def __init__(self, *chunks: bytes) -> None:
+        self._chunks = chunks
+
+    def __aiter__(self):  # type: ignore[override]
+        async def _gen():
+            for chunk in self._chunks:
+                yield chunk
+
+        return _gen()
+
+    async def aclose(self) -> None:  # pragma: no cover - nothing to clean
+        return None
+
+
 async def _call_gateway(
     method: str,
     path: str,
@@ -127,3 +144,44 @@ async def test_gateway_propagates_errors(method: str, path: str, bot_path: str) 
 
     assert response.status_code == 503
     assert response.text == "bot down"
+
+
+@pytest.mark.asyncio
+async def test_gateway_proxies_events_stream() -> None:
+    payload = b"data: ping\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/events"
+        assert request.headers.get("accept") == "text/event-stream"
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache",
+            },
+            stream=_Stream(payload),
+        )
+
+    response = await _call_gateway("GET", "/events", handler)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream"
+    assert response.headers["cache-control"] == "no-cache"
+    assert await response.aread() == payload
+
+
+@pytest.mark.asyncio
+async def test_gateway_events_error_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/events"
+        return httpx.Response(
+            502,
+            headers={"content-type": "text/plain"},
+            content=b"gateway error",
+        )
+
+    response = await _call_gateway("GET", "/events", handler)
+
+    assert response.status_code == 502
+    assert await response.aread() == b"gateway error"

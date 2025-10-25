@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Mapping
+from contextlib import AsyncExitStack
+from typing import Any, AsyncGenerator, Dict, Mapping
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 ANALYTICS_URL = os.getenv("ANALYTICS_URL", "http://analytics:5002/graphql")
 AI_URL = os.getenv("AI_URL", "http://ai_service:5003")
@@ -68,6 +69,62 @@ async def _proxy_bot_request(request: Request, method: str, path: str) -> Respon
     response_headers = _filtered_headers(bot_response.headers)
     return Response(
         content=bot_response.content,
+        status_code=bot_response.status_code,
+        headers=response_headers,
+        media_type=bot_response.headers.get("content-type"),
+    )
+
+
+@app.get("/events")
+async def proxy_bot_events(request: Request) -> StreamingResponse:
+    headers = _filtered_headers(request.headers)
+    headers["accept"] = "text/event-stream"
+
+    params = dict(request.query_params)
+
+    bot_client: httpx.AsyncClient | None = getattr(app.state, "bot_client", None)
+    if bot_client is None:
+        raise HTTPException(status_code=503, detail="Bot service client not available")
+
+    exit_stack = AsyncExitStack()
+    stream_cm = bot_client.stream(
+        "GET",
+        "/events",
+        headers=headers,
+        params=params if params else None,
+        timeout=None,
+    )
+    try:
+        bot_response = await exit_stack.enter_async_context(stream_cm)
+    except httpx.RequestError as exc:  # pragma: no cover - network failure path
+        await exit_stack.aclose()
+        raise HTTPException(status_code=502, detail=f"Error connecting to bot: {exc}") from exc
+    except Exception:
+        await exit_stack.aclose()
+        raise
+
+    if bot_response.status_code != 200:
+        body = await bot_response.aread()
+        response_headers = _filtered_headers(bot_response.headers)
+        await exit_stack.aclose()
+        return Response(
+            content=body,
+            status_code=bot_response.status_code,
+            headers=response_headers,
+            media_type=bot_response.headers.get("content-type"),
+        )
+
+    response_headers = _filtered_headers(bot_response.headers)
+
+    async def event_iterator() -> AsyncGenerator[bytes, None]:
+        try:
+            async for chunk in bot_response.aiter_raw():
+                yield chunk
+        finally:
+            await exit_stack.aclose()
+
+    return StreamingResponse(
+        event_iterator(),
         status_code=bot_response.status_code,
         headers=response_headers,
         media_type=bot_response.headers.get("content-type"),
