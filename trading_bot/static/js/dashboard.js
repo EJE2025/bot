@@ -227,18 +227,39 @@ function resolveSocketUrl() {
   const rawPath = sanitizeSocketPath(appConfig.socketPath) || defaultIoPath;
   const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 
-  let socketBase = appConfig.socketBase;
-  if (!socketBase && window.location?.origin) {
-    socketBase = window.location.origin;
+  const fallbackOrigin = window.location?.origin || 'http://127.0.0.1:5000';
+  const rawBase = sanitizeSocketBase(appConfig.socketBase);
+
+  const attempts = [];
+  if (rawBase) {
+    attempts.push(rawBase);
+    if (!rawBase.includes('://') && !rawBase.startsWith('//') && /[.:]/.test(rawBase)) {
+      attempts.push(`//${rawBase}`);
+    }
+  }
+  attempts.push(fallbackOrigin);
+
+  let resolvedBase = null;
+  for (const candidate of attempts) {
+    try {
+      const parsed = new URL(candidate, fallbackOrigin);
+      if (parsed.protocol === 'ws:' || parsed.protocol === 'wss:') {
+        parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+      }
+      const trimmedPath = parsed.pathname.replace(/\/+$/, '');
+      resolvedBase = `${parsed.origin}${trimmedPath}`;
+      break;
+    } catch (error) {
+      continue;
+    }
   }
 
-  const sanitizedBase = sanitizeSocketBase(socketBase);
-  const fallbackBase = 'http://127.0.0.1:5000';
-  const isHttpBase = sanitizedBase && /^https?:/i.test(sanitizedBase);
-  const finalBase = isHttpBase ? sanitizedBase : fallbackBase;
+  if (!resolvedBase) {
+    resolvedBase = fallbackOrigin;
+  }
 
   return {
-    url: finalBase,
+    url: resolvedBase,
     path: normalizedPath || defaultIoPath,
   };
 }
