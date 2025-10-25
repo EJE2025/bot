@@ -2961,6 +2961,7 @@ function connectSocket() {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
       withCredentials: false,
+      allowEIO3: true,
     };
 
     const targetUrl = url || 'http://127.0.0.1:5000';
