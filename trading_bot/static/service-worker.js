@@ -31,6 +31,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const acceptHeader = request.headers.get('accept') || '';
+  if (acceptHeader.includes('text/event-stream')) {
+    return;
+  }
+
+  if (request.headers.get('upgrade') === 'websocket') {
+    return;
+  }
+
   const url = new URL(request.url);
   const isSameOrigin = url.origin === self.location.origin;
 
@@ -41,16 +50,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isSameOrigin && RESOURCES.includes(url.pathname)) {
     event.respondWith(networkFirst(request));
-    return;
   }
-
-  if (!isSameOrigin) {
-    return;
-  }
-
-  event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request)),
-  );
 });
 
 async function networkFirst(request) {
