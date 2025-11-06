@@ -15,8 +15,9 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Ejecución de órdenes en varios exchanges mediante `ccxt`
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
-- Panel web en `http://localhost:8000` para monitoreo en tiempo real. Los datos
-  de operaciones se consultan desde el endpoint `/api/trades`
+- Panel web accesible vía gateway en `http://localhost:8080` para monitoreo en
+  tiempo real. Los datos de operaciones se consultan desde el endpoint
+  `/api/trades`
 - La plantilla HTML del dashboard se encuentra en `trading_bot/templates/index.html` para facilitar su personalizacion.
 - Si Flask no está instalado, intentar iniciar el dashboard lanzará un `ImportError`.
 - Las operaciones abiertas se registran en `trade_manager` y el dashboard las
@@ -56,6 +57,28 @@ pip install -r requirements.txt
 python -m trading_bot.bot
 python -m trading_bot.backtest
 python -m trading_bot.train_model miarchivo.csv --target result
+```
+
+### Panel web y sincronización con el bot
+
+El dashboard obtiene las rutas de la API y del WebSocket desde las variables de
+entorno que recibe `trading_bot/webapp.py`. En despliegues con microservicios es
+imprescindible arrancar los tres servicios (`trading_engine`, `trading_bot` y
+`gateway`) y exponer el panel a través del gateway:
+
+1. Inicia los servicios con `docker-compose up` para levantar `gateway` en el
+   puerto `8080`, `trading_bot` en el `8004` del host (usa el `8000` interno) y
+   `trading_engine` en `8000`.
+2. Define `DASHBOARD_GATEWAY_BASE` (o `GATEWAY_BASE_URL`) con
+   `http://localhost:8080` antes de arrancar el bot para que el HTML inyecte la
+   URL correcta. Si usas WebSocket, configura también `DASHBOARD_SOCKET_BASE` y
+   `DASHBOARD_SOCKET_PATH` hacia el gateway o el bot.
+3. Accede siempre al panel desde `http://localhost:8080`. Si se abre en
+   `localhost:8000`, el navegador intentará llamar a `/api/*` y al socket en el
+   origen equivocado y mostrará “No se pudo contactar con la API del bot”.
+
+Con esta configuración, el dashboard se sincronizará con el bot y recibirá las
+actualizaciones en tiempo real.
 
 Los antiguos envoltorios `run_backtest.py` (cargaba `backtest.yml` + `backtest.csv`
 y ejecutaba el motor) y `train_predictive_model.py` (envoltorio CLI sobre
