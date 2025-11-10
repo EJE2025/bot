@@ -77,6 +77,35 @@ imprescindible arrancar los tres servicios (`trading_engine`, `trading_bot` y
    `localhost:8000`, el navegador intentará llamar a `/api/*` y al socket en el
    origen equivocado y mostrará “No se pudo contactar con la API del bot”.
 
+Si prefieres iniciar los servicios manualmente en lugar de usar Docker,
+arráncalos con `uvicorn` desde sus carpetas correspondientes y verifica que el
+puerto `8080` quede ocupado por el gateway (puedes comprobarlo con
+`lsof -i :8080` o `netstat -ln | grep 8080`):
+
+```bash
+# trading_bot/dashboard (sirve el HTML en 8000 por defecto)
+python -m trading_bot.bot
+
+# Pasarela FastAPI consumida por el dashboard
+cd services/gateway
+uvicorn app:app --host 0.0.0.0 --port 8080
+
+# Motor de órdenes al que reenvía el gateway
+cd ../trading_engine
+uvicorn app:app --host 0.0.0.0 --port 8001
+
+# Servicios adicionales opcionales
+cd ../analytics
+uvicorn app:app --host 0.0.0.0 --port 5002
+cd ../ai_service
+uvicorn app:app --host 0.0.0.0 --port 5003
+```
+
+El dashboard solo mostrará datos en tiempo real cuando el gateway esté
+respondiendo en `localhost:8080`; de lo contrario, el navegador seguirá cargando
+la interfaz estática servida por Flask en `localhost:8000`, pero fallará cualquier
+llamada AJAX o SSE.
+
 Con esta configuración, el dashboard se sincronizará con el bot y recibirá las
 actualizaciones en tiempo real.
 
