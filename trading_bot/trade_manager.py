@@ -74,11 +74,11 @@ def add_trade(trade, *, allow_duplicates: bool = False):
     with LOCK:
         trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
         if not allow_duplicates:
-            for existing in open_trades:
-                if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
-                    raise ValueError(
-                        f"Ya existe una operación abierta para {trade['symbol']}"
-                    )
+            current = count_trades_for_symbol(trade["symbol"])
+            if current >= config.MAX_TRADES_PER_SYMBOL:
+                raise ValueError(
+                    f"Límite de operaciones abiertas alcanzado para {trade['symbol']}"
+                )
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
