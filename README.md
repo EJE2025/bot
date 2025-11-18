@@ -149,6 +149,7 @@ variables definidas en `trading_bot/config.py`:
 
 - `ENABLE_TRADE_HISTORY_LOG` activa el registro detallado de cambios en memoria (default `0`)
 - `MAX_TRADE_HISTORY_SIZE` número máximo de eventos en memoria antes de descartar los más antiguos (default `1000`)
+- `MAX_CLOSED_TRADES` número máximo de operaciones cerradas que se mantienen en memoria antes de purgar las más antiguas (default `2000`)
 - `MAX_TRADES_PER_SYMBOL` límite de operaciones simultáneas por par (default `1`)
 - `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `5`)
 

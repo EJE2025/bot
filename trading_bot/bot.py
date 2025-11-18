@@ -790,7 +790,11 @@ def open_new_trade(signal: dict):
         return None
 
     # Register trade in pending state first
-    trade = add_trade(signal)
+    try:
+        trade = add_trade(signal)
+    except ValueError as exc:
+        logger.warning("Omitiendo apertura de %s: %s", symbol, exc)
+        return None
     try:
         if not config.DRY_RUN:
             execution.setup_leverage(execution.exchange, raw, signal["leverage"])
@@ -1072,7 +1076,10 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
                 "leverage": int(pos.get("leverage", 1)),
                 "status": "active",
             }
-            add_trade(trade)
+            try:
+                add_trade(trade)
+            except ValueError:
+                logger.debug("Operacion ya registrada para %s, omitiendo duplicado", symbol)
 
     # Eliminar operaciones locales que no existan en el exchange
     for tr in list(all_open_trades()):
