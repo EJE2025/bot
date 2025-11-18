@@ -32,9 +32,33 @@ def test_atomic_save(tmp_path, monkeypatch):
 
 
 def test_count_trades_for_symbol():
+    tm.reset_state()
     tm.add_trade({"symbol": "BTC_USDT"})
-    tm.add_trade({"symbol": "BTC_USDT"})
-    assert tm.count_trades_for_symbol("BTC_USDT") == 2
+    assert tm.count_trades_for_symbol("BTC_USDT") == 1
+
+
+def test_add_trade_rejects_duplicates():
+    tm.reset_state()
+    tm.add_trade({"symbol": "ETHUSDT"})
+    with pytest.raises(ValueError):
+        tm.add_trade({"symbol": "eth_usdt"})
+
+
+def test_closed_trades_are_pruned(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "MAX_CLOSED_TRADES", 2)
+    monkeypatch.setattr(config, "ENABLE_TRADE_HISTORY_LOG", False)
+
+    for idx in range(3):
+        tm.add_trade({"symbol": f"ASSET{idx}"})
+        trade = tm.all_open_trades()[-1]
+        tm.set_trade_state(trade["trade_id"], TradeState.OPEN)
+        tm.close_trade(trade_id=trade["trade_id"], profit=idx)
+
+    assert len(tm.all_closed_trades()) == 2
+    # The oldest trade should have been dropped
+    profits = [t.get("profit") for t in tm.all_closed_trades()]
+    assert profits == [1, 2]
 
 
 def test_set_trade_state(monkeypatch):

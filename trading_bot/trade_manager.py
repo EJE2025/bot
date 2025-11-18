@@ -41,6 +41,15 @@ def reset_state() -> None:
         _last_closed.clear()
 
 
+def _prune_closed_trades() -> None:
+    """Trim closed trades to avoid unbounded memory growth."""
+    if config.MAX_CLOSED_TRADES <= 0:
+        return
+    overflow = len(closed_trades) - config.MAX_CLOSED_TRADES
+    if overflow > 0:
+        del closed_trades[0:overflow]
+
+
 def in_cooldown(symbol: str) -> bool:
     """Return ``True`` if ``symbol`` was closed recently and is cooling
     down."""
@@ -54,10 +63,22 @@ def in_cooldown(symbol: str) -> bool:
 # --- Core functions ---
 
 
-def add_trade(trade):
-    """Añade una nueva operación a la lista de abiertas."""
+def add_trade(trade, *, allow_duplicates: bool = False):
+    """Añade una nueva operación a la lista de abiertas.
+
+    ``allow_duplicates`` permite explícitamente registrar múltiples operaciones
+    para el mismo símbolo. Por defecto se rechazan duplicados para evitar
+    inconsistencias si la estrategia genera señales repetidas.
+    """
+
     with LOCK:
         trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
+        if not allow_duplicates:
+            for existing in open_trades:
+                if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
+                    raise ValueError(
+                        f"Ya existe una operación abierta para {trade['symbol']}"
+                    )
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
@@ -315,6 +336,7 @@ def close_trade(
         trade.setdefault("quantity_remaining", 0.0)
         trade["quantity"] = trade.get("quantity_remaining", 0.0)
         closed_trades.append(trade)
+        _prune_closed_trades()
         log_history("close", trade)
         try:
             from trading_bot import history
@@ -355,6 +377,7 @@ def cancel_pending_trade(trade_id: str, reason: str = "pending_timeout") -> dict
             symbol_norm = normalize_symbol(cancelled.get("symbol", ""))
             _last_closed[symbol_norm] = time.time()
             closed_trades.append(cancelled)
+            _prune_closed_trades()
             log_history("cancel", cancelled)
             return cancelled
     logger.debug("Trade %s no encontrado para cancelar", trade_id)
@@ -436,6 +459,7 @@ def load_trades(
                     t.setdefault("status", "closed")
                     t.setdefault("state", TradeState.CLOSED.value)
                 closed_trades.extend(data)
+                _prune_closed_trades()
     except Exception as e:
         logger.error("Error cargando trades: %s", e)
 

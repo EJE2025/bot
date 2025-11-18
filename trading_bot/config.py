@@ -375,6 +375,7 @@ except (TypeError, ValueError):
 # Optional in-memory trade history auditing
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
 MAX_TRADE_HISTORY_SIZE = int(os.getenv("MAX_TRADE_HISTORY_SIZE", "1000"))
+MAX_CLOSED_TRADES = _int_env("MAX_CLOSED_TRADES", 2000, clamp=(1, 1000000))
 
 # Number of times to retry data fetch operations before falling back to cache
 DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))
