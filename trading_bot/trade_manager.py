@@ -344,6 +344,10 @@ def close_trade(
             history.append_trade(trade)
         except Exception as exc:  # pragma: no cover - defensive persistence
             logger.error("Error al guardar historial CSV: %s", exc)
+        if config.CLEAR_CLOSED_TRADES_AFTER_EXPORT:
+            closed_trades[:] = [
+                t for t in closed_trades if t.get("trade_id") != trade.get("trade_id")
+            ]
         return trade
 
 

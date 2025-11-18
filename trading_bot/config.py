@@ -376,6 +376,12 @@ except (TypeError, ValueError):
 ENABLE_TRADE_HISTORY_LOG = os.getenv("ENABLE_TRADE_HISTORY_LOG", "0") == "1"
 MAX_TRADE_HISTORY_SIZE = int(os.getenv("MAX_TRADE_HISTORY_SIZE", "1000"))
 MAX_CLOSED_TRADES = _int_env("MAX_CLOSED_TRADES", 2000, clamp=(1, 1000000))
+CLEAR_CLOSED_TRADES_AFTER_EXPORT = os.getenv(
+    "CLEAR_CLOSED_TRADES_AFTER_EXPORT", "0"
+) == "1"
+
+# Prevent repeated entries by deduplicating similar signals for a short window
+SIGNAL_IDEMPOTENCY_TTL = _int_env("SIGNAL_IDEMPOTENCY_TTL", 120, clamp=(0, 86400))
 
 # Number of times to retry data fetch operations before falling back to cache
 DATA_RETRY_ATTEMPTS = int(os.getenv("DATA_RETRY_ATTEMPTS", "3"))

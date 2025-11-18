@@ -13,7 +13,7 @@ from .indicators_talib import (
     calculate_atr,
     calculate_support_resistance,
 )
-from . import config, data, execution, predictive_model
+from . import config, data, execution, idempotency, predictive_model
 from .latency import measure_latency
 
 
@@ -495,6 +495,24 @@ def decidir_entrada(
             threshold,
         )
         return None
+
+    if config.SIGNAL_IDEMPOTENCY_TTL > 0:
+        key = idempotency.build_idempotency_key(
+            signal["symbol"],
+            signal["side"],
+            signal["entry_price"],
+            signal["quantity"],
+            bucket_seconds=int(config.SIGNAL_IDEMPOTENCY_TTL),
+        )
+        signal["idempotency_key"] = key
+        if not idempotency.should_submit(key):
+            logger.debug(
+                "[%s] señal duplicada ignorada (TTL=%ss)",
+                symbol,
+                config.SIGNAL_IDEMPOTENCY_TTL,
+            )
+            return None
+        idempotency.store_result(key, signal)
 
     log_signal_details(
         symbol,
