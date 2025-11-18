@@ -92,13 +92,27 @@ uvicorn app:app --host 0.0.0.0 --port 8080
 
 # Motor de órdenes al que reenvía el gateway
 cd ../trading_engine
-uvicorn app:app --host 0.0.0.0 --port 8001
+uvicorn app:app --host 0.0.0.0 --port 8000
 
 # Servicios adicionales opcionales
 cd ../analytics
 uvicorn app:app --host 0.0.0.0 --port 5002
 cd ../ai_service
 uvicorn app:app --host 0.0.0.0 --port 5003
+```
+
+El gateway espera por defecto encontrar los servicios en las URLs de Docker
+(`http://trading_engine:8000`, `http://trading_bot:8000`,
+`http://analytics:5002/graphql`, `http://ai_service:5003`). Si los arrancas
+con `uvicorn` en tu máquina local, define estas variables antes de iniciar el
+gateway para redirigir el tráfico correctamente:
+
+```bash
+export TRADING_URL=http://localhost:8000
+export BOT_SERVICE_URL=http://localhost:8000
+# Opcionales si usas los servicios adicionales
+export ANALYTICS_URL=http://localhost:5002/graphql
+export AI_URL=http://localhost:5003
 ```
 
 El dashboard solo mostrará datos en tiempo real cuando el gateway esté
