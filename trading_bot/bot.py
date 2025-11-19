@@ -285,7 +285,7 @@ def launch_aux_services(
         atexit.register(_cleanup_aux_processes)
         _aux_cleanup_registered = True
 
-    _schedule_dashboard_launch("127.0.0.1", gateway_port)
+    _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
 
 # No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
