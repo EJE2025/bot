@@ -34,14 +34,17 @@ def _excel_path(name: str) -> Path:
 def _remove_timezone(series: pd.Series) -> pd.Series:
     """Return ``series`` converted to naive datetimes when possible."""
     try:
-        converted = pd.to_datetime(series, errors="coerce")
+        converted = pd.to_datetime(series, errors="coerce", utc=True, format="mixed")
     except (ValueError, TypeError):
         return pd.Series(pd.NaT, index=series.index)
 
     try:
-        return converted.dt.tz_localize(None)
+        return converted.dt.tz_convert(None)
     except (AttributeError, TypeError, ValueError):
-        return converted
+        try:
+            return converted.dt.tz_localize(None)
+        except (AttributeError, TypeError, ValueError):
+            return converted
 
 
 def _to_numeric(series: pd.Series) -> pd.Series:
