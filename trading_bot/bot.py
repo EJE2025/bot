@@ -222,6 +222,7 @@ def launch_aux_services(
 
     base_url = f"http://localhost:{gateway_port}"
     env_overrides = {
+        "BOT_SERVICE_URL": f"http://127.0.0.1:{config.WEBAPP_PORT}",
         "DASHBOARD_GATEWAY_BASE": base_url,
         "DASHBOARD_SOCKET_BASE": base_url,
         "DASHBOARD_SOCKET_PATH": "/ws",
@@ -281,7 +282,7 @@ def launch_aux_services(
         atexit.register(_cleanup_aux_processes)
         _aux_cleanup_registered = True
 
-    _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
+    _schedule_dashboard_launch("127.0.0.1", gateway_port)
 
 
 # No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
