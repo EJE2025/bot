@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import time
 import logging
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from . import config, data
 from .utils import normalize_symbol
@@ -58,6 +58,39 @@ def in_cooldown(symbol: str) -> bool:
     if ts is None:
         return False
     return (time.time() - ts) < config.TRADE_COOLDOWN
+
+
+def _timestamp_to_iso(value: Any) -> str | None:
+    """Return ``value`` normalised as an ISO-8601 string or ``None``."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+        return dt.isoformat().replace("+00:00", "Z")
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return value.isoformat().replace("+00:00", "Z")
+    return None
+
+
+def _resolve_timestamp(*candidates: Any) -> str | None:
+    """Return the first valid timestamp amongst ``candidates``."""
+
+    for candidate in candidates:
+        ts = _timestamp_to_iso(candidate)
+        if ts:
+            return ts
+    return None
 
 
 # --- Core functions ---
@@ -317,9 +350,21 @@ def close_trade(
         else:
             return None
         _last_closed[normalize_symbol(trade.get("symbol"))] = time.time()
-        trade["close_time"] = (
-            datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        closed_at = datetime.now(timezone.utc)
+        trade["close_time"] = _resolve_timestamp(
+            trade.get("close_time"),
+            trade.get("close_time_dt"),
+            closed_at,
         )
+        open_time = _resolve_timestamp(
+            trade.get("open_time"),
+            trade.get("open_time_dt"),
+            trade.get("opened_at"),
+            trade.get("created_at"),
+            trade.get("created_ts"),
+        )
+        if open_time:
+            trade["open_time"] = open_time
         trade["close_reason"] = reason
         if exit_price is not None:
             trade["exit_price"] = exit_price

@@ -114,3 +114,28 @@ def test_exceeded_max_duration_detection():
     trade["max_duration_minutes"] = 180
     assert not tm.exceeded_max_duration(trade, now=now)
 
+
+def test_close_trade_populates_missing_times(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "ENABLE_TRADE_HISTORY_LOG", False)
+
+    tm.add_trade({"symbol": "ADAUSDT"})
+    trade = tm.all_open_trades()[0]
+    trade_id = trade["trade_id"]
+    tm.set_trade_state(trade_id, TradeState.OPEN)
+
+    trade["open_time"] = ""
+    created_ts = 1_700_000_000
+    trade["created_ts"] = created_ts
+
+    closed = tm.close_trade(trade_id=trade_id)
+
+    expected_open = (
+        datetime.fromtimestamp(created_ts, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    assert closed["open_time"] == expected_open
+    assert closed["close_time"]
+    assert closed["close_time"].endswith("Z")
+
