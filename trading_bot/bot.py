@@ -1,8 +1,10 @@
 import argparse
+import atexit
 import json
 import logging
 import os
 import socket
+import subprocess
 
 _raw_use_gevent = os.getenv("USE_GEVENT")
 if _raw_use_gevent is None:
@@ -110,6 +112,8 @@ _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
 _last_excel_snapshot = 0.0
 _dashboard_launch_scheduled = False
 _dashboard_launch_lock = RLock()
+_aux_service_processes: list[subprocess.Popen[Any]] = []
+_aux_cleanup_registered = False
 
 
 def _normalize_dashboard_host(host: str) -> str:
@@ -183,6 +187,101 @@ def _schedule_dashboard_launch(host: str, port: int) -> None:
         kwargs={"attempts": 30, "delay": 0.5},
         daemon=True,
     ).start()
+
+
+def _cleanup_aux_processes() -> None:
+    """Terminate any spawned background services."""
+
+    for proc in list(_aux_service_processes):
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+
+def launch_aux_services(
+    mode_key: str,
+    *,
+    gateway_port: int = 8080,
+    engine_port: int = 8001,
+) -> None:
+    """Start the FastAPI gateway and trading engine locally.
+
+    This mirrors the docker-compose setup to make the dashboard fully
+    functional without containers. It also configures environment variables so
+    the Flask dashboard points to the spawned gateway.
+    """
+
+    global _aux_cleanup_registered
+
+    if _aux_service_processes:
+        logger.info("Servicios auxiliares ya estaban activos; se reutilizarán")
+        return
+
+    base_url = f"http://localhost:{gateway_port}"
+    env_overrides = {
+        "DASHBOARD_GATEWAY_BASE": base_url,
+        "DASHBOARD_SOCKET_BASE": base_url,
+        "DASHBOARD_SOCKET_PATH": "/ws",
+        "GATEWAY_BASE_URL": base_url,
+        "TRADING_URL": f"http://127.0.0.1:{engine_port}",
+    }
+
+    os.environ.update(env_overrides)
+    config.DASHBOARD_GATEWAY_BASE = env_overrides["DASHBOARD_GATEWAY_BASE"]
+    config.DASHBOARD_SOCKET_BASE = env_overrides["DASHBOARD_SOCKET_BASE"]
+    config.DASHBOARD_SOCKET_PATH = env_overrides["DASHBOARD_SOCKET_PATH"]
+    config.ANALYTICS_GRAPHQL_URL = f"{base_url}/graphql"
+    config.AI_ASSISTANT_URL = f"{base_url}/ai/chat"
+
+    env = os.environ.copy()
+    workdir = Path(__file__).resolve().parent.parent
+
+    commands = [
+        (
+            "trading_engine",
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "services.trading_engine.app:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(engine_port),
+            ],
+        ),
+        (
+            "gateway",
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "services.gateway.app:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(gateway_port),
+            ],
+        ),
+    ]
+
+    for name, cmd in commands:
+        try:
+            proc = subprocess.Popen(cmd, env=env, cwd=workdir)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("No se pudo lanzar %s: %s", name, exc)
+            continue
+        _aux_service_processes.append(proc)
+        logger.info("Servicio %s arrancado en segundo plano", name)
+
+    if _aux_service_processes and not _aux_cleanup_registered:
+        atexit.register(_cleanup_aux_processes)
+        _aux_cleanup_registered = True
+
+    _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
 
 # No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
@@ -738,6 +837,11 @@ def parse_args():
         "--desktop",
         action="store_true",
         help="Abre el dashboard como aplicación de escritorio (PyWebview)",
+    )
+    parser.add_argument(
+        "--spawn-services",
+        action="store_true",
+        help="Arranca trading_engine y gateway en segundo plano",
     )
     return parser.parse_args()
 
@@ -1564,6 +1668,9 @@ def main() -> None:
         chosen = bot_mode.resolve_mode(None, env_mode)
 
     bot_mode.apply_mode_to_config(chosen, config)
+
+    if args.spawn_services:
+        launch_aux_services(chosen)
 
     desktop_mode = bool(getattr(args, "desktop", False))
     desktop_module = None
