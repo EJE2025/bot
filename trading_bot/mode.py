@@ -63,6 +63,14 @@ MODES: Dict[str, ModeProfile] = {
         enable_model=True,
         dry_run_testnet=True,
     ),
+    "rtestnet": ModeProfile(
+        name="rtestnet",
+        description="Alias de testnet (operativa en testnet/dry-run)",
+        enable_trading=True,
+        shadow_mode=False,
+        enable_model=True,
+        dry_run_testnet=True,
+    ),
     "backtest": ModeProfile(
         name="backtest",
         description="Ejecuta el runner de backtest y sale",
@@ -89,6 +97,7 @@ NUMERIC_MENU = [
     ("5", "testnet"),
     ("6", "backtest"),
     ("7", "maintenance"),
+    ("8", "rtestnet"),
 ]
 
 
