@@ -34,7 +34,6 @@ from statistics import mean
 from threading import RLock, Thread
 from typing import Any
 import webbrowser
-from urllib.parse import urlsplit
 
 try:
     from scipy.stats import binomtest
@@ -223,12 +222,15 @@ def launch_aux_services(
 
     base_url = f"http://localhost:{gateway_port}"
     env_overrides = {
-        "BOT_SERVICE_URL": f"http://127.0.0.1:{config.WEBAPP_PORT}",
+        # URL base del gateway (por donde se accederá al panel)
         "DASHBOARD_GATEWAY_BASE": base_url,
         "DASHBOARD_SOCKET_BASE": base_url,
         "DASHBOARD_SOCKET_PATH": "/ws",
         "GATEWAY_BASE_URL": base_url,
+        # URL interna del motor de órdenes
         "TRADING_URL": f"http://127.0.0.1:{engine_port}",
+        # URL interna del bot Flask; el gateway la usa para reenviar /api
+        "BOT_SERVICE_URL": f"http://127.0.0.1:{config.WEBAPP_PORT}",
     }
 
     os.environ.update(env_overrides)
@@ -240,10 +242,6 @@ def launch_aux_services(
 
     env = os.environ.copy()
     workdir = Path(__file__).resolve().parent.parent
-
-    parsed_gateway = urlsplit(base_url)
-    launch_host = parsed_gateway.hostname or "127.0.0.1"
-    launch_port = parsed_gateway.port or gateway_port
 
     commands = [
         (
@@ -287,7 +285,7 @@ def launch_aux_services(
         atexit.register(_cleanup_aux_processes)
         _aux_cleanup_registered = True
 
-    _schedule_dashboard_launch(launch_host, int(launch_port))
+    _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
 
 # No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
