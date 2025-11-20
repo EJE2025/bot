@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import asyncio
 import json
 import logging
 import os
@@ -57,6 +58,7 @@ from . import (
     exporter,
 )
 from . import webapp
+from .exchanges.bitget_ws import BitgetWebSocket
 from .trade_manager import (
     add_trade,
     close_trade,
@@ -1129,6 +1131,28 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     global _last_excel_snapshot
     load_trades()  # Restaurar operaciones guardadas
     permissions.audit_environment(execution.exchange)
+
+    if (
+        execution.exchange is not None
+        and config.BITGET_API_KEY
+        and config.BITGET_API_SECRET
+        and config.BITGET_PASSPHRASE
+    ):
+        ws_client = BitgetWebSocket(
+            api_key=config.BITGET_API_KEY,
+            api_secret=config.BITGET_API_SECRET,
+            passphrase=config.BITGET_PASSPHRASE,
+            trade_manager=trade_manager,
+            logger=logger,
+        )
+
+        def _run_ws_client() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.create_task(ws_client.run())
+            loop.run_forever()
+
+        Thread(target=_run_ws_client, daemon=True, name="bitget-ws").start()
 
     if execution.exchange is None:
         logger.error("Conexión al exchange no inicializada. Abortando trading.")
