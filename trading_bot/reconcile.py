@@ -9,6 +9,7 @@ from typing import Iterable
 
 from . import config, execution, trade_manager
 from .state_machine import TradeState
+from .utils import normalize_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,45 @@ def reconcile_pending_trades(trades: Iterable[dict] | None = None) -> None:
         created = float(trade.get("created_ts") or trade.get("created_at") or now)
         age = now - created
         if age >= config.PENDING_FILL_TIMEOUT_S:
+            recovered = False
+            if not config.DRY_RUN:
+                norm_symbol = normalize_symbol(symbol)
+                for pos in execution.fetch_positions():
+                    pos_symbol = normalize_symbol(pos.get("symbol", ""))
+                    try:
+                        contracts = abs(float(pos.get("contracts", 0.0)))
+                    except (TypeError, ValueError):
+                        continue
+                    if pos_symbol != norm_symbol or contracts <= 0:
+                        continue
+
+                    try:
+                        entry_price = float(pos.get("entryPrice") or 0.0)
+                    except (TypeError, ValueError):
+                        entry_price = 0.0
+
+                    logger.info(
+                        "Recovered filled order for %s via positions; marking as OPEN",
+                        symbol,
+                    )
+                    trade_manager.update_trade(
+                        trade_id,
+                        entry_price=entry_price,
+                        quantity=contracts,
+                        quantity_remaining=contracts,
+                        status="active",
+                        open_time=datetime.now(timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        order_id=pos.get("info", {}).get("orderId") or trade.get("order_id"),
+                    )
+                    trade_manager.set_trade_state(trade_id, TradeState.OPEN)
+                    recovered = True
+                    break
+
+            if recovered:
+                continue
+
             logger.info(
                 "Cancel PENDING by timeout: trade_id=%s symbol=%s age=%.1fs",
                 trade_id,
