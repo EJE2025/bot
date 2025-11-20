@@ -533,6 +533,24 @@ def load_trades(
 # --- Position reconciliation ---
 
 
+def get_live_position(symbol: str) -> dict | None:
+    """Return the current live position for ``symbol`` if present."""
+
+    norm = normalize_symbol(symbol)
+    try:
+        from . import execution
+
+        positions = execution.fetch_positions()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to fetch live positions for %s: %s", symbol, exc)
+        return None
+
+    for pos in positions:
+        if normalize_symbol(pos.get("symbol", "")) == norm:
+            return pos
+    return None
+
+
 def _position_to_trade(position: dict) -> dict | None:
     symbol = normalize_symbol(position.get("symbol", ""))
     if not symbol:
@@ -822,6 +840,10 @@ def ws_position_update(pos):
     if not symbol:
         return
 
+    size = _position_size(pos)
+    if size == 0:
+        return ws_position_closed(pos)
+
     trade = find_trade(symbol=symbol)
     if trade is None:
         trade = create_trade_from_position(pos)
@@ -829,13 +851,19 @@ def ws_position_update(pos):
         logger.debug("[WS] Ignoring position update without trade for %s", symbol)
         return
 
-    qty = _position_size(pos)
+    updates = {
+        "quantity": size,
+        "quantity_remaining": size,
+    }
     try:
         entry_price = float(pos.get("entryPrice") or 0.0)
     except (TypeError, ValueError):
-        entry_price = None
+        entry_price = 0.0
+    if entry_price > 0:
+        updates["entry_price"] = entry_price
 
-    _update_from_ws(trade, quantity=qty, entry_price=entry_price, state=TradeState.OPEN)
+    update_trade(trade.get("trade_id"), **updates)
+    set_trade_state(trade.get("trade_id"), TradeState.OPEN)
     logger.info("[WS] Sync pos %s", symbol)
 
 
