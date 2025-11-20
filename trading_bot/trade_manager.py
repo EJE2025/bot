@@ -16,6 +16,10 @@ from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
+POSITION_RECONCILE_INTERVAL = 30
+
+_reconcile_thread: threading.Thread | None = None
+
 open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
@@ -511,6 +515,169 @@ def load_trades(
                 _prune_closed_trades()
     except Exception as e:
         logger.error("Error cargando trades: %s", e)
+
+
+# --- Position reconciliation ---
+
+
+def _position_to_trade(position: dict) -> dict | None:
+    symbol = normalize_symbol(position.get("symbol", ""))
+    if not symbol:
+        return None
+
+    try:
+        qty = abs(float(position.get("contracts") or position.get("positionAmt") or 0.0))
+    except (TypeError, ValueError):
+        qty = 0.0
+    if qty == 0:
+        return None
+
+    side_raw = str(position.get("side", "")).lower()
+    is_long = side_raw == "long"
+    try:
+        entry_price = float(position.get("entryPrice") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    try:
+        stop_loss_exchange = float(position.get("stopLossPrice") or 0.0)
+    except (TypeError, ValueError):
+        stop_loss_exchange = 0.0
+    try:
+        take_profit_exchange = float(position.get("takeProfitPrice") or 0.0)
+    except (TypeError, ValueError):
+        take_profit_exchange = 0.0
+
+    stop_loss_fallback = entry_price * (0.98 if is_long else 1.02) if entry_price > 0 else 0.0
+    take_profit_fallback = entry_price * (1.02 if is_long else 0.98) if entry_price > 0 else 0.0
+
+    trade = {
+        "symbol": symbol,
+        "side": "BUY" if is_long else "SELL",
+        "quantity": qty,
+        "quantity_remaining": qty,
+        "requested_quantity": qty,
+        "original_quantity": qty,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss_exchange or stop_loss_fallback,
+        "take_profit": take_profit_exchange or take_profit_fallback,
+        "leverage": int(position.get("leverage", config.DEFAULT_LEVERAGE)),
+        "status": "active",
+        "state": TradeState.OPEN.value,
+        "open_time": _resolve_timestamp(position.get("timestamp"), position.get("datetime")),
+        "closing": False,
+    }
+    order_info = position.get("info", {})
+    if isinstance(order_info, dict) and order_info.get("orderId"):
+        trade["order_id"] = order_info.get("orderId")
+    return trade
+
+
+def reconcile_positions() -> None:
+    """Synchronise open trades with live positions on the exchange."""
+
+    if config.DRY_RUN:
+        return
+
+    from . import execution
+
+    positions = execution.fetch_positions()
+    positions_by_symbol: dict[str, dict] = {}
+    for pos in positions:
+        symbol = normalize_symbol(pos.get("symbol", ""))
+        try:
+            qty = abs(float(pos.get("contracts") or pos.get("positionAmt") or 0.0))
+        except (TypeError, ValueError):
+            qty = 0.0
+        if not symbol or qty == 0:
+            continue
+        positions_by_symbol[symbol] = pos
+
+    active_symbols = set(positions_by_symbol.keys())
+
+    for symbol, pos in positions_by_symbol.items():
+        trade = find_trade(symbol=symbol)
+        try:
+            qty = abs(float(pos.get("contracts") or pos.get("positionAmt") or 0.0))
+        except (TypeError, ValueError):
+            qty = 0.0
+        try:
+            entry_price = float(pos.get("entryPrice") or 0.0)
+        except (TypeError, ValueError):
+            entry_price = 0.0
+        leverage_raw = pos.get("leverage", config.DEFAULT_LEVERAGE)
+        try:
+            leverage = int(leverage_raw)
+        except (TypeError, ValueError):
+            leverage = config.DEFAULT_LEVERAGE
+
+        if trade is None:
+            recovered = _position_to_trade(pos)
+            if not recovered:
+                continue
+            try:
+                add_trade(recovered)
+            except ValueError:
+                logger.debug("Operacion ya registrada para %s, omitiendo duplicado", symbol)
+            else:
+                logger.info("[RECONCILE] Recovered external position: %s", symbol)
+            continue
+
+        updates = {
+            "quantity": qty,
+            "quantity_remaining": qty,
+            "entry_price": entry_price if entry_price > 0 else trade.get("entry_price"),
+            "leverage": leverage,
+            "status": "active",
+        }
+        order_info = pos.get("info", {})
+        if isinstance(order_info, dict) and order_info.get("orderId"):
+            updates["order_id"] = order_info.get("orderId")
+        update_trade(trade.get("trade_id"), **updates)
+        set_trade_state(trade.get("trade_id"), TradeState.OPEN)
+        logger.info("[RECONCILE] Synced position for %s: size=%.8f", symbol, qty)
+
+    for tr in list(all_open_trades()):
+        symbol = normalize_symbol(tr.get("symbol", ""))
+        if symbol in active_symbols:
+            continue
+        try:
+            state = TradeState(tr.get("state"))
+        except ValueError:
+            state = TradeState.PENDING
+        if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
+            try:
+                exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
+            except (TypeError, ValueError):
+                exit_price = None
+            close_trade(
+                trade_id=tr.get("trade_id"),
+                reason="reconcile_missing",
+                exit_price=exit_price,
+            )
+            logger.info("[RECONCILE] Closed orphaned trade %s", symbol)
+
+
+def start_periodic_position_reconciliation(
+    interval_seconds: int = POSITION_RECONCILE_INTERVAL,
+) -> threading.Thread:
+    """Launch a daemon thread that reconciles positions every ``interval_seconds``."""
+
+    global _reconcile_thread
+    if _reconcile_thread is not None and _reconcile_thread.is_alive():
+        return _reconcile_thread
+
+    def _loop():
+        while True:
+            try:
+                reconcile_positions()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Periodic reconcile error: %s", exc)
+            time.sleep(max(1, interval_seconds))
+
+    thread = threading.Thread(target=_loop, daemon=True, name="trade-reconcile")
+    thread.start()
+    _reconcile_thread = thread
+    return thread
 
 # --- Optional: Auditing/history ---
 
