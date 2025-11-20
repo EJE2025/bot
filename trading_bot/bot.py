@@ -1206,6 +1206,9 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     # Persist state after initial synchronization
     save_trades()
 
+    # Keep positions reconciled with the exchange every few seconds
+    trade_manager.start_periodic_position_reconciliation()
+
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
     if not use_desktop:
