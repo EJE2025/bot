@@ -261,17 +261,8 @@ def position_sizer(symbol: str, features: dict, ctx: dict | None = None) -> floa
         else:
             risk_usd = config.RISK_PER_TRADE
 
-    qty = calcular_tamano_posicion(
-        balance,
-        entry_price,
-        atr_value,
-        atr_multiplier,
-        risk_usd,
-    )
-    if qty is None:
-        return 0.0
-
-    notional = qty * entry_price
+    leverage = config.DEFAULT_LEVERAGE
+    notional = risk_usd * leverage
     lower = float(getattr(config, "MIN_POSITION_SIZE_USDT", 0.0) or 0.0)
     upper = float(getattr(config, "MAX_POSITION_SIZE_USDT", 0.0) or 0.0)
     if lower > 0:
