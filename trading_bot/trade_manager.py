@@ -16,6 +16,10 @@ from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
+POSITION_RECONCILE_INTERVAL = 30
+
+_reconcile_thread: threading.Thread | None = None
+
 open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
@@ -258,6 +262,19 @@ def _original_quantity(trade: dict) -> float:
         if value != 0:
             return abs(value)
 
+    return 0.0
+
+
+def _position_size(position: dict) -> float:
+    """Return the absolute size from a position payload."""
+
+    for key in ("holdVolume", "contracts", "positionAmt"):
+        try:
+            qty = float(position.get(key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if qty != 0:
+            return abs(qty)
     return 0.0
 
 
@@ -511,6 +528,330 @@ def load_trades(
                 _prune_closed_trades()
     except Exception as e:
         logger.error("Error cargando trades: %s", e)
+
+
+# --- Position reconciliation ---
+
+
+def _position_to_trade(position: dict) -> dict | None:
+    symbol = normalize_symbol(position.get("symbol", ""))
+    if not symbol:
+        return None
+
+    qty = _position_size(position)
+    if qty == 0:
+        return None
+
+    side_raw = str(position.get("side", "")).lower()
+    is_long = side_raw == "long"
+    try:
+        entry_price = float(position.get("entryPrice") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    try:
+        stop_loss_exchange = float(position.get("stopLossPrice") or 0.0)
+    except (TypeError, ValueError):
+        stop_loss_exchange = 0.0
+    try:
+        take_profit_exchange = float(position.get("takeProfitPrice") or 0.0)
+    except (TypeError, ValueError):
+        take_profit_exchange = 0.0
+
+    stop_loss_fallback = entry_price * (0.98 if is_long else 1.02) if entry_price > 0 else 0.0
+    take_profit_fallback = entry_price * (1.02 if is_long else 0.98) if entry_price > 0 else 0.0
+
+    trade = {
+        "symbol": symbol,
+        "side": "BUY" if is_long else "SELL",
+        "quantity": qty,
+        "quantity_remaining": qty,
+        "requested_quantity": qty,
+        "original_quantity": qty,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss_exchange or stop_loss_fallback,
+        "take_profit": take_profit_exchange or take_profit_fallback,
+        "leverage": int(position.get("leverage", config.DEFAULT_LEVERAGE)),
+        "status": "active",
+        "state": TradeState.OPEN.value,
+        "open_time": _resolve_timestamp(position.get("timestamp"), position.get("datetime")),
+        "closing": False,
+    }
+    order_info = position.get("info", {})
+    if isinstance(order_info, dict) and order_info.get("orderId"):
+        trade["order_id"] = order_info.get("orderId")
+    return trade
+
+
+def reconcile_positions() -> None:
+    """Synchronise open trades with live positions on the exchange."""
+
+    if config.DRY_RUN:
+        return
+
+    from . import execution
+
+    positions = execution.fetch_positions()
+    positions_by_symbol: dict[str, dict] = {}
+    for pos in positions:
+        symbol = normalize_symbol(pos.get("symbol", ""))
+        qty = _position_size(pos)
+        if not symbol or qty == 0:
+            continue
+        positions_by_symbol[symbol] = pos
+
+    active_symbols = set(positions_by_symbol.keys())
+
+    for symbol, pos in positions_by_symbol.items():
+        trade = find_trade(symbol=symbol)
+        qty = _position_size(pos)
+        try:
+            entry_price = float(pos.get("entryPrice") or 0.0)
+        except (TypeError, ValueError):
+            entry_price = 0.0
+        leverage_raw = pos.get("leverage", config.DEFAULT_LEVERAGE)
+        try:
+            leverage = int(leverage_raw)
+        except (TypeError, ValueError):
+            leverage = config.DEFAULT_LEVERAGE
+
+        if trade is None:
+            recovered = _position_to_trade(pos)
+            if not recovered:
+                continue
+            try:
+                add_trade(recovered)
+            except ValueError:
+                logger.debug("Operacion ya registrada para %s, omitiendo duplicado", symbol)
+            else:
+                logger.info("[RECONCILE] Recovered external position: %s", symbol)
+            continue
+
+        updates = {
+            "quantity": qty,
+            "quantity_remaining": qty,
+            "entry_price": entry_price if entry_price > 0 else trade.get("entry_price"),
+            "leverage": leverage,
+            "status": "active",
+        }
+        order_info = pos.get("info", {})
+        if isinstance(order_info, dict) and order_info.get("orderId"):
+            updates["order_id"] = order_info.get("orderId")
+        update_trade(trade.get("trade_id"), **updates)
+        set_trade_state(trade.get("trade_id"), TradeState.OPEN)
+        logger.info("[RECONCILE] Synced position for %s: size=%.8f", symbol, qty)
+
+    for tr in list(all_open_trades()):
+        symbol = normalize_symbol(tr.get("symbol", ""))
+        if symbol in active_symbols:
+            continue
+        try:
+            state = TradeState(tr.get("state"))
+        except ValueError:
+            state = TradeState.PENDING
+        if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
+            try:
+                exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
+            except (TypeError, ValueError):
+                exit_price = None
+            close_trade(
+                trade_id=tr.get("trade_id"),
+                reason="reconcile_missing",
+                exit_price=exit_price,
+            )
+            logger.info("[RECONCILE] Closed orphaned trade %s", symbol)
+
+
+def start_periodic_position_reconciliation(
+    interval_seconds: int = POSITION_RECONCILE_INTERVAL,
+) -> threading.Thread:
+    """Launch a daemon thread that reconciles positions every ``interval_seconds``."""
+
+    global _reconcile_thread
+    if _reconcile_thread is not None and _reconcile_thread.is_alive():
+        return _reconcile_thread
+
+    def _loop():
+        while True:
+            try:
+                reconcile_positions()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Periodic reconcile error: %s", exc)
+            time.sleep(max(1, interval_seconds))
+
+    thread = threading.Thread(target=_loop, daemon=True, name="trade-reconcile")
+    thread.start()
+    _reconcile_thread = thread
+    return thread
+
+
+# --- WebSocket helpers and handlers ---
+
+
+def _ws_order_to_trade(order: dict) -> dict | None:
+    symbol = normalize_symbol(order.get("symbol", ""))
+    if not symbol:
+        return None
+
+    for qty_key in ("size", "filledSize", "filledQty"):
+        try:
+            qty = abs(float(order.get(qty_key) or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if qty != 0:
+            break
+    else:
+        qty = 0.0
+
+    try:
+        entry_price = float(order.get("price") or order.get("avgPrice") or order.get("fillPrice") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+
+    if qty == 0:
+        return None
+
+    side_raw = str(order.get("side", "")).lower()
+    is_buy = side_raw in {"buy", "long"}
+    trade = {
+        "symbol": symbol,
+        "side": "BUY" if is_buy else "SELL",
+        "quantity": qty,
+        "quantity_remaining": qty,
+        "requested_quantity": qty,
+        "original_quantity": qty,
+        "entry_price": entry_price,
+        "leverage": config.DEFAULT_LEVERAGE,
+        "status": "active",
+        "state": TradeState.OPEN.value,
+        "open_time": _resolve_timestamp(order.get("timestamp"), order.get("cTime")),
+        "closing": False,
+    }
+    order_id = order.get("orderId") or order.get("id")
+    if order_id:
+        trade["order_id"] = order_id
+    return trade
+
+
+def create_trade_from_position(position: dict) -> dict | None:
+    trade = _position_to_trade(position)
+    if not trade:
+        return None
+    try:
+        return add_trade(trade)
+    except ValueError:
+        return find_trade(symbol=trade.get("symbol"))
+
+
+def create_trade_from_ws(order: dict) -> dict | None:
+    trade = _ws_order_to_trade(order)
+    if not trade:
+        return None
+    try:
+        return add_trade(trade)
+    except ValueError:
+        return find_trade(symbol=trade.get("symbol"))
+
+
+def _update_from_ws(trade: dict, *, quantity: float | None, entry_price: float | None, state: TradeState) -> None:
+    updates = {}
+    if quantity is not None and quantity > 0:
+        updates["quantity"] = quantity
+        updates["quantity_remaining"] = quantity
+    if entry_price is not None and entry_price > 0:
+        updates["entry_price"] = entry_price
+    if updates:
+        update_trade(trade.get("trade_id"), **updates)
+    set_trade_state(trade.get("trade_id"), state)
+
+
+def ws_order_filled(order):
+    symbol = normalize_symbol(order.get("symbol", ""))
+    if not symbol:
+        return
+
+    trade = find_trade(symbol=symbol)
+    if trade is None:
+        trade = create_trade_from_ws(order)
+    if trade is None:
+        logger.debug("[WS] Ignoring filled order without trade for %s", symbol)
+        return
+
+    try:
+        qty = abs(float(order.get("size") or order.get("filledSize") or order.get("filledQty") or 0.0))
+    except (TypeError, ValueError):
+        qty = None
+    try:
+        price = float(order.get("price") or order.get("avgPrice") or order.get("fillPrice") or 0.0)
+    except (TypeError, ValueError):
+        price = None
+
+    _update_from_ws(trade, quantity=qty, entry_price=price, state=TradeState.OPEN)
+    logger.info("[WS] Trade OPEN via WS %s", symbol)
+
+
+def ws_order_partial(order):
+    symbol = normalize_symbol(order.get("symbol", ""))
+    if not symbol:
+        return
+
+    trade = find_trade(symbol=symbol)
+    if trade is None:
+        logger.debug("[WS] Partial fill without existing trade for %s", symbol)
+        return
+    try:
+        qty = abs(float(order.get("filledSize") or order.get("filledQty") or order.get("size") or 0.0))
+    except (TypeError, ValueError):
+        qty = None
+    _update_from_ws(trade, quantity=qty, entry_price=None, state=TradeState.PARTIALLY_FILLED)
+    logger.info("[WS] Trade partial fill %s", symbol)
+
+
+def ws_order_cancelled(order):
+    symbol = normalize_symbol(order.get("symbol", ""))
+    if not symbol:
+        return
+    trade = find_trade(symbol=symbol)
+    if trade:
+        update_trade(trade.get("trade_id"), status="cancelled")
+        set_trade_state(trade.get("trade_id"), TradeState.FAILED)
+        logger.warning("[WS] Trade CANCELLED %s", symbol)
+
+
+def ws_position_update(pos):
+    symbol = normalize_symbol(pos.get("symbol", ""))
+    if not symbol:
+        return
+
+    trade = find_trade(symbol=symbol)
+    if trade is None:
+        trade = create_trade_from_position(pos)
+    if trade is None:
+        logger.debug("[WS] Ignoring position update without trade for %s", symbol)
+        return
+
+    qty = _position_size(pos)
+    try:
+        entry_price = float(pos.get("entryPrice") or 0.0)
+    except (TypeError, ValueError):
+        entry_price = None
+
+    _update_from_ws(trade, quantity=qty, entry_price=entry_price, state=TradeState.OPEN)
+    logger.info("[WS] Sync pos %s", symbol)
+
+
+def ws_position_closed(pos):
+    symbol = normalize_symbol(pos.get("symbol", ""))
+    if not symbol:
+        return
+
+    trade = find_trade(symbol=symbol)
+    if trade:
+        try:
+            exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
+        except (TypeError, ValueError):
+            exit_price = None
+        close_trade(trade_id=trade.get("trade_id"), reason="ws_position_closed", exit_price=exit_price)
+        logger.info("[WS] Position CLOSED %s", symbol)
 
 # --- Optional: Auditing/history ---
 
