@@ -129,6 +129,8 @@ variables definidas en `trading_bot/config.py`:
 
 - `BITGET_API_KEY`, `BITGET_API_SECRET`, `BITGET_PASSPHRASE`
 - `BINANCE_API_KEY`, `BINANCE_API_SECRET`
+- `TRADING_MODE` (`live` por defecto; usa `paper` o `testnet` para desactivar envíos reales)
+- `ALLOW_LIVE_TRADING` (`1` por defecto; ponlo a `0` para bloquear cualquier orden real incluso en modo `live`)
 - `DEFAULT_EXCHANGE` (default `bitget`)
 - `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID`
 - `DISCORD_WEBHOOK`
