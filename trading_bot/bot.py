@@ -894,6 +894,7 @@ def open_new_trade(signal: dict):
     """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
     raw = normalize_symbol(symbol).replace("_", "")
+    order_type = str(signal.get("order_type", "limit")).lower()
 
     if config.SHADOW_MODE:
         _register_shadow_trade(signal)
@@ -915,7 +916,7 @@ def open_new_trade(signal: dict):
             signal["side"],
             signal["quantity"],
             signal["entry_price"],
-            order_type="limit",
+            order_type=order_type,
         )
         if not isinstance(order, dict):
             logger.warning("Order response unexpected for %s: %s", symbol, order)
@@ -942,29 +943,29 @@ def open_new_trade(signal: dict):
             return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
-        if status == "filled":
-            set_trade_state(trade["trade_id"], TradeState.OPEN)
-        elif status == "partial":
-            # promote to OPEN first, then PARTIALLY_FILLED
-            set_trade_state(trade["trade_id"], TradeState.OPEN)
-            set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
-        # else: remain in PENDING
-
-        if status in {"filled", "partial"} and order_id:
-            details = execution.get_order_fill_details(order_id, symbol)
-            if details:
-                updates: dict[str, float] = {}
-                filled_qty = details.get("filled")
-                if filled_qty is not None and filled_qty > 0:
-                    updates["quantity"] = filled_qty
-                remaining_qty = details.get("remaining")
-                if remaining_qty is not None:
-                    updates["remaining_quantity"] = max(remaining_qty, 0.0)
-                avg_exec = details.get("average")
-                if avg_exec:
-                    updates.setdefault("entry_price", avg_exec)
-                if updates:
-                    update_trade(trade["trade_id"], **updates)
+        if order_type == "market":
+            if status == "filled":
+                set_trade_state(trade["trade_id"], TradeState.OPEN)
+            elif status == "partial":
+                # promote to OPEN first, then PARTIALLY_FILLED
+                set_trade_state(trade["trade_id"], TradeState.OPEN)
+                set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
+            if status in {"filled", "partial"} and order_id:
+                details = execution.get_order_fill_details(order_id, symbol)
+                if details:
+                    updates: dict[str, float] = {}
+                    filled_qty = details.get("filled")
+                    if filled_qty is not None and filled_qty > 0:
+                        updates["quantity"] = filled_qty
+                    remaining_qty = details.get("remaining")
+                    if remaining_qty is not None:
+                        updates["remaining_quantity"] = max(remaining_qty, 0.0)
+                    avg_exec = details.get("average")
+                    if avg_exec:
+                        updates.setdefault("entry_price", avg_exec)
+                    if updates:
+                        update_trade(trade["trade_id"], **updates)
+        # Limit/stop orders remain pending until websocket or reconciliation confirms fill
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
