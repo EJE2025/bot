@@ -868,6 +868,23 @@ def _process_shadow_positions() -> float:
     return realized
 
 
+def _refresh_open_trade_prices() -> None:
+    """Fallback polling of open trades when price streams are unavailable."""
+
+    for trade in all_open_trades():
+        symbol = trade.get("symbol") or ""
+        if not symbol:
+            continue
+
+        price_raw = data.get_current_price_ticker(symbol)
+        try:
+            price = float(price_raw)
+        except (TypeError, ValueError):
+            continue
+
+        _handle_price_event(symbol, price)
+
+
 def _price_stream_key(symbol: str) -> str:
     return f"prices:{normalize_symbol(symbol)}"
 
@@ -1813,6 +1830,8 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
             if config.SHADOW_MODE:
                 realized = _process_shadow_positions()
                 add_daily_profit(realized)
+            elif _get_redis_client() is None:
+                _refresh_open_trade_prices()
 
             save_trades()  # Guarda el estado periódicamente
             update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))
