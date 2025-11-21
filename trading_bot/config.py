@@ -255,6 +255,8 @@ FIXED_POSITION_SIZE_USDT = _positive_float_env(
 TRAILING_STOP_ENABLED = _bool_env("TRAILING_STOP_ENABLED", True)
 TRAILING_STOP_TRIGGER = _float_env("TRAILING_STOP_TRIGGER", 0.02, clamp=(0.0, 1.0))
 TRAILING_STOP_DISTANCE = _float_env("TRAILING_STOP_DISTANCE", 0.01, clamp=(0.0005, 0.5))
+TRAILING_ATR_MULT = _positive_float_env("TRAILING_ATR_MULT", 0.0, minimum=0.0)
+TRAILING_ATR_PERIOD = _int_env("TRAILING_ATR_PERIOD", 14, clamp=(1, 10_000))
 # Whether to honour the exchange ``minNotional``/minimum order size constraints.
 ENFORCE_EXCHANGE_MIN_NOTIONAL = _bool_env(
     "ENFORCE_EXCHANGE_MIN_NOTIONAL", True
