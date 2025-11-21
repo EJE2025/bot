@@ -183,7 +183,7 @@ modelo predictivo en caliente. Para activarlo:
    AUTO_TRAIN_ENABLED=1
    AUTO_TRAIN_POLL_SECONDS=30
    MIN_TRAIN_SAMPLE_SIZE=50
-   RETRAIN_INTERVAL_TRADES=300
+   RETRAIN_INTERVAL_TRADES=50
    DATASET_PATH=./data/auto_train_data.csv
    MODEL_DIR=./models
    POST_DEPLOY_MIN_SAMPLES=50
