@@ -59,6 +59,7 @@ from . import (
     mode as bot_mode,
     exporter,
 )
+from .indicators import calculate_atr
 from . import webapp
 from .exchanges.bitget_ws import BitgetWebSocket
 from .trade_manager import (
@@ -123,6 +124,9 @@ _price_consumer_stop = Event()
 _price_consumers: dict[str, Thread] = {}
 _daily_profit_lock = RLock()
 _daily_profit_value = 0.0
+_atr_lock = RLock()
+_atr_buffers: dict[str, deque[tuple[float, float, float]]] = {}
+_atr_values: dict[str, float] = {}
 
 
 def _normalize_dashboard_host(host: str) -> str:
@@ -927,7 +931,7 @@ def _price_stream_worker(symbol: str) -> None:
                 except (TypeError, ValueError):
                     continue
 
-                _handle_price_event(symbol, price)
+                _handle_price_event(symbol, price, payload)
                 try:
                     client.xack(stream, config.REDIS_CONSUMER_GROUP, msg_id)
                 except RedisError:
@@ -951,7 +955,87 @@ def _start_pending_timeout_monitor(interval: int = config.RECONCILE_INTERVAL_S) 
     Thread(target=_loop, daemon=True, name="pending-reconcile").start()
 
 
-def _handle_price_event(symbol: str, price: float) -> None:
+def _atr_buffer_size() -> int:
+    try:
+        period = int(config.TRAILING_ATR_PERIOD)
+    except Exception:
+        period = 14
+    return max(2, period + 2)
+
+
+def _normalize_payload_bool(raw: Any) -> bool | None:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return raw != 0
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _current_atr(symbol: str) -> float | None:
+    norm = normalize_symbol(symbol)
+    with _atr_lock:
+        return _atr_values.get(norm)
+
+
+def _ingest_candle_for_atr(symbol: str, payload: dict[str, Any]) -> float | None:
+    source: dict[str, Any] | None = None
+    if isinstance(payload.get("kline"), dict):
+        source = payload.get("kline")  # type: ignore[assignment]
+    elif isinstance(payload.get("candle"), dict):
+        source = payload.get("candle")  # type: ignore[assignment]
+    if source is None:
+        source = payload
+
+    high_raw = source.get("high") or source.get("h")
+    low_raw = source.get("low") or source.get("l")
+    close_raw = source.get("close") or source.get("c")
+    if high_raw is None or low_raw is None or close_raw is None:
+        return _current_atr(symbol)
+
+    closed_flag = _normalize_payload_bool(
+        source.get("closed")
+        or source.get("is_closed")
+        or source.get("candle_closed")
+        or source.get("kline_closed")
+        or source.get("final")
+        or source.get("complete")
+        or source.get("x")
+    )
+    if closed_flag is False or closed_flag is None:
+        return _current_atr(symbol)
+
+    try:
+        high = float(high_raw)
+        low = float(low_raw)
+        close = float(close_raw)
+    except (TypeError, ValueError):
+        return _current_atr(symbol)
+
+    norm = normalize_symbol(symbol)
+    with _atr_lock:
+        buffer = _atr_buffers.setdefault(norm, deque(maxlen=_atr_buffer_size()))
+        buffer.append((high, low, close))
+        period = max(1, int(getattr(config, "TRAILING_ATR_PERIOD", 14)))
+        if len(buffer) < period + 1:
+            return _atr_values.get(norm)
+
+        highs, lows, closes = zip(*buffer)
+        atr_val = calculate_atr(list(highs), list(lows), list(closes), period)
+        if atr_val is None:
+            return _atr_values.get(norm)
+        _atr_values[norm] = atr_val
+        return atr_val
+
+
+def _handle_price_event(symbol: str, price: float, payload: dict[str, Any] | None = None) -> None:
     trade = find_trade(symbol=symbol)
     if trade is None:
         return
@@ -972,6 +1056,12 @@ def _handle_price_event(symbol: str, price: float) -> None:
     take_profit_value = float(trade.get("take_profit") or 0.0)
     stop_loss_value = float(trade.get("stop_loss") or 0.0)
 
+    atr_value = None
+    if payload:
+        atr_value = _ingest_candle_for_atr(symbol, payload)
+    if atr_value is None:
+        atr_value = _current_atr(symbol)
+
     updates: dict[str, float] = {}
     try:
         high_water = float(trade.get("high_watermark") or entry_price)
@@ -981,6 +1071,14 @@ def _handle_price_event(symbol: str, price: float) -> None:
         low_water = float(trade.get("low_watermark") or entry_price)
     except (TypeError, ValueError):
         low_water = entry_price
+    try:
+        peak_price = float(trade.get("peak_price") or max(entry_price, price))
+    except (TypeError, ValueError):
+        peak_price = max(entry_price, price)
+    try:
+        trough_price = float(trade.get("trough_price") or min(entry_price, price))
+    except (TypeError, ValueError):
+        trough_price = min(entry_price, price)
 
     if price > high_water:
         updates["high_watermark"] = price
@@ -988,17 +1086,27 @@ def _handle_price_event(symbol: str, price: float) -> None:
     if price < low_water:
         updates["low_watermark"] = price
         low_water = price
+    if price > peak_price:
+        updates["peak_price"] = price
+        peak_price = price
+    if price < trough_price or trough_price == 0.0:
+        updates["trough_price"] = price
+        trough_price = price
+    if atr_value is not None:
+        updates["atr"] = atr_value
 
     candidate_stop: float | None = None
-    atr = float(trade.get("atr") or 0.0)
-    atr_mult = float(trade.get("atr_multiplier") or config.STOP_ATR_MULT)
+    atr = float(trade.get("atr") or atr_value or 0.0)
+    atr_mult = float(trade.get("atr_multiplier") or config.TRAILING_ATR_MULT or 0.0)
+    trailing_uses_atr = config.TRAILING_STOP_ENABLED and atr_mult > 0
+
     if config.TRAILING_STOP_ENABLED and entry_price > 0 and price > 0 and quantity > 0:
-        if atr > 0 and atr_mult > 0:
+        if trailing_uses_atr and atr > 0:
             if side == "BUY":
-                candidate_stop = max(entry_price, high_water - atr * atr_mult)
+                candidate_stop = max(entry_price, peak_price - atr * atr_mult)
             else:
-                candidate_stop = min(entry_price, low_water + atr * atr_mult)
-        else:
+                candidate_stop = min(entry_price, trough_price + atr * atr_mult)
+        elif not trailing_uses_atr:
             gain_pct = (
                 (price - entry_price) / entry_price
                 if side == "BUY"

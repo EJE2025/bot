@@ -133,6 +133,12 @@ def add_trade(trade, *, allow_duplicates: bool = False):
         trade.setdefault("quantity_remaining", trade.get("quantity"))
         trade.setdefault("realized_pnl", 0.0)
         trade.setdefault("closing", False)
+        try:
+            entry_price = float(trade.get("entry_price") or 0.0)
+        except (TypeError, ValueError):
+            entry_price = 0.0
+        trade.setdefault("peak_price", entry_price)
+        trade.setdefault("trough_price", entry_price if entry_price > 0 else 0.0)
         open_trades.append(trade)
         log_history("open", trade)
         return trade
