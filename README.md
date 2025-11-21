@@ -141,6 +141,15 @@ variables definidas en `trading_bot/config.py`:
 - `TEST_SYMBOLS` comma separated list of symbols to analyse when `TEST_MODE` is
   enabled
 - `MODEL_PATH` path to saved ML model (default `model.pkl`)
+- `MODEL_SEQ_PATH` ruta al modelo secuencial (Keras/PyTorch) usado para
+  procesar ventanas de velas con forma `(1, N, 4)` en el orden
+  `[close, high, low, volume]`
+- `MODEL_SEQ_WEIGHT` peso del modelo secuencial al mezclar probabilidades
+  (default `0.2`)
+- `MODEL_SEQ_WINDOW` número de velas usadas para construir la secuencia normalizada
+  (default `64`)
+- `MODEL_SEQ_INTERVAL` intervalo de las velas solicitadas para alimentar el
+  modelo secuencial (default `Min5`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
 - `RSI_PERIOD` período del RSI (default `14`)
 - `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`, `1.3` en modo test)
@@ -154,6 +163,14 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_CLOSED_TRADES` número máximo de operaciones cerradas que se mantienen en memoria antes de purgar las más antiguas (default `2000`)
 - `MAX_TRADES_PER_SYMBOL` límite de operaciones simultáneas por par (default `1`)
 - `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `5`)
+
+Los modelos secuenciales deben entrenarse con tensores de entrada de forma
+`(batch, N, 4)` siguiendo el orden `[close, high, low, volume]`. Durante la
+inferencia se aplica normalización *z-score* por característica sobre la misma
+ventana de longitud `N` (media y desviación estándar de cada columna, con un
+epsilon para evitar divisiones por cero); replica ese preprocesado en los
+pipelines de entrenamiento para asegurar que los datos en vivo tienen la misma
+escala.
 
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)

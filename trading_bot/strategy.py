@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
@@ -14,6 +15,7 @@ from .indicators_talib import (
     calculate_support_resistance,
 )
 from . import config, data, execution, idempotency, predictive_model
+from . import model_seq_loader
 from .latency import measure_latency
 
 
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 _MODEL_WEIGHT_OVERRIDE: Optional[float] = None
 _NOTIFIED_NO_MODEL = False
+_SEQ_MODEL = None
+_SEQ_MODEL_MTIME: float | None = None
+_SEQ_MODEL_PATH: str | None = None
 
 
 def smooth_series(values: Sequence[float]) -> np.ndarray:
@@ -62,18 +67,94 @@ def get_model_weight() -> float:
     return config.MODEL_WEIGHT
 
 
+def get_seq_model_weight() -> float:
+    """Weight assigned to the sequential model when blending probabilities."""
+
+    return max(0.0, min(1.0, getattr(config, "MODEL_SEQ_WEIGHT", 0.0)))
+
+
 def blend_probabilities(
     orig_prob: float,
     model_prob: float | None,
     weight: float | None = None,
+    *,
+    seq_prob: float | None = None,
+    seq_weight: float | None = None,
 ) -> float:
     """Combine heuristic and model probabilities respecting ``weight``."""
 
-    if model_prob is None:
-        return max(0.0, min(1.0, orig_prob))
-    active_weight = get_model_weight() if weight is None else max(0.0, min(1.0, weight))
-    blended = active_weight * model_prob + (1.0 - active_weight) * orig_prob
+    blended = max(0.0, min(1.0, orig_prob))
+    if model_prob is not None:
+        active_weight = get_model_weight() if weight is None else max(0.0, min(1.0, weight))
+        blended = active_weight * model_prob + (1.0 - active_weight) * blended
+    if seq_prob is not None:
+        active_seq_weight = (
+            get_seq_model_weight() if seq_weight is None else max(0.0, min(1.0, seq_weight))
+        )
+        blended = active_seq_weight * seq_prob + (1.0 - active_seq_weight) * blended
     return max(0.0, min(1.0, blended))
+
+
+def _load_seq_model_if_needed():
+    global _SEQ_MODEL, _SEQ_MODEL_MTIME, _SEQ_MODEL_PATH
+
+    seq_path = getattr(config, "MODEL_SEQ_PATH", "").strip()
+    if not seq_path:
+        return None
+
+    try:
+        mtime = os.path.getmtime(seq_path)
+    except OSError:
+        if _SEQ_MODEL is None:
+            logger.debug("Sequential model path %s not accessible", seq_path)
+        _SEQ_MODEL = None
+        _SEQ_MODEL_MTIME = None
+        _SEQ_MODEL_PATH = None
+        return None
+
+    if _SEQ_MODEL is None or _SEQ_MODEL_PATH != seq_path or (
+        _SEQ_MODEL_MTIME is None or mtime > _SEQ_MODEL_MTIME
+    ):
+        try:
+            _SEQ_MODEL = model_seq_loader.load_sequence_model(seq_path)
+            _SEQ_MODEL_PATH = seq_path
+            _SEQ_MODEL_MTIME = mtime
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to load sequential model from %s: %s", seq_path, exc)
+            _SEQ_MODEL = None
+            return None
+    return _SEQ_MODEL
+
+
+def _normalize_sequence_features(sequence: np.ndarray) -> np.ndarray:
+    mean = sequence.mean(axis=0, keepdims=True)
+    std = sequence.std(axis=0, keepdims=True)
+    return (sequence - mean) / (std + 1e-8)
+
+
+def _build_sequence_tensor(symbol: str, window: int, interval: str) -> np.ndarray | None:
+    if window <= 0:
+        return None
+    market = data.get_market_data(symbol, interval=interval, limit=window)
+    if not market:
+        return None
+
+    try:
+        volume_series = market.get("vol") or market.get("volume")
+        stacked = np.column_stack(
+            [market["close"], market["high"], market["low"], volume_series]
+        )
+    except Exception:
+        logger.debug("[%s] Incomplete market data for sequential model", symbol)
+        return None
+
+    if stacked.shape[0] < window:
+        logger.debug("[%s] Not enough candles for sequential model (got %d)", symbol, stacked.shape[0])
+        return None
+
+    windowed = np.asarray(stacked[-window:], dtype=float)
+    normalized = _normalize_sequence_features(windowed)
+    return np.expand_dims(normalized, axis=0)
 
 
 def passes_probability_threshold(
@@ -123,6 +204,8 @@ def log_signal_details(
     *,
     orig_prob: float | None = None,
     model_prob: float | None = None,
+    seq_prob: float | None = None,
+    blended_prob: float | None = None,
     prob_threshold: float | None = None,
 ) -> None:
     """Log detailed signal information and model status."""
@@ -151,6 +234,10 @@ def log_signal_details(
         logger.debug("[%s] Probabilidad heurística: %.2f%%", symbol, orig_prob * 100)
     if model_prob is not None:
         logger.debug("[%s] Probabilidad modelo: %.2f%%", symbol, model_prob * 100)
+    if seq_prob is not None:
+        logger.debug("[%s] Probabilidad modelo secuencial: %.2f%%", symbol, seq_prob * 100)
+    if blended_prob is not None:
+        logger.debug("[%s] Probabilidad combinada: %.2f%%", symbol, blended_prob * 100)
     if prob_threshold is not None:
         logger.debug(
             "[%s] Umbral mínimo de probabilidad aplicado: %.2f%%",
@@ -457,6 +544,7 @@ def decidir_entrada(
     )
 
     model_prob: float | None = None
+    seq_prob: float | None = None
     if modelo_activo is not None and risk > 0:
         X_new = pd.DataFrame([feature_snapshot])
         try:
@@ -472,8 +560,25 @@ def decidir_entrada(
         else:
             if model_prob is not None:
                 signal["model_prob"] = model_prob
+    seq_model = _load_seq_model_if_needed()
+    if seq_model is not None:
+        try:
+            seq_tensor = _build_sequence_tensor(
+                symbol, getattr(config, "MODEL_SEQ_WINDOW", 0), getattr(config, "MODEL_SEQ_INTERVAL", "Min5")
+            )
+            if seq_tensor is not None:
+                seq_pred = model_seq_loader.predict_sequence(seq_model, seq_tensor)
+                seq_prob = float(np.asarray(seq_pred).reshape(-1)[0])
+                seq_prob = max(0.0, min(1.0, seq_prob))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("[%s] sequential model prediction failed: %s", symbol, exc)
+        else:
+            if seq_prob is not None:
+                signal["seq_prob"] = seq_prob
 
-    blended_prob = blend_probabilities(prob_heuristic, model_prob)
+    blended_prob = blend_probabilities(
+        prob_heuristic, model_prob, seq_prob=seq_prob
+    )
     signal["prob_success"] = blended_prob
     final_prob = signal["prob_success"]
     threshold = probability_threshold(risk_reward, volatility=volatility_ratio)
@@ -515,6 +620,8 @@ def decidir_entrada(
         modelo_activo,
         orig_prob=prob_heuristic,
         model_prob=model_prob,
+        seq_prob=seq_prob,
+        blended_prob=blended_prob,
         prob_threshold=threshold,
     )
     return signal
