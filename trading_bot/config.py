@@ -276,6 +276,12 @@ _MODEL_PATH_DEFAULT = "models/model.pkl"
 MODEL_PATH = _str_env("MODEL_PATH", _MODEL_PATH_DEFAULT)
 MODEL_DIR = _str_env("MODEL_DIR", str(Path(MODEL_PATH).parent))
 
+# Path and parameters for sequential models (Keras/PyTorch)
+MODEL_SEQ_PATH = _str_env("MODEL_SEQ_PATH", "")
+MODEL_SEQ_WEIGHT = _float_env("MODEL_SEQ_WEIGHT", 0.2, clamp=(0.0, 1.0))
+MODEL_SEQ_WINDOW = _int_env("MODEL_SEQ_WINDOW", 64, clamp=(4, 2048))
+MODEL_SEQ_INTERVAL = _str_env("MODEL_SEQ_INTERVAL", "Min5")
+
 _DATASET_DEFAULT = os.getenv("AUTO_TRAIN_DATA_PATH", "data/auto_train_data.csv")
 DATASET_PATH = _str_env("DATASET_PATH", _DATASET_DEFAULT)
 # Backwards compatibility: keep old name pointing to the same path
@@ -423,6 +429,8 @@ if RISK_PER_TRADE <= 0:
     raise ValueError("RISK_PER_TRADE must be positive")
 if MODEL_WEIGHT < 0 or MODEL_WEIGHT > 1:
     raise ValueError("MODEL_WEIGHT must be within [0, 1]")
+if MODEL_SEQ_WEIGHT < 0 or MODEL_SEQ_WEIGHT > 1:
+    raise ValueError("MODEL_SEQ_WEIGHT must be within [0, 1]")
 if MIN_PROB_SUCCESS < 0 or MIN_PROB_SUCCESS >= 1:
     raise ValueError("MIN_PROB_SUCCESS must be within [0, 1)")
 # Model performance monitoring and drift handling
