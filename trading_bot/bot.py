@@ -32,9 +32,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
-from threading import RLock, Thread
+from threading import Event, RLock, Thread
 from typing import Any
 import webbrowser
+import redis
+from redis.exceptions import RedisError
 
 try:
     from scipy.stats import binomtest
@@ -116,6 +118,11 @@ _dashboard_launch_scheduled = False
 _dashboard_launch_lock = RLock()
 _aux_service_processes: list[subprocess.Popen[Any]] = []
 _aux_cleanup_registered = False
+_redis_client: redis.Redis | None = None
+_price_consumer_stop = Event()
+_price_consumers: dict[str, Thread] = {}
+_daily_profit_lock = RLock()
+_daily_profit_value = 0.0
 
 
 def _normalize_dashboard_host(host: str) -> str:
@@ -191,6 +198,35 @@ def _schedule_dashboard_launch(host: str, port: int) -> None:
     ).start()
 
 
+def _get_redis_client() -> redis.Redis | None:
+    global _redis_client
+
+    if _redis_client is not None:
+        return _redis_client
+
+    try:
+        client = redis.from_url(config.REDIS_URL, decode_responses=True)
+    except Exception as exc:  # pragma: no cover - optional redis dependency
+        logger.warning("Redis client init failed: %s", exc)
+        return None
+
+    _redis_client = client
+    return client
+
+
+def _publish_trade_event(event_type: str, payload: dict[str, Any]) -> None:
+    client = _get_redis_client()
+    if client is None:
+        return
+
+    enriched = dict(payload)
+    enriched["event"] = event_type
+    try:
+        client.xadd(config.TRADE_EVENT_STREAM, enriched, maxlen=10000, approximate=True)
+    except RedisError as exc:  # pragma: no cover - defensive logging
+        logger.debug("Failed to publish trade event %s: %s", event_type, exc)
+
+
 def _cleanup_aux_processes() -> None:
     """Terminate any spawned background services."""
 
@@ -201,6 +237,23 @@ def _cleanup_aux_processes() -> None:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+def reset_daily_profit() -> None:
+    global _daily_profit_value
+    with _daily_profit_lock:
+        _daily_profit_value = 0.0
+
+
+def add_daily_profit(amount: float) -> None:
+    global _daily_profit_value
+    with _daily_profit_lock:
+        _daily_profit_value += amount
+
+
+def current_daily_profit() -> float:
+    with _daily_profit_lock:
+        return _daily_profit_value
 
 
 def launch_aux_services(
@@ -815,6 +868,212 @@ def _process_shadow_positions() -> float:
     return realized
 
 
+def _price_stream_key(symbol: str) -> str:
+    return f"prices:{normalize_symbol(symbol)}"
+
+
+def _ensure_price_consumer(symbol: str) -> None:
+    norm = normalize_symbol(symbol)
+    if not norm or _price_consumers.get(norm):
+        return
+
+    worker = Thread(
+        target=_price_stream_worker,
+        args=(norm,),
+        name=f"price-{norm}",
+        daemon=True,
+    )
+    _price_consumers[norm] = worker
+    worker.start()
+
+
+def _price_stream_worker(symbol: str) -> None:
+    consumer_name = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    stream = _price_stream_key(symbol)
+    while not _price_consumer_stop.is_set():
+        client = _get_redis_client()
+        if client is None:
+            time.sleep(1)
+            continue
+
+        try:
+            client.xgroup_create(stream, config.REDIS_CONSUMER_GROUP, id="0-0", mkstream=True)
+        except RedisError as exc:
+            if "BUSYGROUP" not in str(exc):
+                logger.debug("Redis group error on %s: %s", stream, exc)
+
+        try:
+            entries = client.xreadgroup(
+                config.REDIS_CONSUMER_GROUP,
+                consumer_name,
+                {stream: ">"},
+                count=20,
+                block=5000,
+            )
+        except RedisError as exc:
+            logger.warning("Redis read error for %s: %s", stream, exc)
+            trade_manager.reconcile_positions()
+            time.sleep(1)
+            continue
+
+        if not entries:
+            continue
+
+        for _, messages in entries:
+            for msg_id, payload in messages:
+                price_raw = payload.get("price") or payload.get("p")
+                try:
+                    price = float(price_raw)
+                except (TypeError, ValueError):
+                    continue
+
+                _handle_price_event(symbol, price)
+                try:
+                    client.xack(stream, config.REDIS_CONSUMER_GROUP, msg_id)
+                except RedisError:
+                    logger.debug("Failed to ack %s on %s", msg_id, stream)
+
+
+def _start_price_streams_for_open_trades() -> None:
+    for tr in all_open_trades():
+        _ensure_price_consumer(tr.get("symbol", ""))
+
+
+def _start_pending_timeout_monitor(interval: int = config.RECONCILE_INTERVAL_S) -> None:
+    def _loop() -> None:
+        while not shutdown.shutdown_requested():
+            try:
+                reconcile_pending_trades()
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Pending reconcile error: %s", exc)
+            time.sleep(max(1, interval))
+
+    Thread(target=_loop, daemon=True, name="pending-reconcile").start()
+
+
+def _handle_price_event(symbol: str, price: float) -> None:
+    trade = find_trade(symbol=symbol)
+    if trade is None:
+        return
+
+    try:
+        state = TradeState(trade.get("state"))
+    except ValueError:
+        state = TradeState.PENDING
+
+    if state not in {TradeState.OPEN, TradeState.PARTIALLY_FILLED}:
+        return
+    if trade.get("closing"):
+        return
+
+    side = str(trade.get("side", "BUY")).upper()
+    entry_price = float(trade.get("entry_price") or 0.0)
+    quantity = float(trade.get("quantity") or trade.get("quantity_remaining") or 0.0)
+    take_profit_value = float(trade.get("take_profit") or 0.0)
+    stop_loss_value = float(trade.get("stop_loss") or 0.0)
+
+    updates: dict[str, float] = {}
+    try:
+        high_water = float(trade.get("high_watermark") or entry_price)
+    except (TypeError, ValueError):
+        high_water = entry_price
+    try:
+        low_water = float(trade.get("low_watermark") or entry_price)
+    except (TypeError, ValueError):
+        low_water = entry_price
+
+    if price > high_water:
+        updates["high_watermark"] = price
+        high_water = price
+    if price < low_water:
+        updates["low_watermark"] = price
+        low_water = price
+
+    candidate_stop: float | None = None
+    atr = float(trade.get("atr") or 0.0)
+    atr_mult = float(trade.get("atr_multiplier") or config.STOP_ATR_MULT)
+    if config.TRAILING_STOP_ENABLED and entry_price > 0 and price > 0 and quantity > 0:
+        if atr > 0 and atr_mult > 0:
+            if side == "BUY":
+                candidate_stop = max(entry_price, high_water - atr * atr_mult)
+            else:
+                candidate_stop = min(entry_price, low_water + atr * atr_mult)
+        else:
+            gain_pct = (
+                (price - entry_price) / entry_price
+                if side == "BUY"
+                else (entry_price - price) / entry_price
+            )
+            if gain_pct >= config.TRAILING_STOP_TRIGGER:
+                if side == "BUY":
+                    candidate_stop = price * (1 - config.TRAILING_STOP_DISTANCE)
+                else:
+                    candidate_stop = price * (1 + config.TRAILING_STOP_DISTANCE)
+
+    if candidate_stop is not None:
+        applied_stop: float | None = None
+        if side == "BUY":
+            if candidate_stop > stop_loss_value * (1 + 1e-6):
+                applied_stop = candidate_stop
+        else:
+            if stop_loss_value == 0.0 or candidate_stop < stop_loss_value * (1 - 1e-6):
+                applied_stop = candidate_stop
+        if applied_stop is not None:
+            updates["stop_loss"] = applied_stop
+            stop_loss_value = applied_stop
+            logger.info("Trailing SL updated for %s -> %.4f", symbol, applied_stop)
+
+    if updates:
+        update_trade(trade.get("trade_id"), **updates)
+        trade.update(updates)
+
+    hit_tp = False
+    hit_sl = False
+    if side == "BUY":
+        hit_tp = take_profit_value > 0 and price >= take_profit_value
+        hit_sl = stop_loss_value > 0 and price <= stop_loss_value
+    else:
+        hit_tp = take_profit_value > 0 and price <= take_profit_value
+        hit_sl = stop_loss_value > 0 and price >= stop_loss_value
+
+    reason: str | None = None
+    if hit_tp or hit_sl:
+        reason = "TP" if hit_tp else "SL"
+    elif trade_manager.exceeded_max_duration(trade):
+        reason = "MAX_DURATION"
+
+    if reason is None:
+        return
+
+    if trade.get("closing"):
+        return
+
+    update_trade(trade.get("trade_id"), closing=True)
+    closed, exec_price, realized = close_existing_trade(trade, reason)
+    if not closed:
+        update_trade(trade.get("trade_id"), closing=False)
+        return
+
+    payload = {
+        "trade_id": trade.get("trade_id"),
+        "symbol": trade.get("symbol"),
+        "side": trade.get("side"),
+        "entry_price": trade.get("entry_price"),
+        "exit_price": exec_price,
+        "reason": reason,
+        "pnl": realized,
+    }
+    _publish_trade_event("close", payload)
+
+    if realized is not None:
+        note = (
+            f"Closed {trade.get('symbol')} {reason} "
+            f"PnL {realized:.2f}"
+        )
+        notify.send_telegram(note)
+        notify.send_discord(note)
+
+
 def parse_args():
     """Parse CLI options controlling runtime mode selection."""
 
@@ -939,6 +1198,18 @@ def open_new_trade(signal: dict):
             set_trade_state(trade["trade_id"], TradeState.OPEN)
             save_trades()
             details = find_trade(trade_id=trade["trade_id"])
+            _ensure_price_consumer(symbol)
+            if details:
+                _publish_trade_event(
+                    "open",
+                    {
+                        "trade_id": details.get("trade_id"),
+                        "symbol": details.get("symbol"),
+                        "side": details.get("side"),
+                        "entry_price": details.get("entry_price"),
+                        "quantity": details.get("quantity"),
+                    },
+                )
             # Notificar SIEMPRE antes de salir (un solo return)
             return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
@@ -969,6 +1240,18 @@ def open_new_trade(signal: dict):
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
+        _ensure_price_consumer(symbol)
+        if details:
+            _publish_trade_event(
+                "open",
+                {
+                    "trade_id": details.get("trade_id"),
+                    "symbol": details.get("symbol"),
+                    "side": details.get("side"),
+                    "entry_price": details.get("entry_price"),
+                    "quantity": details.get("quantity"),
+                },
+            )
         # Notificar SIEMPRE antes de salir (un solo return)
         return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
@@ -1077,6 +1360,9 @@ def close_existing_trade(
         except Exception as exc:  # pragma: no cover - defensive export
             logger.warning("No se pudo exportar trade a Excel: %s", exc)
     auto_trainer.record_completed_trade(closed)
+    if realized is not None:
+        add_daily_profit(realized)
+    update_trade(trade_id, closing=False)
     save_trades()
     return closed, exec_price, realized
 
@@ -1233,6 +1519,8 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
 
     # Keep positions reconciled with the exchange every few seconds
     trade_manager.start_periodic_position_reconciliation()
+    _start_price_streams_for_open_trades()
+    _start_pending_timeout_monitor()
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).
@@ -1258,6 +1546,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
         shutdown.install_signal_handlers()
     shutdown.register_callback(save_trades)
     shutdown.register_callback(execution.cancel_all_orders)
+    shutdown.register_callback(_price_consumer_stop.set)
     if trainer is not None:
         def _stop_trainer() -> None:
             stop_event.set()
@@ -1266,7 +1555,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
         shutdown.register_callback(_stop_trainer)
 
     maybe_reload_model(force=True)
-    daily_profit = 0.0
+    reset_daily_profit()
     trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
 
     current_day = datetime.now(timezone.utc).date()
@@ -1298,17 +1587,11 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     _snapshot_ai_state()
     _snapshot_ops_state()
     _last_excel_snapshot = time.time()
-    last_reconcile = 0.0
 
     while True:
         try:
 
             execution.cleanup_old_orders()
-
-            now_ts = time.time()
-            if now_ts - last_reconcile >= config.RECONCILE_INTERVAL_S:
-                reconcile_pending_trades()
-                last_reconcile = now_ts
 
             maybe_reload_model()
             model = current_model()
@@ -1330,7 +1613,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
             now = datetime.now(timezone.utc)
             if now.date() != current_day:
                 current_day = now.date()
-                daily_profit = 0.0
+                reset_daily_profit()
                 trading_active = bool(config.ENABLE_TRADING or config.SHADOW_MODE)
                 loss_limit = -abs(config.MAX_DAILY_LOSS_USDT)
 
@@ -1341,6 +1624,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
             # Se acepta que DAILY_RISK_LIMIT pueda definirse como valor negativo
             # (por ejemplo -50.0) o positivo (50.0). Siempre se compara contra
             # el valor negativo correspondiente.
+            daily_profit = current_daily_profit()
             if daily_profit <= loss_limit and trading_active:
                 trading_active = False
                 standby_notified = False
@@ -1528,141 +1812,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
             # MONITOREAR OPERACIONES ABIERTAS
             if config.SHADOW_MODE:
                 realized = _process_shadow_positions()
-                daily_profit += realized
-            else:
-                for op in list(all_open_trades()):
-                    price = data.get_current_price_ticker(op["symbol"])
-                    if not price:
-                        continue
-                    try:
-                        entry_price = float(op.get("entry_price") or 0.0)
-                    except (TypeError, ValueError):
-                        entry_price = 0.0
-                    try:
-                        current_stop = float(op.get("stop_loss") or 0.0)
-                    except (TypeError, ValueError):
-                        current_stop = 0.0
-                    try:
-                        quantity = float(op.get("quantity") or 0.0)
-                    except (TypeError, ValueError):
-                        quantity = 0.0
-                    try:
-                        take_profit_value = float(op.get("take_profit") or 0.0)
-                    except (TypeError, ValueError):
-                        take_profit_value = 0.0
-                    side = str(op.get("side", "BUY")).upper()
-                    if (
-                        config.TRAILING_STOP_ENABLED
-                        and entry_price > 0
-                        and price > 0
-                        and op.get("trade_id")
-                    ):
-                        gain_pct = 0.0
-                        candidate_stop = None
-                        applied_stop = None
-
-                        if side == "BUY":
-                            gain_pct = (price / entry_price) - 1.0
-                            if gain_pct >= config.TRAILING_STOP_TRIGGER:
-                                candidate_stop = max(
-                                    entry_price,
-                                    price * (1 - config.TRAILING_STOP_DISTANCE),
-                                )
-                                if candidate_stop <= 0:
-                                    candidate_stop = None
-                        else:
-                            if price > 0:
-                                gain_pct = (entry_price - price) / entry_price
-                            if gain_pct >= config.TRAILING_STOP_TRIGGER:
-                                candidate_stop = min(
-                                    entry_price,
-                                    price * (1 + config.TRAILING_STOP_DISTANCE),
-                                )
-                                if candidate_stop <= 0:
-                                    candidate_stop = None
-                        if candidate_stop is not None:
-                            if side == "BUY":
-                                if candidate_stop > current_stop * (1 + 1e-6):
-                                    if trade_manager.update_trade(
-                                        op["trade_id"], stop_loss=candidate_stop
-                                    ):
-                                        applied_stop = candidate_stop
-
-                            else:
-                                # For SELL trades the stop trails downwards while staying above price
-                                if current_stop == 0.0 or candidate_stop < current_stop * (1 - 1e-6):
-                                    if trade_manager.update_trade(
-                                        op["trade_id"], stop_loss=candidate_stop
-                                    ):
-
-                                        applied_stop = candidate_stop
-                        if applied_stop is not None:
-                            current_stop = applied_stop
-                            op["stop_loss"] = applied_stop
-                            logger.info(
-                                "Stop-loss de %s movido a %.4f (trailing)",
-                                    op["symbol"],
-                                    applied_stop,
-                                )
-                    try:
-                        stop_loss_value = float(op.get("stop_loss") or 0.0)
-                    except (TypeError, ValueError):
-                        stop_loss_value = 0.0
-                    try:
-                        op_state = TradeState(op.get("state"))
-                    except ValueError:
-                        op_state = TradeState.PENDING
-                    if op_state not in {TradeState.OPEN, TradeState.PARTIALLY_FILLED}:
-                        continue
-                    if side == "BUY":
-                        profit = (price - entry_price) * quantity
-                        close = (
-                            (stop_loss_value and price <= stop_loss_value)
-                            or (take_profit_value and price >= take_profit_value)
-                        )
-                    else:
-                        profit = (entry_price - price) * quantity
-                        close = (
-                            (stop_loss_value and price >= stop_loss_value)
-                            or (take_profit_value and price <= take_profit_value)
-                        )
-
-                    reason = None
-                    if close:
-                        reason = "TP" if profit >= 0 else "SL"
-                    if reason is None and trade_manager.exceeded_max_duration(op):
-                        close = True
-                        reason = "MAX_DURATION"
-
-                    if close:
-                        if side == "BUY":
-                            target_hit = take_profit_value > 0 and price >= take_profit_value
-                        else:
-                            target_hit = take_profit_value > 0 and price <= take_profit_value
-                        expected = take_profit_value if target_hit else stop_loss_value
-                        close_label = reason or ("TP" if profit >= 0 else "SL")
-                        closed, exec_price, realized = close_existing_trade(
-                            op,
-                            close_label,
-                        )
-                        if not closed or exec_price is None or realized is None:
-                            continue
-                        slippage = exec_price - expected
-                        logger.info(
-                            "Closed %s at %.4f (target %.4f) slippage %.4f",
-                            op["symbol"], exec_price, expected, slippage
-                        )
-                        if abs(slippage) > config.MAX_SLIPPAGE:
-                            logger.warning("High slippage detected on %s: %.4f", op["symbol"], slippage)
-                        daily_profit += realized
-
-                        outcome = close_label
-                        note = (
-                            f"Closed {op['symbol']} {outcome} "
-                            f"PnL {realized:.2f} Slippage {slippage:.4f}"
-                        )
-                        notify.send_telegram(note)
-                        notify.send_discord(note)
+                add_daily_profit(realized)
 
             save_trades()  # Guarda el estado periódicamente
             update_trade_metrics(count_open_trades(), len(trade_manager.all_closed_trades()))

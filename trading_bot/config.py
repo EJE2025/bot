@@ -116,6 +116,12 @@ PRIMARY_EXCHANGE = _str_env("PRIMARY_EXCHANGE", DEFAULT_EXCHANGE or "bitget")
 DATA_EXCHANGE = _str_env("DATA_EXCHANGE", PRIMARY_EXCHANGE)
 # Exchange powering websocket liquidity streams (defaults to :data:`PRIMARY_EXCHANGE`).
 WS_EXCHANGE = _str_env("WS_EXCHANGE", PRIMARY_EXCHANGE)
+# Redis endpoint for price/order event streaming.
+REDIS_URL = _str_env("REDIS_URL", "redis://localhost:6379/0")
+# Optional Redis stream used to fan-out trade lifecycle events.
+TRADE_EVENT_STREAM = _str_env("TRADE_EVENT_STREAM", "trades")
+# Consumer group name for price/event streams (auto-created when missing).
+REDIS_CONSUMER_GROUP = _str_env("REDIS_CONSUMER_GROUP", "bot-consumers")
 # Toggle Bitget connectivity (set to ``False`` when disabling any Bitget calls).
 ENABLE_BITGET = _bool_env("ENABLE_BITGET", True)
 # Toggle Binance connectivity (``False`` avoids reaching Binance endpoints).
