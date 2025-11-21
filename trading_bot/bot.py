@@ -70,6 +70,8 @@ from .trade_manager import (
     count_open_trades,
     count_trades_for_symbol,
     set_trade_state,
+    verify_exchange_position,
+    record_balance_snapshot,
 )
 from .reconcile import reconcile_pending_trades
 from .state_machine import TradeState
@@ -116,6 +118,7 @@ _dashboard_launch_scheduled = False
 _dashboard_launch_lock = RLock()
 _aux_service_processes: list[subprocess.Popen[Any]] = []
 _aux_cleanup_registered = False
+_balance_monitor_thread: Thread | None = None
 
 
 def _normalize_dashboard_host(host: str) -> str:
@@ -201,6 +204,37 @@ def _cleanup_aux_processes() -> None:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+def start_balance_monitoring() -> None:
+    """Launch a periodic balance fetcher to reconcile account equity."""
+
+    global _balance_monitor_thread
+    if _balance_monitor_thread is not None and _balance_monitor_thread.is_alive():
+        return
+
+    interval = max(1, config.BALANCE_CHECK_INTERVAL_S)
+
+    def _loop() -> None:
+        last_balance: float | None = None
+        while True:
+            try:
+                bal = execution.fetch_balance()
+                record_balance_snapshot(bal)
+                if (
+                    last_balance is not None
+                    and bal is not None
+                    and abs(bal - last_balance) > config.BALANCE_ALERT_THRESHOLD
+                ):
+                    logger.info("Balance changed by %.4f (prev=%.4f curr=%.4f)", bal - last_balance, last_balance, bal)
+                if bal is not None:
+                    last_balance = bal
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Balance monitor error: %s", exc)
+            time.sleep(interval)
+
+    _balance_monitor_thread = Thread(target=_loop, daemon=True, name="balance-monitor")
+    _balance_monitor_thread.start()
 
 
 def launch_aux_services(
@@ -965,6 +999,11 @@ def open_new_trade(signal: dict):
                         updates.setdefault("entry_price", avg_exec)
                     if updates:
                         update_trade(trade["trade_id"], **updates)
+                try:
+                    expected_size = float(trade.get("quantity") or signal.get("quantity") or 0.0)
+                except (TypeError, ValueError):
+                    expected_size = 0.0
+                verify_exchange_position(trade, expected_size=expected_size)
         # Limit/stop orders remain pending until websocket or reconciliation confirms fill
 
         save_trades()
@@ -1163,6 +1202,8 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
         maybe_alert(True, "❌ No se pudo conectar al exchange. Trading pausado.")
         return
 
+    start_balance_monitoring()
+
     # Sincronizar con posiciones reales en el exchange
     positions = execution.fetch_positions()
     active_symbols = set()
@@ -1232,7 +1273,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     save_trades()
 
     # Keep positions reconciled with the exchange every few seconds
-    trade_manager.start_periodic_position_reconciliation()
+    trade_manager.start_periodic_position_reconciliation(include_open_orders=True)
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).

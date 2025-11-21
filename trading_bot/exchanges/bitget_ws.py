@@ -42,7 +42,8 @@ class BitgetWebSocket:
     async def subscribe(self, ws):
         channels = [
             {"instType": "mc", "channel": "orders"},
-            {"instType": "mc", "channel": "positions"}
+            {"instType": "mc", "channel": "positions"},
+            {"instType": "mc", "channel": "account"},
         ]
 
         for c in channels:
@@ -62,6 +63,9 @@ class BitgetWebSocket:
 
             elif channel == "positions":
                 await self._handle_position(entry)
+
+            elif channel == "account":
+                await self._handle_account(entry)
 
     async def _handle_order(self, order):
         symbol = order["symbol"]
@@ -89,6 +93,17 @@ class BitgetWebSocket:
         else:
             self.trade_manager.ws_position_closed(pos)
             self.logger.info(f"WS: position closed {symbol}")
+
+    async def _handle_account(self, account):
+        try:
+            balance = float(account.get("available", 0.0))
+        except (TypeError, ValueError):
+            return
+        try:
+            self.trade_manager.record_balance_snapshot(balance)
+        except Exception:
+            # Balance snapshots are best-effort
+            return
 
     async def run(self):
         while True:

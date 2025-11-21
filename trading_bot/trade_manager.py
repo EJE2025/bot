@@ -16,9 +16,11 @@ from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
-POSITION_RECONCILE_INTERVAL = 30
+POSITION_RECONCILE_INTERVAL = config.POSITION_RECONCILE_INTERVAL_S
 
 _reconcile_thread: threading.Thread | None = None
+_reconcile_include_orders = False
+_last_known_balance: float | None = None
 
 open_trades = []
 closed_trades = []
@@ -132,6 +134,7 @@ def add_trade(trade, *, allow_duplicates: bool = False):
         trade.setdefault("created_ts", time.time())
         trade.setdefault("quantity_remaining", trade.get("quantity"))
         trade.setdefault("realized_pnl", 0.0)
+        trade.setdefault("inconsistent", False)
         trade.setdefault("closing", False)
         open_trades.append(trade)
         log_history("open", trade)
@@ -278,6 +281,35 @@ def _position_size(position: dict) -> float:
     return 0.0
 
 
+def verify_exchange_position(trade: dict, *, expected_size: float | None = None) -> None:
+    """Compare the tracked trade size with the live exchange position."""
+
+    if config.DRY_RUN:
+        return
+
+    expected = expected_size
+    if expected is None:
+        try:
+            expected = abs(float(trade.get("quantity") or 0.0))
+        except (TypeError, ValueError):
+            expected = 0.0
+    expected = expected or 0.0
+
+    try:
+        from . import execution
+
+        actual = abs(execution.fetch_position_size(trade.get("symbol", "")))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.error("Failed to verify position size for %s: %s", trade.get("symbol"), exc)
+        return
+
+    tolerance = max(0.0, config.POSITION_SIZE_TOLERANCE)
+    if abs(actual - expected) > tolerance:
+        _mark_inconsistent(trade, "position_size_mismatch", expected=expected, observed=actual)
+    else:
+        _clear_inconsistency(trade)
+
+
 def _total_invested(trade: dict) -> float:
     try:
         entry_price = float(trade.get("entry_price") or 0.0)
@@ -288,6 +320,25 @@ def _total_invested(trade: dict) -> float:
         return 0.0
     leverage = _trade_leverage(trade)
     return abs(entry_price * quantity) / leverage
+
+
+def record_balance_snapshot(balance: float | None) -> None:
+    """Store the latest known account balance for later reconciliation."""
+
+    global _last_known_balance
+    if balance is None:
+        return
+    try:
+        parsed = float(balance)
+    except (TypeError, ValueError):
+        return
+    with LOCK:
+        _last_known_balance = parsed
+
+
+def last_balance_snapshot() -> float | None:
+    with LOCK:
+        return _last_known_balance
 
 
 def update_trade(trade_id, **kwargs):
@@ -332,12 +383,101 @@ def set_trade_state(trade_id: str, new_state: TradeState) -> bool:
         return True
 
 
+def _mark_inconsistent(
+    trade: dict,
+    reason: str,
+    *,
+    expected: float | None = None,
+    observed: float | None = None,
+) -> None:
+    tid = trade.get("trade_id")
+    updates = {"inconsistent": True, "inconsistency_reason": reason}
+    if expected is not None:
+        updates["expected_value"] = expected
+    if observed is not None:
+        updates["observed_value"] = observed
+    if tid:
+        updated = update_trade(tid, **updates)
+        if not updated:
+            trade.update(updates)
+    logger.warning(
+        "Trade %s inconsistency (%s): expected=%s observed=%s",
+        tid,
+        reason,
+        expected,
+        observed,
+    )
+
+
+def _clear_inconsistency(trade: dict) -> None:
+    tid = trade.get("trade_id")
+    if not tid:
+        return
+    cleared = update_trade(tid, inconsistent=False, inconsistency_reason=None)
+    if not cleared:
+        trade["inconsistent"] = False
+        trade.pop("inconsistency_reason", None)
+
+
+def _extract_realized_pnl(payload: dict) -> float | None:
+    candidates = (
+        payload.get("pnl"),
+        payload.get("realizedPnl"),
+        payload.get("achievedProfits"),
+    )
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    info_candidates = (
+        info.get("pnl"),
+        info.get("realizedPnl"),
+        info.get("achievedProfits"),
+    )
+    for candidate in (*candidates, *info_candidates):
+        try:
+            if candidate is not None:
+                return float(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _check_realized_pnl_consistency(trade: dict, exchange_pnl: float | None = None) -> None:
+    if config.DRY_RUN:
+        return
+
+    expected = _ensure_realized_pnl(trade)
+    pnl_value = exchange_pnl
+
+    balance_before = last_balance_snapshot()
+    if pnl_value is None:
+        try:
+            from . import execution
+
+            balance_after = execution.fetch_balance()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Failed to fetch balance for pnl reconcile: %s", exc)
+            return
+        record_balance_snapshot(balance_after)
+        if balance_before is not None and balance_after is not None:
+            pnl_value = balance_after - balance_before
+
+    if pnl_value is None:
+        return
+
+    if abs(pnl_value - expected) > config.PNL_MISMATCH_TOLERANCE:
+        trade["realized_pnl_exchange"] = pnl_value
+        trade["realized_pnl"] = pnl_value
+        _mark_inconsistent(trade, "pnl_mismatch", expected=expected, observed=pnl_value)
+    else:
+        _clear_inconsistency(trade)
+
+
 def close_trade(
     trade_id=None,
     symbol=None,
     reason="closed",
     exit_price=None,
     profit=None,
+    exchange_pnl: float | None = None,
 ):
     """Cierra una operación y la mueve a cerradas, añadiendo motivo.
 
@@ -397,6 +537,7 @@ def close_trade(
         trade["closing"] = False
         trade.setdefault("quantity_remaining", 0.0)
         trade["quantity"] = trade.get("quantity_remaining", 0.0)
+        _check_realized_pnl_consistency(trade, exchange_pnl)
         closed_trades.append(trade)
         _prune_closed_trades()
         log_history("close", trade)
@@ -600,13 +741,15 @@ def _position_to_trade(position: dict) -> dict | None:
     return trade
 
 
-def reconcile_positions() -> None:
+def reconcile_positions(*, include_open_orders: bool | None = None) -> None:
     """Synchronise open trades with live positions on the exchange."""
 
     if config.DRY_RUN:
         return
 
     from . import execution
+
+    include_orders = config.RECONCILE_OPEN_ORDERS if include_open_orders is None else include_open_orders
 
     positions = execution.fetch_positions()
     positions_by_symbol: dict[str, dict] = {}
@@ -616,6 +759,20 @@ def reconcile_positions() -> None:
         if not symbol or qty == 0:
             continue
         positions_by_symbol[symbol] = pos
+
+    orders_by_symbol: dict[str, list[dict]] = {}
+    if include_orders:
+        try:
+            open_orders = execution.fetch_open_orders()
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error("Failed to fetch open orders for reconcile: %s", exc)
+            open_orders = []
+
+        for order in open_orders:
+            norm = normalize_symbol(order.get("symbol", ""))
+            if not norm:
+                continue
+            orders_by_symbol.setdefault(norm, []).append(order)
 
     active_symbols = set(positions_by_symbol.keys())
 
@@ -658,14 +815,36 @@ def reconcile_positions() -> None:
         set_trade_state(trade.get("trade_id"), TradeState.OPEN)
         logger.info("[RECONCILE] Synced position for %s: size=%.8f", symbol, qty)
 
+    if include_orders:
+        for symbol, orders in orders_by_symbol.items():
+            trade = find_trade(symbol=symbol)
+            if trade is None:
+                recovered_order = orders[0]
+                recovered = create_trade_from_ws(recovered_order)
+                if recovered:
+                    logger.info("[RECONCILE] Recovered open order for %s", symbol)
+                else:
+                    logger.warning("[RECONCILE] Open order without tracked trade for %s", symbol)
+                continue
+            try:
+                state = TradeState(trade.get("state"))
+            except ValueError:
+                state = TradeState.PENDING
+            if state == TradeState.PENDING and symbol not in active_symbols:
+                _mark_inconsistent(trade, "pending_without_open_order", expected=len(orders), observed=0.0)
+
     for tr in list(all_open_trades()):
         symbol = normalize_symbol(tr.get("symbol", ""))
         if symbol in active_symbols:
+            continue
+        if include_orders and symbol in orders_by_symbol:
             continue
         try:
             state = TradeState(tr.get("state"))
         except ValueError:
             state = TradeState.PENDING
+        if include_orders and state == TradeState.PENDING:
+            _mark_inconsistent(tr, "pending_without_exchange_state", expected=_position_size(tr), observed=0.0)
         if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
             try:
                 exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
@@ -680,18 +859,25 @@ def reconcile_positions() -> None:
 
 
 def start_periodic_position_reconciliation(
-    interval_seconds: int = POSITION_RECONCILE_INTERVAL,
+    interval_seconds: int | None = None,
+    *,
+    include_open_orders: bool | None = None,
 ) -> threading.Thread:
     """Launch a daemon thread that reconciles positions every ``interval_seconds``."""
 
-    global _reconcile_thread
+    global _reconcile_thread, _reconcile_include_orders
+    interval_seconds = interval_seconds or POSITION_RECONCILE_INTERVAL
+    include_orders = config.RECONCILE_OPEN_ORDERS if include_open_orders is None else include_open_orders
+
     if _reconcile_thread is not None and _reconcile_thread.is_alive():
         return _reconcile_thread
+
+    _reconcile_include_orders = include_orders
 
     def _loop():
         while True:
             try:
-                reconcile_positions()
+                reconcile_positions(include_open_orders=include_orders)
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.error("Periodic reconcile error: %s", exc)
             time.sleep(max(1, interval_seconds))
@@ -804,6 +990,7 @@ def ws_order_filled(order):
         price = None
 
     _update_from_ws(trade, quantity=qty, entry_price=price, state=TradeState.OPEN)
+    verify_exchange_position(trade, expected_size=qty)
     logger.info("[WS] Trade OPEN via WS %s", symbol)
 
 
@@ -878,7 +1065,13 @@ def ws_position_closed(pos):
             exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
         except (TypeError, ValueError):
             exit_price = None
-        close_trade(trade_id=trade.get("trade_id"), reason="ws_position_closed", exit_price=exit_price)
+        pnl_value = _extract_realized_pnl(pos)
+        close_trade(
+            trade_id=trade.get("trade_id"),
+            reason="ws_position_closed",
+            exit_price=exit_price,
+            exchange_pnl=pnl_value,
+        )
         logger.info("[WS] Position CLOSED %s", symbol)
 
 # --- Optional: Auditing/history ---
