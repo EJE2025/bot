@@ -14,7 +14,7 @@ from .indicators_talib import (
     calculate_atr,
     calculate_support_resistance,
 )
-from . import config, data, execution, idempotency, predictive_model
+from . import config, data, execution, idempotency, predictive_model, rl_agent
 from . import model_seq_loader
 from .latency import measure_latency
 
@@ -517,6 +517,27 @@ def decidir_entrada(
         "volatility": float(volatility_ratio),
     }
 
+    rl_info = None
+    try:
+        rl_info = rl_agent.adjust_targets(
+            feature_snapshot, entry_price, take_profit, stop_loss
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("[%s] RL agent failed, using heuristics: %s", symbol, exc)
+        rl_info = None
+
+    if rl_info:
+        new_tp = rl_info.get("take_profit")
+        new_sl = rl_info.get("stop_loss")
+        if new_tp is not None and new_sl is not None and np.isfinite(new_tp) and np.isfinite(new_sl):
+            take_profit = float(new_tp)
+            stop_loss = float(new_sl)
+            risk = abs(entry_price - stop_loss)
+            risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
+            feature_snapshot["risk_reward"] = risk_reward
+        else:
+            logger.debug("[%s] RL action invalid; keeping heuristic targets", symbol)
+
     signal = {
         "symbol": symbol,
         "side": decision,
@@ -536,6 +557,16 @@ def decidir_entrada(
         .replace("+00:00", "Z"),
         "feature_snapshot": feature_snapshot,
     }
+
+    if rl_info:
+        rl_state = rl_info.get("state")
+        signal["rl_action"] = {
+            "tp_multiplier": rl_info.get("tp_multiplier"),
+            "sl_multiplier": rl_info.get("sl_multiplier"),
+            "action_index": rl_info.get("action_index"),
+        }
+        if rl_state is not None:
+            signal["rl_state"] = np.asarray(rl_state, dtype=float).tolist()
 
     modelo_activo = (
         None

@@ -31,3 +31,5 @@ python-socketio==5.11.3
 python-engineio==4.9.0
 gevent==24.2.1
 gevent-websocket==0.10.1
+stable-baselines3>=2.3.0
+gymnasium>=0.29
