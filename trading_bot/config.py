@@ -327,6 +327,26 @@ FEE_AWARE_MARGIN_BPS = _int_env("FEE_AWARE_MARGIN_BPS", 2, clamp=(0, 1000))
 # Estimated round-trip trading cost (fees + slippage) expressed as fraction of risk
 FEE_EST = _positive_float_env("FEE_EST", 0.0006, minimum=0.0)
 
+# Reinforcement learning policy tuning
+RL_AGENT_ENABLED = _bool_env("RL_AGENT_ENABLED", False)
+RL_ALGO = _str_env("RL_ALGO", "ppo").strip().lower() or "ppo"
+RL_POLICY_PATH = _str_env("RL_POLICY_PATH", "models/rl_policy.zip").strip()
+RL_BUFFER_CAPACITY = _int_env("RL_BUFFER_CAPACITY", 400, clamp=(10, 5000))
+RL_LEARN_INTERVAL = _int_env("RL_LEARN_INTERVAL", 20, clamp=(1, 1000))
+RL_MIN_TRAINING_SAMPLES = _int_env("RL_MIN_TRAINING_SAMPLES", 25, clamp=(1, 10000))
+RL_LEARN_STEPS = _int_env("RL_LEARN_STEPS", 500, clamp=(10, 100000))
+RL_TP_MULT_RANGE = (
+    _float_env("RL_TP_MULT_MIN", 0.8, clamp=(0.1, 10.0)),
+    _float_env("RL_TP_MULT_MAX", 2.5, clamp=(0.1, 20.0)),
+)
+RL_SL_MULT_RANGE = (
+    _float_env("RL_SL_MULT_MIN", 0.8, clamp=(0.1, 10.0)),
+    _float_env("RL_SL_MULT_MAX", 2.0, clamp=(0.1, 20.0)),
+)
+RL_DISCRETE_TP_BINS = _int_env("RL_DISCRETE_TP_BINS", 4, clamp=(2, 50))
+RL_DISCRETE_SL_BINS = _int_env("RL_DISCRETE_SL_BINS", 3, clamp=(2, 50))
+RL_PERSIST_AFTER_TRADE = _bool_env("RL_PERSIST_AFTER_TRADE", True)
+
 # Noise filtering and volatility gating
 NOISE_FILTER_METHOD = _str_env("NOISE_FILTER_METHOD", "ema").strip().lower() or "ema"
 NOISE_FILTER_SPAN = _int_env("NOISE_FILTER_SPAN", 12, clamp=(1, 1000))

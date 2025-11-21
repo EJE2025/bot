@@ -10,7 +10,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from . import config, data
+from . import config, data, rl_agent
 from .utils import normalize_symbol
 from .state_machine import TradeState, is_valid_transition
 
@@ -410,6 +410,10 @@ def close_trade(
             closed_trades[:] = [
                 t for t in closed_trades if t.get("trade_id") != trade.get("trade_id")
             ]
+        try:
+            rl_agent.record_trade_outcome(trade)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("No se pudo registrar el trade para RL: %s", exc)
         return trade
 
 
