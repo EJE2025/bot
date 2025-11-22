@@ -119,6 +119,8 @@ class RLTradingAgent:
         self._training_steps = int(getattr(config, "RL_LEARN_STEPS", 200))
         self._discrete_tp_bins = int(getattr(config, "RL_DISCRETE_TP_BINS", 4))
         self._discrete_sl_bins = int(getattr(config, "RL_DISCRETE_SL_BINS", 3))
+        self._max_tp_pct = float(getattr(config, "RL_MAX_TP_PCT", 0.0))
+        self._max_stop_pct = float(getattr(config, "RL_MAX_STOP_LOSS_PCT", 0.0))
         self._lock = threading.RLock()
         self._learn_calls = 0
 
@@ -229,6 +231,36 @@ class RLTradingAgent:
         sl_mult = float(np.clip(sl_mult, self.sl_range[0], self.sl_range[1]))
         return np.array([tp_mult, sl_mult], dtype=np.float32), None
 
+    def _apply_safety_limits(
+        self, entry_price: float, take_profit: float, stop_loss: float
+    ) -> tuple[float, float]:
+        entry = float(entry_price)
+        tp_val = float(take_profit)
+        sl_val = float(stop_loss)
+        if not np.isfinite(entry) or entry <= 0:
+            return tp_val, sl_val
+
+        max_stop_pct = max(0.0, self._max_stop_pct)
+        if max_stop_pct > 0:
+            if tp_val >= entry:
+                min_stop = entry * (1 - max_stop_pct)
+                sl_val = max(sl_val, min_stop)
+                sl_val = max(sl_val, 0.0)
+            else:
+                max_stop = entry * (1 + max_stop_pct)
+                sl_val = min(sl_val, max_stop)
+
+        max_tp_pct = max(0.0, self._max_tp_pct)
+        if max_tp_pct > 0:
+            if tp_val >= entry:
+                tp_cap = entry * (1 + max_tp_pct)
+                tp_val = min(tp_val, tp_cap)
+            else:
+                tp_floor = entry * (1 - max_tp_pct)
+                tp_val = max(tp_val, tp_floor)
+
+        return tp_val, sl_val
+
     def suggest_adjustments(
         self,
         feature_snapshot: dict,
@@ -253,6 +285,8 @@ class RLTradingAgent:
         sl_dist = abs(float(entry_price) - float(stop_loss))
         new_tp = float(entry_price) + math.copysign(tp_dist * float(action[0]), take_profit - entry_price)
         new_sl = float(entry_price) - math.copysign(sl_dist * float(action[1]), entry_price - stop_loss)
+
+        new_tp, new_sl = self._apply_safety_limits(entry_price, new_tp, new_sl)
 
         return {
             "tp_multiplier": float(action[0]),
