@@ -118,6 +118,8 @@ DATA_EXCHANGE = _str_env("DATA_EXCHANGE", PRIMARY_EXCHANGE)
 WS_EXCHANGE = _str_env("WS_EXCHANGE", PRIMARY_EXCHANGE)
 # Redis endpoint for price/order event streaming.
 REDIS_URL = _str_env("REDIS_URL", "redis://localhost:6379/0")
+# Redis stream used by the streaming_service to fan-out market data.
+MARKET_STREAM = _str_env("MARKET_STREAM", "market-data")
 # Optional Redis stream used to fan-out trade lifecycle events.
 TRADE_EVENT_STREAM = _str_env("TRADE_EVENT_STREAM", "trades")
 # Consumer group name for price/event streams (auto-created when missing).
