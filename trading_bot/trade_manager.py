@@ -16,13 +16,16 @@ from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
-POSITION_RECONCILE_INTERVAL = 30
+POSITION_RECONCILE_INTERVAL = 10
+BALANCE_MONITOR_INTERVAL = 60
 
 _reconcile_thread: threading.Thread | None = None
+_balance_thread: threading.Thread | None = None
 
 open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
+_balance_snapshot: dict[str, float] = {"free_usdt": 0.0, "timestamp": 0.0}
 
 # ``add_trade`` y otros métodos llaman a ``log_history`` mientras mantienen el
 # cerrojo principal. Ese helper también necesita bloquear el estado global para
@@ -43,6 +46,8 @@ def reset_state() -> None:
         closed_trades.clear()
         trade_history.clear()
         _last_closed.clear()
+        _balance_snapshot["free_usdt"] = 0.0
+        _balance_snapshot["timestamp"] = 0.0
 
 
 def _prune_closed_trades() -> None:
@@ -52,6 +57,19 @@ def _prune_closed_trades() -> None:
     overflow = len(closed_trades) - config.MAX_CLOSED_TRADES
     if overflow > 0:
         del closed_trades[0:overflow]
+
+
+def _record_balance_snapshot(amount: float) -> None:
+    with LOCK:
+        _balance_snapshot["free_usdt"] = amount
+        _balance_snapshot["timestamp"] = time.time()
+
+
+def last_recorded_balance() -> dict[str, float]:
+    """Return the latest cached balance information."""
+
+    with LOCK:
+        return dict(_balance_snapshot)
 
 
 def in_cooldown(symbol: str) -> bool:
@@ -610,6 +628,90 @@ def _position_to_trade(position: dict) -> dict | None:
     return trade
 
 
+def _extract_unrealized_pnl(position: dict) -> float | None:
+    candidates: list[Any] = [position.get("unrealizedPnl"), position.get("upl")]
+    info = position.get("info", {})
+    if isinstance(info, dict):
+        candidates.append(info.get("unrealizedPnl"))
+    for candidate in candidates:
+        try:
+            value = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        return value
+    return None
+
+
+def _extract_realized_pnl(position: dict) -> float | None:
+    candidates: list[Any] = [
+        position.get("realizedPnl"),
+        position.get("closeProfit"),
+        position.get("pnl"),
+    ]
+    info = position.get("info", {})
+    if isinstance(info, dict):
+        candidates.extend([info.get("realizedPnl"), info.get("closeProfit")])
+    for candidate in candidates:
+        try:
+            value = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        return value
+    return None
+
+
+def _apply_reported_realized_pnl(trade: dict, reported: float | None) -> None:
+    if reported is None:
+        return
+
+    try:
+        current = float(trade.get("realized_pnl") or trade.get("profit") or 0.0)
+    except (TypeError, ValueError):
+        current = 0.0
+    tolerance = max(0.01, abs(current) * 0.05, abs(reported) * 0.05)
+    if abs(reported - current) > tolerance:
+        logger.warning(
+            "[SYNC] Realized PnL mismatch for %s: local=%.6f exchange=%.6f",
+            trade.get("symbol"),
+            current,
+            reported,
+        )
+    with LOCK:
+        trade["realized_pnl"] = reported
+        trade["profit"] = reported
+
+
+def _verify_live_position(trade: dict, expected_qty: float | None = None) -> float | None:
+    if config.DRY_RUN:
+        return None
+
+    from . import execution
+
+    symbol = trade.get("symbol")
+    if not symbol:
+        return None
+    try:
+        expected = float(expected_qty if expected_qty is not None else trade.get("quantity") or 0.0)
+    except (TypeError, ValueError):
+        expected = 0.0
+
+    live_size = execution.fetch_position_size(symbol)
+    mismatch = expected > 0 and abs(live_size - expected) > max(1e-6, expected * 0.01)
+    with LOCK:
+        trade["last_synced_size"] = live_size
+        trade["position_mismatch"] = mismatch
+    if mismatch:
+        logger.warning(
+            "[SYNC] Tamaño en exchange %.8f difiere de esperado %.8f para %s",
+            live_size,
+            expected,
+            symbol,
+        )
+    else:
+        logger.debug("[SYNC] Tamaño confirmado para %s: %.8f", symbol, live_size)
+    return live_size
+
+
 def reconcile_positions() -> None:
     """Synchronise open trades with live positions on the exchange."""
 
@@ -619,6 +721,7 @@ def reconcile_positions() -> None:
     from . import execution
 
     positions = execution.fetch_positions()
+    open_orders = execution.fetch_open_orders()
     positions_by_symbol: dict[str, dict] = {}
     for pos in positions:
         symbol = normalize_symbol(pos.get("symbol", ""))
@@ -626,6 +729,19 @@ def reconcile_positions() -> None:
         if not symbol or qty == 0:
             continue
         positions_by_symbol[symbol] = pos
+
+    open_order_ids: set[str] = set()
+    for order in open_orders:
+        order_id = str(order.get("id") or order.get("orderId") or "")
+        if order_id:
+            open_order_ids.add(order_id)
+        symbol = normalize_symbol(order.get("symbol", ""))
+        if symbol and find_trade(symbol=symbol) is None:
+            logger.warning(
+                "[RECONCILE] Open order on exchange without local trade: %s (%s)",
+                symbol,
+                order_id,
+            )
 
     active_symbols = set(positions_by_symbol.keys())
 
@@ -661,6 +777,9 @@ def reconcile_positions() -> None:
             "leverage": leverage,
             "status": "active",
         }
+        unrealized = _extract_unrealized_pnl(pos)
+        if unrealized is not None:
+            updates["unrealized_pnl"] = unrealized
         order_info = pos.get("info", {})
         if isinstance(order_info, dict) and order_info.get("orderId"):
             updates["order_id"] = order_info.get("orderId")
@@ -676,6 +795,7 @@ def reconcile_positions() -> None:
             state = TradeState(tr.get("state"))
         except ValueError:
             state = TradeState.PENDING
+        order_id = str(tr.get("order_id") or "")
         if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
             try:
                 exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
@@ -687,6 +807,17 @@ def reconcile_positions() -> None:
                 exit_price=exit_price,
             )
             logger.info("[RECONCILE] Closed orphaned trade %s", symbol)
+        elif (
+            order_id
+            and order_id not in open_order_ids
+            and state in {TradeState.PENDING, TradeState.FAILED}
+        ):
+            update_trade(tr.get("trade_id"), status="cancelled")
+            set_trade_state(tr.get("trade_id"), TradeState.FAILED)
+            logger.warning(
+                "[RECONCILE] Pending trade lost on exchange; marking cancelled: %s",
+                symbol,
+            )
 
 
 def start_periodic_position_reconciliation(
@@ -709,6 +840,36 @@ def start_periodic_position_reconciliation(
     thread = threading.Thread(target=_loop, daemon=True, name="trade-reconcile")
     thread.start()
     _reconcile_thread = thread
+    return thread
+
+
+def start_balance_monitoring(
+    interval_seconds: int = BALANCE_MONITOR_INTERVAL,
+) -> threading.Thread | None:
+    """Launch a daemon thread that refreshes cached balance."""
+
+    if config.DRY_RUN:
+        return None
+
+    global _balance_thread
+    if _balance_thread is not None and _balance_thread.is_alive():
+        return _balance_thread
+
+    def _loop():
+        from . import execution
+
+        while True:
+            try:
+                bal = execution.fetch_balance()
+                _record_balance_snapshot(bal)
+                logger.debug("[BALANCE] Saldo actualizado: %.4f USDT", bal)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.error("Error actualizando balance: %s", exc)
+            time.sleep(max(5, interval_seconds))
+
+    thread = threading.Thread(target=_loop, daemon=True, name="balance-monitor")
+    thread.start()
+    _balance_thread = thread
     return thread
 
 
@@ -780,6 +941,15 @@ def create_trade_from_ws(order: dict) -> dict | None:
         return find_trade(symbol=trade.get("symbol"))
 
 
+def verify_trade_on_exchange(trade_id: str, expected_qty: float | None = None) -> float | None:
+    """Cross-check a trade size with the exchange position size."""
+
+    trade = get_open_trade(trade_id)
+    if not trade:
+        return None
+    return _verify_live_position(trade, expected_qty)
+
+
 def _update_from_ws(trade: dict, *, quantity: float | None, entry_price: float | None, state: TradeState) -> None:
     updates = {}
     if quantity is not None and quantity > 0:
@@ -814,6 +984,7 @@ def ws_order_filled(order):
         price = None
 
     _update_from_ws(trade, quantity=qty, entry_price=price, state=TradeState.OPEN)
+    _verify_live_position(trade, qty)
     logger.info("[WS] Trade OPEN via WS %s", symbol)
 
 
@@ -871,6 +1042,9 @@ def ws_position_update(pos):
         entry_price = 0.0
     if entry_price > 0:
         updates["entry_price"] = entry_price
+    unrealized = _extract_unrealized_pnl(pos)
+    if unrealized is not None:
+        updates["unrealized_pnl"] = unrealized
 
     update_trade(trade.get("trade_id"), **updates)
     set_trade_state(trade.get("trade_id"), TradeState.OPEN)
@@ -884,11 +1058,19 @@ def ws_position_closed(pos):
 
     trade = find_trade(symbol=symbol)
     if trade:
+        reported_pnl = _extract_realized_pnl(pos)
         try:
             exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
         except (TypeError, ValueError):
             exit_price = None
-        close_trade(trade_id=trade.get("trade_id"), reason="ws_position_closed", exit_price=exit_price)
+        closed = close_trade(
+            trade_id=trade.get("trade_id"),
+            reason="ws_position_closed",
+            exit_price=exit_price,
+            profit=reported_pnl,
+        )
+        if closed is not None:
+            _apply_reported_realized_pnl(closed, reported_pnl)
         logger.info("[WS] Position CLOSED %s", symbol)
 
 # --- Optional: Auditing/history ---

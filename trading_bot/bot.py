@@ -1329,6 +1329,7 @@ def open_new_trade(signal: dict):
                 # promote to OPEN first, then PARTIALLY_FILLED
                 set_trade_state(trade["trade_id"], TradeState.OPEN)
                 set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
+            expected_qty = trade.get("quantity")
             if status in {"filled", "partial"} and order_id:
                 details = execution.get_order_fill_details(order_id, symbol)
                 if details:
@@ -1336,6 +1337,7 @@ def open_new_trade(signal: dict):
                     filled_qty = details.get("filled")
                     if filled_qty is not None and filled_qty > 0:
                         updates["quantity"] = filled_qty
+                        expected_qty = filled_qty
                     remaining_qty = details.get("remaining")
                     if remaining_qty is not None:
                         updates["remaining_quantity"] = max(remaining_qty, 0.0)
@@ -1344,6 +1346,10 @@ def open_new_trade(signal: dict):
                         updates.setdefault("entry_price", avg_exec)
                     if updates:
                         update_trade(trade["trade_id"], **updates)
+            if status in {"filled", "partial"}:
+                trade_manager.verify_trade_on_exchange(
+                    trade["trade_id"], expected_qty=expected_qty
+                )
         # Limit/stop orders remain pending until websocket or reconciliation confirms fill
 
         save_trades()
@@ -1627,6 +1633,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
 
     # Keep positions reconciled with the exchange every few seconds
     trade_manager.start_periodic_position_reconciliation()
+    trade_manager.start_balance_monitoring()
     _start_price_streams_for_open_trades()
     _start_pending_timeout_monitor()
 
