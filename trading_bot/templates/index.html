@@ -65,7 +65,9 @@
                     <a class="nav-link active" href="#dashboard" data-section-target="dashboard" role="tab" aria-controls="dashboardSection">Dashboard</a>
                     <a class="nav-link" href="#analytics" data-section-target="analytics" role="tab" aria-controls="analyticsSection">Analítica</a>
                     <a class="nav-link" href="#assistant" data-section-target="assistant" role="tab" aria-controls="assistantSection">Asistente IA</a>
+                    {% if service_links %}
                     <a class="nav-link" href="#services" data-section-target="services" role="tab" aria-controls="servicesSection">Servicios</a>
+                    {% endif %}
                 </div>
             </div>
             <div class="d-flex align-items-center gap-3 ms-auto order-lg-3 navbar-actions">
@@ -354,6 +356,7 @@
             </div>
         </section>
 
+        {% if service_links %}
         <section id="servicesSection" class="app-section d-none" data-section="services">
             <div class="row g-3">
                 <div class="col-12 col-xl-5">
@@ -388,6 +391,7 @@
                 </div>
             </div>
         </section>
+        {% endif %}
     </main>
 
     <footer class="footer py-4 text-center">
@@ -425,10 +429,12 @@
                                         <input class="form-check-input" type="checkbox" id="prefSectionAssistant" data-pref-section="assistant">
                                         <label class="form-check-label" for="prefSectionAssistant">Asistente IA</label>
                                     </div>
+                                    {% if service_links %}
                                     <div class="form-check form-switch">
                                         <input class="form-check-input" type="checkbox" id="prefSectionServices" data-pref-section="services">
                                         <label class="form-check-label" for="prefSectionServices">Servicios externos</label>
                                     </div>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>

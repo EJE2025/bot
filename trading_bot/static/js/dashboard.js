@@ -8,8 +8,8 @@ const NOTIFICATION_REQUESTED_KEY = 'dashboard:notifications-requested';
 const THEME_STORAGE_KEY = 'dashboard:theme';
 const PREFERENCES_STORAGE_KEY = 'dashboard:preferences';
 const AVAILABLE_THEMES = ['light', 'dark', 'pastel'];
-const ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
-const SECTION_IDS = [...ORDERED_SECTIONS];
+let ORDERED_SECTIONS = ['dashboard', 'analytics', 'assistant', 'services'];
+let SECTION_IDS = [...ORDERED_SECTIONS];
 const WIDGET_VISIBILITY_KEY = 'dashboard:widget-visibility';
 const DEFAULT_WIDGET_VISIBILITY = {
   metricsPrimary: true,
@@ -522,6 +522,50 @@ function loadPreferences() {
   preferences.refreshInterval = sanitizeRefreshInterval(preferences.refreshInterval);
   state.preferences = preferences;
   state.refreshInterval = preferences.refreshInterval;
+}
+
+function hideServicesUI() {
+  const servicesNav = document.querySelector('[data-section-target="services"]');
+  if (servicesNav) {
+    servicesNav.classList.add('d-none');
+    servicesNav.setAttribute('tabindex', '-1');
+    servicesNav.setAttribute('aria-hidden', 'true');
+  }
+
+  const servicesSection = document.querySelector('[data-section="services"]');
+  if (servicesSection) {
+    servicesSection.classList.add('section-hidden', 'd-none');
+    servicesSection.setAttribute('hidden', 'hidden');
+  }
+
+  const prefToggle = document.querySelector('[data-pref-section="services"]');
+  if (prefToggle) {
+    prefToggle.checked = false;
+    const wrapper = prefToggle.closest('.form-check');
+    if (wrapper) {
+      wrapper.classList.add('d-none');
+    }
+  }
+
+  if (!state.preferences) {
+    state.preferences = { sections: {}, widgets: {}, refreshInterval: state.refreshInterval };
+  }
+  state.preferences.sections = { ...(state.preferences.sections || {}), services: false };
+}
+
+function syncAvailableSections() {
+  const sectionsInDom = Array.from(document.querySelectorAll('.app-section'))
+    .map((section) => section.dataset.section)
+    .filter(Boolean);
+  const available = new Set(sectionsInDom);
+
+  if (!Array.isArray(appConfig.serviceLinks) || appConfig.serviceLinks.length === 0) {
+    available.delete('services');
+    hideServicesUI();
+  }
+
+  ORDERED_SECTIONS = ORDERED_SECTIONS.filter((section) => available.has(section));
+  SECTION_IDS = [...ORDERED_SECTIONS];
 }
 
 function savePreferences() {
@@ -2323,6 +2367,10 @@ function initializeAssistant() {
 }
 
 function initializeServices() {
+  if (!Array.isArray(appConfig.serviceLinks) || appConfig.serviceLinks.length === 0) {
+    hideServicesUI();
+    return;
+  }
   const listContainer = document.getElementById('servicesButtons');
   const emptyAlert = document.getElementById('servicesEmpty');
   const preview = document.getElementById('servicePreview');
@@ -2629,6 +2677,7 @@ function initialize() {
   initTheme();
   loadPreferences();
   loadWidgetPreferences();
+  syncAvailableSections();
   registerServiceWorker();
   switchSection(state.activeSection);
   applyDashboardLayout();
@@ -2643,6 +2692,7 @@ function initialize() {
   refreshAnalytics();
   setStatus('Sincronizando…', 'warning');
   scheduleAutoRefresh();
+  startEventStream();
   connectSocket();
   scheduleNotificationRequest();
   document.addEventListener('visibilitychange', () => {

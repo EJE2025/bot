@@ -165,7 +165,7 @@ modelo predictivo en caliente. Para activarlo:
    ENABLE_MODEL=1
    AUTO_TRAIN_ENABLED=1
    AUTO_TRAIN_POLL_SECONDS=30
-   MIN_TRAIN_SAMPLE_SIZE=50
+   MIN_TRAIN_SAMPLE_SIZE=100
    RETRAIN_INTERVAL_TRADES=50
    DATASET_PATH=./data/auto_train_data.csv
    MODEL_DIR=./models
@@ -178,7 +178,7 @@ modelo predictivo en caliente. Para activarlo:
    VOL_MARGIN_BPS=10
    ```
 
-2. Cada cierre de trade añade una fila etiquetada en `DATASET_PATH` usando un
+2. Cada cierre de trade del bot añade una fila etiquetada en `DATASET_PATH` usando un
    *file lock* para evitar corrupciones. El hilo `auto_trainer` valida el
    esquema (con winsorization ligera) antes de entrenar y usa *class
    weighting* balanceado. El repositorio incluye un dataset semilla en
