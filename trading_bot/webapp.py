@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from gevent import monkey
+
+monkey.patch_all()
+
 import csv
 import json
 import logging
@@ -448,14 +452,11 @@ if Flask:
     @app.route("/")
     @_maybe_login_required
     def index():
-        gateway_base = getattr(config, "DASHBOARD_GATEWAY_BASE", "").strip()
-        if not gateway_base:
-            gateway_base = request.url_root.rstrip("/")
-
+        gateway_base = ""
+        socket_base = ""
         analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip()
 
         ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip()
-        socket_base = getattr(config, "DASHBOARD_SOCKET_BASE", "")
         socket_path = getattr(config, "DASHBOARD_SOCKET_PATH", "")
         return render_template(
             "index.html",
