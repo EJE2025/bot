@@ -151,6 +151,9 @@ variables definidas en `trading_bot/config.py`:
 - `MODEL_SEQ_INTERVAL` intervalo de las velas solicitadas para alimentar el
   modelo secuencial (default `Min5`)
 - `STOP_ATR_MULT` ATR multiple for stop loss (default `1.5`)
+- `TRAILING_ATR_MULT` multiplicador ATR para el trailing stop estilo Chandelier
+  Exit (default `3.0`)
+- `TRAILING_ATR_PERIOD` período del ATR usado para el trailing stop (default `14`)
 - `RSI_PERIOD` período del RSI (default `14`)
 - `MIN_RISK_REWARD` ratio mínimo beneficio/riesgo para abrir (default `2.0`, `1.3` en modo test)
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)

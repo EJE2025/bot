@@ -1098,25 +1098,19 @@ def _handle_price_event(symbol: str, price: float, payload: dict[str, Any] | Non
     candidate_stop: float | None = None
     atr = float(trade.get("atr") or atr_value or 0.0)
     atr_mult = float(trade.get("atr_multiplier") or config.TRAILING_ATR_MULT or 0.0)
-    trailing_uses_atr = config.TRAILING_STOP_ENABLED and atr_mult > 0
 
-    if config.TRAILING_STOP_ENABLED and entry_price > 0 and price > 0 and quantity > 0:
-        if trailing_uses_atr and atr > 0:
-            if side == "BUY":
-                candidate_stop = max(entry_price, peak_price - atr * atr_mult)
-            else:
-                candidate_stop = min(entry_price, trough_price + atr * atr_mult)
-        elif not trailing_uses_atr:
-            gain_pct = (
-                (price - entry_price) / entry_price
-                if side == "BUY"
-                else (entry_price - price) / entry_price
-            )
-            if gain_pct >= config.TRAILING_STOP_TRIGGER:
-                if side == "BUY":
-                    candidate_stop = price * (1 - config.TRAILING_STOP_DISTANCE)
-                else:
-                    candidate_stop = price * (1 + config.TRAILING_STOP_DISTANCE)
+    if (
+        config.TRAILING_STOP_ENABLED
+        and entry_price > 0
+        and price > 0
+        and quantity > 0
+        and atr > 0
+        and atr_mult > 0
+    ):
+        if side == "BUY":
+            candidate_stop = peak_price - atr * atr_mult
+        else:
+            candidate_stop = trough_price + atr * atr_mult
 
     if candidate_stop is not None:
         applied_stop: float | None = None
@@ -1129,7 +1123,15 @@ def _handle_price_event(symbol: str, price: float, payload: dict[str, Any] | Non
         if applied_stop is not None:
             updates["stop_loss"] = applied_stop
             stop_loss_value = applied_stop
-            logger.info("Trailing SL updated for %s -> %.4f", symbol, applied_stop)
+            logger.info(
+                "Trailing SL updated (ATR) for %s -> %.4f [atr=%.4f, mult=%.2f, peak=%.4f, trough=%.4f]",
+                symbol,
+                applied_stop,
+                atr,
+                atr_mult,
+                peak_price,
+                trough_price,
+            )
 
     if updates:
         update_trade(trade.get("trade_id"), **updates)
