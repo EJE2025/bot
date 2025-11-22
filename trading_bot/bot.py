@@ -917,7 +917,11 @@ def _market_stream_worker() -> None:
             continue
 
         try:
-            client.xgroup_create(stream, config.REDIS_CONSUMER_GROUP, id="0-0", mkstream=True)
+            if not client.exists(stream):
+                time.sleep(1)
+                continue
+
+            client.xgroup_create(stream, config.REDIS_CONSUMER_GROUP, id="0-0")
         except RedisError as exc:
             if "BUSYGROUP" not in str(exc):
                 logger.debug("Redis group error on %s: %s", stream, exc)
