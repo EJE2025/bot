@@ -170,7 +170,17 @@ inferencia se aplica normalización *z-score* por característica sobre la misma
 ventana de longitud `N` (media y desviación estándar de cada columna, con un
 epsilon para evitar divisiones por cero); replica ese preprocesado en los
 pipelines de entrenamiento para asegurar que los datos en vivo tienen la misma
-escala.
+escala. Puedes generar un modelo básico LSTM con TensorFlow/Keras usando el
+CLI incluido:
+
+```bash
+python -m trading_bot.sequence_trainer trades.csv --target is_profitable \
+  --window 64 --output models/model_seq.keras
+```
+
+El comando anterior construye ventanas deslizantes de 64 velas con las columnas
+`close`, `high`, `low` y `vol`, entrena un clasificador binario y guarda el
+modelo listo para ser cargado mediante `MODEL_SEQ_PATH`.
 
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
