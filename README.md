@@ -15,7 +15,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Ejecución de órdenes en varios exchanges mediante `ccxt`
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
-- Panel web accesible vía gateway en `http://localhost:8080` para monitoreo en
+- Panel web accesible directamente en `http://localhost:8000` para monitoreo en
   tiempo real. Los datos de operaciones se consultan desde el endpoint
   `/api/trades`
 - La plantilla HTML del dashboard se encuentra en `trading_bot/templates/index.html` para facilitar su personalizacion.
@@ -61,53 +61,14 @@ python -m trading_bot.train_model miarchivo.csv --target result
 
 ### Panel web y sincronización con el bot
 
-El dashboard obtiene las rutas de la API y del WebSocket desde las variables de
-entorno que recibe `trading_bot/webapp.py`. En despliegues con microservicios es
-imprescindible arrancar los tres servicios (`trading_engine`, `trading_bot` y
-`gateway`) y exponer el panel a través del gateway:
+El dashboard ahora funciona sin microservicios adicionales: basta con arrancar
+el bot para servir tanto la API como la página web en el puerto `8000`.
 
-1. Inicia los servicios con `docker-compose up` para levantar `gateway` en el
-   puerto `8080`, `trading_bot` en el `8004` del host (usa el `8000` interno) y
-   `trading_engine` en `8000`.
-2. Define `DASHBOARD_GATEWAY_BASE` (o `GATEWAY_BASE_URL`) con
-   `http://localhost:8080` antes de arrancar el bot para que el HTML inyecte la
-   URL correcta. Si usas WebSocket, configura también `DASHBOARD_SOCKET_BASE` y
-   `DASHBOARD_SOCKET_PATH` hacia el gateway o el bot.
-3. Accede siempre al panel desde `http://localhost:8080`. Si se abre en
-   `localhost:8000`, el navegador intentará llamar a `/api/*` y al socket en el
-   origen equivocado y mostrará “No se pudo contactar con la API del bot”.
+1. Inicia el bot con `python -m trading_bot.bot`.
+2. Abre `http://localhost:8000` en el navegador para ver el dashboard.
 
-Si prefieres iniciar los servicios manualmente en lugar de usar Docker,
-arráncalos con `uvicorn` desde sus carpetas correspondientes y verifica que el
-puerto `8080` quede ocupado por el gateway (puedes comprobarlo con
-`lsof -i :8080` o `netstat -ln | grep 8080`):
-
-```bash
-# trading_bot/dashboard (sirve el HTML en 8000 por defecto)
-python -m trading_bot.bot
-
-# Pasarela FastAPI consumida por el dashboard
-cd services/gateway
-uvicorn app:app --host 0.0.0.0 --port 8080
-
-# Motor de órdenes al que reenvía el gateway
-cd ../trading_engine
-uvicorn app:app --host 0.0.0.0 --port 8001
-
-# Servicios adicionales opcionales
-cd ../analytics
-uvicorn app:app --host 0.0.0.0 --port 5002
-cd ../ai_service
-uvicorn app:app --host 0.0.0.0 --port 5003
-```
-
-El dashboard solo mostrará datos en tiempo real cuando el gateway esté
-respondiendo en `localhost:8080`; de lo contrario, el navegador seguirá cargando
-la interfaz estática servida por Flask en `localhost:8000`, pero fallará cualquier
-llamada AJAX o SSE.
-
-Con esta configuración, el dashboard se sincronizará con el bot y recibirá las
-actualizaciones en tiempo real.
+La página usa los endpoints del propio bot (`/api/*` y WebSocket) por lo que no
+es necesario configurar gateways ni Docker Compose.
 
 Los antiguos envoltorios `run_backtest.py` (cargaba `backtest.yml` + `backtest.csv`
 y ejecutaba el motor) y `train_predictive_model.py` (envoltorio CLI sobre
@@ -188,15 +149,7 @@ modelo listo para ser cargado mediante `MODEL_SEQ_PATH`.
 - `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
-- `WEBAPP_PORT` dashboard port (default `8000`)
-- `DASHBOARD_GATEWAY_BASE` URL base del gateway FastAPI (déjalo vacío para usar el
-  mismo origen que el dashboard; default cadena vacía)
-- `ANALYTICS_GRAPHQL_URL` endpoint opcional de analítica GraphQL (default
-  `${DASHBOARD_GATEWAY_BASE}/graphql` cuando el gateway está configurado)
-- `AI_ASSISTANT_URL` endpoint opcional del asistente IA (default
-  `${DASHBOARD_GATEWAY_BASE}/ai/chat` cuando el gateway está configurado)
-- `BOT_SERVICE_URL` URL base que utilizará el gateway para reenviar llamadas al
-  dashboard Flask del bot (default `http://trading_bot:8000`)
+  - `WEBAPP_PORT` dashboard port (default `8000`)
 
 Copia `.env.example` a `.env` y rellena tus claves API para comenzar. El bot
 cargará automáticamente ese archivo al iniciarse.
@@ -361,32 +314,10 @@ pytest
 Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más informacion.
 
 
-## Nueva arquitectura basada en microservicios
+## Arquitectura simplificada
 
-El bot se ha ampliado para funcionar como una plataforma moderna compuesta por servicios independientes:
-
-- **Trading Engine** (`services/trading_engine/app.py`): API de FastAPI para la gestión de órdenes en memoria.
-- **Streaming Service** (`services/streaming_service/app.py`): publica eventos de mercado mediante Redis Streams.
-- **Analytics Service** (`services/analytics/app`): expone un endpoint GraphQL con modelos SQLAlchemy para usuarios, ajustes y operaciones.
-- **AI Service** (`services/ai_service/app.py`): integra ChatGPT para generar informes y responder preguntas contextuales.
-- **Gateway** (`services/gateway/app.py`): punto de entrada único que reenvía peticiones a los servicios anteriores.
-- **Frontend** (`services/frontend`): base documentada para una SPA Next.js/SvelteKit conectada al gateway.
-
-Cada servicio se empaqueta mediante Docker y se orquesta con `docker-compose` para facilitar despliegues reproducibles.
-
-### Orquestación con Docker Compose
-
-El archivo `docker-compose.yml` en la raíz levanta Redis, PostgreSQL y los microservicios descritos. Ajusta las variables de entorno
-según tus credenciales y la clave `OPENAI_API_KEY` para habilitar la IA.
-
-### Integración de la IA
-
-El Gateway expone `/ai/report` y `/ai/chat`, que a su vez llaman al servicio AI. Puedes invocar estos endpoints desde el frontend o scripts
-de automatización para mostrar informes de rendimiento, explicar métricas y resolver dudas operativas.
-
-### Próximos pasos sugeridos
-
-1. Desplegar el frontend siguiendo las instrucciones de `services/frontend/README.md`.
-2. Conectar el bot de trading existente a la cola de eventos (`Redis Streams`) para enviar datos en tiempo real al Streaming Service.
-3. Alimentar el Analytics Service con los resultados históricos del bot para aprovechar las consultas GraphQL.
-4. Definir pipelines de CI/CD que construyan y publiquen las imágenes Docker de cada microservicio.
+El dashboard vuelve a ejecutarse de forma monolítica dentro del bot, sin
+microservicios ni orquestación con Docker Compose. Todos los endpoints de datos
+y el HTML del panel viven en `trading_bot/webapp.py`, por lo que basta con
+mantener las dependencias de `requirements.txt` instaladas para trabajar en
+local.
