@@ -158,13 +158,58 @@ def _build_sequence_tensor(symbol: str, window: int, interval: str) -> np.ndarra
 
 
 def passes_probability_threshold(
-    prob: float, risk_reward: float, volatility: float | None = None
+    prob: float,
+    risk_reward: float,
+    volatility: float | None = None,
+    **kwargs,
 ) -> bool:
-    threshold = probability_threshold(risk_reward, volatility=volatility)
+    threshold = probability_threshold(
+        risk_reward, volatility=volatility, **kwargs
+    )
     return prob >= threshold
 
 
-def probability_threshold(risk_reward: float, *, volatility: float | None = None) -> float:
+def _round_trip_cost_fraction(
+    entry_price: float | None,
+    *,
+    bids_top: Sequence[Sequence[float]] | None = None,
+    asks_top: Sequence[Sequence[float]] | None = None,
+) -> float:
+    """Estimate round-trip trading costs as a fraction of notional."""
+
+    fee_in = getattr(config, "TAKER_FEE_RATE", config.FEE_EST)
+    fee_out = getattr(config, "TAKER_FEE_RATE", config.FEE_EST)
+    spread_fraction = 0.0
+
+    if entry_price and entry_price > 0 and bids_top and asks_top:
+        try:
+            top_bid = float(bids_top[0][0])
+            top_ask = float(asks_top[0][0])
+            spread = max(0.0, top_ask - top_bid)
+            reference_price = max((top_bid + top_ask) / 2.0, entry_price, 1e-9)
+            spread_fraction = spread / reference_price
+        except Exception:  # pragma: no cover - defensive
+            spread_fraction = 0.0
+
+    return max(0.0, fee_in + fee_out + spread_fraction)
+
+
+def _breakeven_probability(risk_reward: float, cost_fraction: float) -> float:
+    if risk_reward <= 0:
+        return 1.0
+    cost = max(cost_fraction, 0.0)
+    return cost / max(risk_reward + cost, 1e-9)
+
+
+def probability_threshold(
+    risk_reward: float,
+    *,
+    volatility: float | None = None,
+    cost_fraction: float | None = None,
+    entry_price: float | None = None,
+    bids_top: Sequence[Sequence[float]] | None = None,
+    asks_top: Sequence[Sequence[float]] | None = None,
+) -> float:
     """Compute the minimum probability required to keep a signal."""
     if risk_reward <= 0:
         return 1.0
@@ -179,8 +224,16 @@ def probability_threshold(risk_reward: float, *, volatility: float | None = None
         else:
             base_with_margin = base_threshold
     fee_margin = getattr(config, "FEE_AWARE_MARGIN_BPS", 0) / 10000.0
-    fee = config.FEE_EST
-    breakeven = fee / max(risk_reward + fee, 1e-9)
+
+    if cost_fraction is None:
+        if entry_price is not None and entry_price > 0:
+            cost_fraction = _round_trip_cost_fraction(
+                entry_price, bids_top=bids_top, asks_top=asks_top
+            )
+        else:
+            cost_fraction = config.FEE_EST
+
+    breakeven = _breakeven_probability(risk_reward, cost_fraction)
     dynamic_threshold = breakeven + config.PROBABILITY_MARGIN + fee_margin
 
     if volatility is not None:
@@ -207,6 +260,7 @@ def log_signal_details(
     seq_prob: float | None = None,
     blended_prob: float | None = None,
     prob_threshold: float | None = None,
+    breakeven_win_rate: float | None = None,
 ) -> None:
     """Log detailed signal information and model status."""
     global _NOTIFIED_NO_MODEL
@@ -243,6 +297,12 @@ def log_signal_details(
             "[%s] Umbral mínimo de probabilidad aplicado: %.2f%%",
             symbol,
             prob_threshold * 100,
+        )
+    if breakeven_win_rate is not None:
+        logger.debug(
+            "[%s] Win rate breakeven necesario: %.2f%%",
+            symbol,
+            breakeven_win_rate * 100,
         )
 
 
@@ -502,6 +562,10 @@ def decidir_entrada(
     risk = abs(entry_price - stop_loss)
     risk_reward = risk_reward_ratio(entry_price, take_profit, stop_loss)
     volatility_ratio = atr_val / entry_price if entry_price > 0 else 0.0
+    cost_fraction = _round_trip_cost_fraction(
+        entry_price, bids_top=bids_top, asks_top=asks_top
+    )
+    breakeven_prob = _breakeven_probability(risk_reward, cost_fraction)
 
     side_label = "long" if decision == "BUY" else "short"
     feature_snapshot = {
@@ -550,6 +614,7 @@ def decidir_entrada(
         "orig_prob": prob_heuristic,
         "risk_reward": risk_reward,
         "volatility": volatility_ratio,
+        "breakeven_win_rate": breakeven_prob,
         "timeframe": "short_term",
         "max_duration_minutes": config.MAX_TRADE_DURATION_MINUTES,
         "open_time": datetime.now(timezone.utc)
@@ -612,9 +677,24 @@ def decidir_entrada(
     )
     signal["prob_success"] = blended_prob
     final_prob = signal["prob_success"]
-    threshold = probability_threshold(risk_reward, volatility=volatility_ratio)
+    threshold = probability_threshold(
+        risk_reward,
+        volatility=volatility_ratio,
+        cost_fraction=cost_fraction,
+        entry_price=entry_price,
+        bids_top=bids_top,
+        asks_top=asks_top,
+    )
     signal["prob_threshold"] = threshold
-    if not passes_probability_threshold(final_prob, risk_reward, volatility_ratio):
+    if not passes_probability_threshold(
+        final_prob,
+        risk_reward,
+        volatility_ratio,
+        cost_fraction=cost_fraction,
+        entry_price=entry_price,
+        bids_top=bids_top,
+        asks_top=asks_top,
+    ):
         logger.debug(
             "[%s] señal descartada por probabilidad %.2f < %.2f",
             symbol,
@@ -654,6 +734,7 @@ def decidir_entrada(
         seq_prob=seq_prob,
         blended_prob=blended_prob,
         prob_threshold=threshold,
+        breakeven_win_rate=breakeven_prob,
     )
     return signal
 
