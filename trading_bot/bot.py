@@ -1097,7 +1097,12 @@ def _handle_price_event(symbol: str, price: float, payload: dict[str, Any] | Non
 
     candidate_stop: float | None = None
     atr = float(trade.get("atr") or atr_value or 0.0)
-    atr_mult = float(trade.get("atr_multiplier") or config.TRAILING_ATR_MULT or 0.0)
+    atr_mult = float(
+        trade.get("trailing_atr_multiplier")
+        or config.TRAILING_ATR_MULT
+        or trade.get("atr_multiplier")
+        or 0.0
+    )
 
     if (
         config.TRAILING_STOP_ENABLED
