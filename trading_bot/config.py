@@ -328,6 +328,9 @@ PROBABILITY_MARGIN = _clamp(_float_env("PROBABILITY_MARGIN", 0.05), 0.0, 0.25)
 FEE_AWARE_MARGIN_BPS = _int_env("FEE_AWARE_MARGIN_BPS", 2, clamp=(0, 1000))
 # Estimated round-trip trading cost (fees + slippage) expressed as fraction of risk
 FEE_EST = _positive_float_env("FEE_EST", 0.0006, minimum=0.0)
+# Exchange fee rates (expressed as fraction of notional)
+TAKER_FEE_RATE = _positive_float_env("TAKER_FEE_RATE", 0.0006, minimum=0.0)
+MAKER_FEE_RATE = _positive_float_env("MAKER_FEE_RATE", 0.0002, minimum=0.0)
 
 # Reinforcement learning policy tuning
 RL_AGENT_ENABLED = _bool_env("RL_AGENT_ENABLED", False)
