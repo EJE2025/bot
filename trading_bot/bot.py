@@ -1017,7 +1017,24 @@ def _price_stream_worker(symbol: str) -> None:
 def _start_price_streams_for_open_trades() -> None:
     if config.MARKET_STREAM:
         _ensure_market_stream_consumer()
-        return
+
+        client = _get_redis_client()
+        if client is None:
+            logger.debug("Redis unavailable; falling back to legacy price consumers")
+        else:
+            try:
+                if client.exists(config.MARKET_STREAM):
+                    return
+                logger.debug(
+                    "Market stream %s missing; enabling legacy price consumers",
+                    config.MARKET_STREAM,
+                )
+            except RedisError as exc:
+                logger.debug(
+                    "Failed to inspect market stream %s: %s; enabling legacy consumers",
+                    config.MARKET_STREAM,
+                    exc,
+                )
 
     for tr in all_open_trades():
         _ensure_price_consumer(tr.get("symbol", ""))
