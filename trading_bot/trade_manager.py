@@ -791,33 +791,69 @@ def reconcile_positions() -> None:
         symbol = normalize_symbol(tr.get("symbol", ""))
         if symbol in active_symbols:
             continue
-        try:
-            state = TradeState(tr.get("state"))
-        except ValueError:
-            state = TradeState.PENDING
+
+        # --- INICIO DEL CAMBIO: Verificación de seguridad antes de cerrar ---
+
         order_id = str(tr.get("order_id") or "")
-        if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
+        should_close = True
+
+        # Si tenemos un ID de orden, preguntamos a la API específicamente por esa orden
+        # antes de asumir que la posición ha desaparecido.
+        if order_id and not config.DRY_RUN:
             try:
-                exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
-            except (TypeError, ValueError):
-                exit_price = None
-            close_trade(
-                trade_id=tr.get("trade_id"),
-                reason="reconcile_missing",
-                exit_price=exit_price,
-            )
-            logger.info("[RECONCILE] Closed orphaned trade %s", symbol)
-        elif (
-            order_id
-            and order_id not in open_order_ids
-            and state in {TradeState.PENDING, TradeState.FAILED}
-        ):
-            update_trade(tr.get("trade_id"), status="cancelled")
-            set_trade_state(tr.get("trade_id"), TradeState.FAILED)
-            logger.warning(
-                "[RECONCILE] Pending trade lost on exchange; marking cancelled: %s",
-                symbol,
-            )
+                from . import execution  # Import local para evitar ciclos
+
+                status = execution.fetch_order_status(order_id, symbol)
+                # Si la orden sigue "new" o "partial" o "filled", NO la cerramos localmente
+                # aunque no salga en fetch_positions (puede ser lag de la API de posiciones)
+                if status in ("new", "partial", "filled", "open"):
+                    logger.info(
+                        "Posición no visible pero orden %s estado: %s. Mantenemos trade.",
+                        order_id,
+                        status,
+                    )
+                    should_close = False
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "Error verificando orden %s: %s. Mantenemos trade por seguridad.",
+                    order_id,
+                    e,
+                )
+                should_close = False  # Ante la duda, no cerrar
+
+        if should_close:
+            try:
+                state = TradeState(tr.get("state"))
+            except ValueError:
+                state = TradeState.PENDING
+
+            if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
+                try:
+                    exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
+                except (TypeError, ValueError):
+                    exit_price = None
+                close_trade(
+                    trade_id=tr.get("trade_id"),
+                    reason="reconcile_missing",
+                    exit_price=exit_price,
+                )
+                logger.info(
+                    "[RECONCILE] Cerrado trade huérfano %s (no está en cartera ni tiene orden activa)",
+                    symbol,
+                )
+            elif (
+                order_id
+                and order_id not in open_order_ids
+                and state in {TradeState.PENDING, TradeState.FAILED}
+            ):
+                update_trade(tr.get("trade_id"), status="cancelled")
+                set_trade_state(tr.get("trade_id"), TradeState.FAILED)
+                logger.warning(
+                    "[RECONCILE] Pending trade lost on exchange; marking cancelled: %s",
+                    symbol,
+                )
+
+        # --- FIN DEL CAMBIO ---
 
 
 def start_periodic_position_reconciliation(
