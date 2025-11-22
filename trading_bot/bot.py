@@ -1367,17 +1367,20 @@ def open_new_trade(signal: dict):
             signal["entry_price"],
             order_type=order_type,
         )
+        
         if not isinstance(order, dict):
-            logger.warning("Order response unexpected for %s: %s", symbol, order)
+            logger.warning("Respuesta inesperada al abrir %s: %s", symbol, order)
             set_trade_state(trade["trade_id"], TradeState.FAILED)
             return None
 
         order_id = order.get("id")
-        avg_price = float(order.get("average") or signal["entry_price"])
+
+        # Actualizamos datos básicos pero NO cambiamos el estado a OPEN todavía
+        # Dejamos que la "Verdad" (WebSocket o Reconcile) nos diga si se abrió.
         update_trade(
             trade["trade_id"],
             order_id=order_id,
-            entry_price=avg_price,
+            entry_price=float(order.get("average") or signal["entry_price"]),
             status="active",
             created_ts=time.time(),
         )
@@ -1405,36 +1408,20 @@ def open_new_trade(signal: dict):
             # Notificar SIEMPRE antes de salir (un solo return)
             return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
+        # Verificación inmediata: Solo si la API dice explícitamente "filled", lo creemos.
+        # Si dice "new", "partial" o no dice nada, nos quedamos en PENDING.
         status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
-        if order_type == "market":
-            if status == "filled":
-                set_trade_state(trade["trade_id"], TradeState.OPEN)
-            elif status == "partial":
-                # promote to OPEN first, then PARTIALLY_FILLED
-                set_trade_state(trade["trade_id"], TradeState.OPEN)
-                set_trade_state(trade["trade_id"], TradeState.PARTIALLY_FILLED)
-            expected_qty = trade.get("quantity")
-            if status in {"filled", "partial"} and order_id:
-                details = execution.get_order_fill_details(order_id, symbol)
-                if details:
-                    updates: dict[str, float] = {}
-                    filled_qty = details.get("filled")
-                    if filled_qty is not None and filled_qty > 0:
-                        updates["quantity"] = filled_qty
-                        expected_qty = filled_qty
-                    remaining_qty = details.get("remaining")
-                    if remaining_qty is not None:
-                        updates["remaining_quantity"] = max(remaining_qty, 0.0)
-                    avg_exec = details.get("average")
-                    if avg_exec:
-                        updates.setdefault("entry_price", avg_exec)
-                    if updates:
-                        update_trade(trade["trade_id"], **updates)
-            if status in {"filled", "partial"}:
-                trade_manager.verify_trade_on_exchange(
-                    trade["trade_id"], expected_qty=expected_qty
-                )
-        # Limit/stop orders remain pending until websocket or reconciliation confirms fill
+
+        if status == "filled":
+            logger.info("Orden %s confirmada FILLED inmediatamente.", order_id)
+            set_trade_state(trade["trade_id"], TradeState.OPEN)
+            # Verificación extra de cantidad
+            details = execution.get_order_fill_details(order_id, symbol)
+            if details and details.get("filled", 0) > 0:
+                update_trade(trade["trade_id"], quantity=details["filled"])
+        
+        # Si no está "filled", el bot NO hace nada. 
+        # El archivo reconcile.py o bitget_ws.py detectarán la posición en unos segundos.
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
