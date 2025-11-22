@@ -122,6 +122,7 @@ _aux_cleanup_registered = False
 _redis_client: redis.Redis | None = None
 _price_consumer_stop = Event()
 _price_consumers: dict[str, Thread] = {}
+_market_consumer_key = "__market__"
 _daily_profit_lock = RLock()
 _daily_profit_value = 0.0
 _atr_lock = RLock()
@@ -876,6 +877,21 @@ def _price_stream_key(symbol: str) -> str:
     return f"prices:{normalize_symbol(symbol)}"
 
 
+def _ensure_market_stream_consumer() -> None:
+    if not config.MARKET_STREAM:
+        return
+    if _price_consumers.get(_market_consumer_key):
+        return
+
+    worker = Thread(
+        target=_market_stream_worker,
+        name="price-market-stream",
+        daemon=True,
+    )
+    _price_consumers[_market_consumer_key] = worker
+    worker.start()
+
+
 def _ensure_price_consumer(symbol: str) -> None:
     norm = normalize_symbol(symbol)
     if not norm or _price_consumers.get(norm):
@@ -889,6 +905,66 @@ def _ensure_price_consumer(symbol: str) -> None:
     )
     _price_consumers[norm] = worker
     worker.start()
+
+
+def _market_stream_worker() -> None:
+    consumer_name = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    stream = config.MARKET_STREAM
+    while not _price_consumer_stop.is_set():
+        client = _get_redis_client()
+        if client is None:
+            time.sleep(1)
+            continue
+
+        try:
+            client.xgroup_create(stream, config.REDIS_CONSUMER_GROUP, id="0-0", mkstream=True)
+        except RedisError as exc:
+            if "BUSYGROUP" not in str(exc):
+                logger.debug("Redis group error on %s: %s", stream, exc)
+
+        try:
+            entries = client.xreadgroup(
+                config.REDIS_CONSUMER_GROUP,
+                consumer_name,
+                {stream: ">"},
+                count=50,
+                block=5000,
+            )
+        except RedisError as exc:
+            logger.warning("Redis read error for %s: %s", stream, exc)
+            trade_manager.reconcile_positions()
+            time.sleep(1)
+            continue
+
+        if not entries:
+            continue
+
+        for _, messages in entries:
+            for msg_id, payload in messages:
+                parsed = dict(payload)
+                raw_payload = payload.get("payload")
+                if isinstance(raw_payload, str):
+                    try:
+                        decoded = json.loads(raw_payload)
+                        if isinstance(decoded, dict):
+                            parsed.update(decoded)
+                    except json.JSONDecodeError:
+                        logger.debug("Invalid JSON payload in market stream: %s", raw_payload)
+
+                symbol = parsed.get("symbol") or parsed.get("s")
+                price_raw = parsed.get("price") or parsed.get("p")
+                try:
+                    price = float(price_raw)
+                except (TypeError, ValueError):
+                    price = None
+
+                if symbol and price is not None:
+                    _handle_price_event(normalize_symbol(symbol), price, parsed)
+
+                try:
+                    client.xack(stream, config.REDIS_CONSUMER_GROUP, msg_id)
+                except RedisError:
+                    logger.debug("Failed to ack %s on %s", msg_id, stream)
 
 
 def _price_stream_worker(symbol: str) -> None:
@@ -939,6 +1015,10 @@ def _price_stream_worker(symbol: str) -> None:
 
 
 def _start_price_streams_for_open_trades() -> None:
+    if config.MARKET_STREAM:
+        _ensure_market_stream_consumer()
+        return
+
     for tr in all_open_trades():
         _ensure_price_consumer(tr.get("symbol", ""))
 
@@ -1308,7 +1388,9 @@ def open_new_trade(signal: dict):
             set_trade_state(trade["trade_id"], TradeState.OPEN)
             save_trades()
             details = find_trade(trade_id=trade["trade_id"])
-            _ensure_price_consumer(symbol)
+            _ensure_market_stream_consumer()
+            if not config.MARKET_STREAM:
+                _ensure_price_consumer(symbol)
             if details:
                 _publish_trade_event(
                     "open",
@@ -1356,7 +1438,9 @@ def open_new_trade(signal: dict):
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])
-        _ensure_price_consumer(symbol)
+        _ensure_market_stream_consumer()
+        if not config.MARKET_STREAM:
+            _ensure_price_consumer(symbol)
         if details:
             _publish_trade_event(
                 "open",
