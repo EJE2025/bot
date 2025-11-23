@@ -804,9 +804,13 @@ def reconcile_positions() -> None:
                 from . import execution  # Import local para evitar ciclos
 
                 status = execution.fetch_order_status(order_id, symbol)
-                # Si la orden sigue "new" o "partial" o "filled", NO la cerramos localmente
+                # Si la orden sigue "new" o "partial" o está "open", NO la cerramos localmente
                 # aunque no salga en fetch_positions (puede ser lag de la API de posiciones)
-                if status in ("new", "partial", "filled", "open"):
+                #
+                # IMPORTANTE: no incluimos "filled"; la orden de entrada permanece "filled" incluso
+                # cuando la posición ya se ha cerrado manualmente o se ha liquidado. En ese caso la
+                # ausencia en fetch_positions debe primar y debemos cerrar la operación huérfana.
+                if status in ("new", "partial", "open"):
                     logger.info(
                         "Posición no visible pero orden %s estado: %s. Mantenemos trade.",
                         order_id,
