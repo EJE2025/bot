@@ -1385,7 +1385,7 @@ def open_new_trade(signal: dict):
             trade["trade_id"],
             order_id=order_id,
             entry_price=float(order.get("average") or signal["entry_price"]),
-            status="active",
+            status="pending",
             created_ts=time.time(),
         )
 
@@ -1411,21 +1411,6 @@ def open_new_trade(signal: dict):
                 )
             # Notificar SIEMPRE antes de salir (un solo return)
             return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
-
-        # Verificación inmediata: Solo si la API dice explícitamente "filled", lo creemos.
-        # Si dice "new", "partial" o no dice nada, nos quedamos en PENDING.
-        status = execution.fetch_order_status(order_id, symbol) if order_id else "new"
-
-        if status == "filled":
-            logger.info("Orden %s confirmada FILLED inmediatamente.", order_id)
-            set_trade_state(trade["trade_id"], TradeState.OPEN)
-            # Verificación extra de cantidad
-            details = execution.get_order_fill_details(order_id, symbol)
-            if details and details.get("filled", 0) > 0:
-                update_trade(trade["trade_id"], quantity=details["filled"])
-        
-        # Si no está "filled", el bot NO hace nada. 
-        # El archivo reconcile.py o bitget_ws.py detectarán la posición en unos segundos.
 
         save_trades()
         details = find_trade(trade_id=trade["trade_id"])

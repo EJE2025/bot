@@ -770,6 +770,13 @@ def reconcile_positions() -> None:
                 logger.info("[RECONCILE] Recovered external position: %s", symbol)
             continue
 
+        if trade.get("state") == TradeState.PENDING.value:
+            logger.info(
+                "[RECONCILE] Pending trade for %s confirmed by live position; marking OPEN",
+                symbol,
+            )
+            set_trade_state(trade.get("trade_id"), TradeState.OPEN)
+
         updates = {
             "quantity": qty,
             "quantity_remaining": qty,
@@ -804,15 +811,11 @@ def reconcile_positions() -> None:
                 from . import execution  # Import local para evitar ciclos
 
                 status = execution.fetch_order_status(order_id, symbol)
-                # Si la orden sigue "new" o "partial" o está "open", NO la cerramos localmente
-                # aunque no salga en fetch_positions (puede ser lag de la API de posiciones)
-                #
-                # IMPORTANTE: no incluimos "filled"; la orden de entrada permanece "filled" incluso
-                # cuando la posición ya se ha cerrado manualmente o se ha liquidado. En ese caso la
-                # ausencia en fetch_positions debe primar y debemos cerrar la operación huérfana.
-                if status in ("new", "partial", "open"):
+                # Si la orden sigue en estado activo o recién ejecutada, no asumimos desaparición
+                # de la posición; podría ser lag en la API de posiciones.
+                if status in ("new", "partial", "open", "filled"):
                     logger.info(
-                        "Posición no visible pero orden %s estado: %s. Mantenemos trade.",
+                        "Posición no visible (lag API) pero orden %s estado: %s. Mantenemos trade.",
                         order_id,
                         status,
                     )
