@@ -1412,23 +1412,23 @@ def open_new_trade(signal: dict):
             # Notificar SIEMPRE antes de salir (un solo return)
             return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
+        logger.info(
+            "Solicitud enviada para %s (ID: %s). Estado PENDING. Esperando confirmación de cartera...",
+            symbol,
+            order_id,
+        )
+
+        # NO verificamos status aquí. Confiamos ciegamente en la API asíncrona.
         save_trades()
-        details = find_trade(trade_id=trade["trade_id"])
+
+        # Iniciamos streams de precio preventivamente
         _ensure_market_stream_consumer()
         if not config.MARKET_STREAM:
             _ensure_price_consumer(symbol)
-        if details:
-            _publish_trade_event(
-                "open",
-                {
-                    "trade_id": details.get("trade_id"),
-                    "symbol": details.get("symbol"),
-                    "side": details.get("side"),
-                    "entry_price": details.get("entry_price"),
-                    "quantity": details.get("quantity"),
-                },
-            )
-        # Notificar SIEMPRE antes de salir (un solo return)
+
+        # Retornamos el trade en estado PENDING.
+        # El dashboard verá "Pendiente" hasta que aparezca la posición real.
+        details = find_trade(trade_id=trade["trade_id"])
         return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
 
     except permissions.PermissionError as exc:
