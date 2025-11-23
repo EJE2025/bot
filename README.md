@@ -120,13 +120,13 @@ variables definidas en `trading_bot/config.py`:
 - `DEFAULT_LEVERAGE` apalancamiento por defecto (default `10`)
 - `MIN_POSITION_SIZE` tamaño mínimo de posición permitido (default `0.001`, `1e-4` en modo test)
 - `RISK_PER_TRADE` cantidad fija en USDT o porcentaje del balance a arriesgar por trade. Si es menor que 1 se interpreta como porcentaje (default `0.01`, es decir 1% del saldo)
-- `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `15`)
+- `ORDER_FILL_TIMEOUT` seconds to wait before canceling unfilled limit orders (default `120`)
 
 - `ENABLE_TRADE_HISTORY_LOG` activa el registro detallado de cambios en memoria (default `0`)
 - `MAX_TRADE_HISTORY_SIZE` número máximo de eventos en memoria antes de descartar los más antiguos (default `1000`)
 - `MAX_CLOSED_TRADES` número máximo de operaciones cerradas que se mantienen en memoria antes de purgar las más antiguas (default `2000`)
 - `MAX_TRADES_PER_SYMBOL` límite de operaciones simultáneas por par (default `1`)
-- `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `5`)
+- `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `2`)
 
 Los modelos secuenciales deben entrenarse con tensores de entrada de forma
 `(batch, N, 4)` siguiendo el orden `[close, high, low, volume]`. Durante la
@@ -146,7 +146,7 @@ El comando anterior construye ventanas deslizantes de 64 velas con las columnas
 `close`, `high`, `low` y `vol`, entrena un clasificador binario y guarda el
 modelo listo para ser cargado mediante `MODEL_SEQ_PATH`.
 
-- `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `60`)
+- `ORDER_MAX_AGE` seconds after which pending orders are automatically cancelled (default `120`)
 - `MAX_SLIPPAGE` maximum allowed difference between target and execution price when closing a trade (default `0.01`)
 - `WEBAPP_HOST` dashboard host (default `0.0.0.0`)
   - `WEBAPP_PORT` dashboard port (default `8000`)
@@ -217,7 +217,7 @@ La detección de soportes y resistencias utiliza `scipy`; si estas bibliotecas n
 | `LOG_LEVEL` | Nivel de verbosidad del log (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `DATA_RETRY_ATTEMPTS`| Número de reintentos al descargar datos antes de usar la caché. | `3` |
 | `ORDER_SUBMIT_ATTEMPTS` | Reintentos al enviar o cerrar órdenes. | `3` |
-| `TRADE_COOLDOWN` | Tiempo en segundos que debe transcurrir antes de reabrir el mismo símbolo (derivado de `COOLDOWN_MINUTES` si no se especifica). | `300` |
+| `TRADE_COOLDOWN` | Tiempo en segundos que debe transcurrir antes de reabrir el mismo símbolo (derivado de `COOLDOWN_MINUTES` si no se especifica). | `120` |
 | `MAX_CONCURRENT_REQUESTS` | Número máximo de llamadas simultáneas al exchange. | `5` |
 | `CPU_THRESHOLD` | Fracción de uso de CPU a partir de la cual se enviará una alerta (0–1). | `0.8` |
 | `MEMORY_THRESHOLD_MB` | Uso de memoria en MB que dispara una alerta. | `500` |
