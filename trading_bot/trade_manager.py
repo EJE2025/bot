@@ -811,13 +811,26 @@ def reconcile_positions() -> None:
                 from . import execution  # Import local para evitar ciclos
 
                 status = execution.fetch_order_status(order_id, symbol)
-                # Si la orden sigue en estado activo o recién ejecutada, no asumimos desaparición
-                # de la posición; podría ser lag en la API de posiciones.
-                if status in ("new", "partial", "open", "filled"):
+
+                # --- LÓGICA DE PROTECCIÓN DE LA VERDAD ---
+                # Calculamos la edad del trade en segundos para protegerlo del lag inicial
+                created_ts = float(tr.get("created_ts") or 0)
+                age_seconds = time.time() - created_ts
+                is_young = age_seconds < 60  # Margen de seguridad de 1 minuto
+
+                # Reglas de supervivencia:
+                # 1. Si está 'new'/'partial'/'open', la orden sigue viva en el book -> NO CERRAR.
+                # 2. Si está 'filled' Y es joven (<60s), es casi seguro lag de la API de posiciones -> NO CERRAR.
+                # 3. Si está 'filled' Y es vieja (>60s), y no hay posición -> Asumimos cierre externo -> CERRAR.
+
+                if status in ("new", "partial", "open"):
+                    logger.info("Orden %s activa (%s). Esperando ejecución...", order_id, status)
+                    should_close = False
+                elif status == "filled" and is_young:
                     logger.info(
-                        "Posición no visible (lag API) pero orden %s estado: %s. Mantenemos trade.",
+                        "Orden %s FILLED pero posición no visible (lag %ds). Protegiendo trade.",
                         order_id,
-                        status,
+                        int(age_seconds),
                     )
                     should_close = False
             except Exception as e:  # pragma: no cover - defensive
