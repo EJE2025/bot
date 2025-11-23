@@ -212,9 +212,9 @@ MAX_TRADES_PER_SYMBOL = MAX_POS_PER_SYMBOL
 
 # Cooldown in minutes between trades on the same symbol
 try:
-    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "5"))
+    COOLDOWN_MINUTES = int(os.getenv("COOLDOWN_MINUTES", "2"))
 except (TypeError, ValueError):
-    COOLDOWN_MINUTES = 5
+    COOLDOWN_MINUTES = 2
 
 # Seconds to wait before reopening a trade on the same symbol
 TRADE_COOLDOWN = int(os.getenv("TRADE_COOLDOWN", str(COOLDOWN_MINUTES * 60)))
@@ -381,11 +381,11 @@ MIN_RISK_REWARD = float(
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "10"))
 
 # Seconds to wait for a limit order to be filled before canceling
-ORDER_FILL_TIMEOUT = int(os.getenv("ORDER_FILL_TIMEOUT", "15"))
+ORDER_FILL_TIMEOUT = int(os.getenv("ORDER_FILL_TIMEOUT", "120"))
 
 
 # Seconds after which pending limit orders are cancelled automatically
-ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "60"))
+ORDER_MAX_AGE = int(os.getenv("ORDER_MAX_AGE", "120"))
 
 # Web dashboard configuration
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
