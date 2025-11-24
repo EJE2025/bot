@@ -804,6 +804,12 @@ def reconcile_positions() -> None:
         order_id = str(tr.get("order_id") or "")
         should_close = True
 
+        # Si vemos la orden aún en el libro de órdenes abiertas, asumimos que
+        # sigue viva aunque fetch_order_status falle. Más vale esperar que
+        # cerrar prematuramente.
+        if order_id and order_id in open_order_ids:
+            should_close = False
+
         # Si tenemos un ID de orden, preguntamos a la API específicamente por esa orden
         # antes de asumir que la posición ha desaparecido.
         if order_id and not config.DRY_RUN:
@@ -814,9 +820,14 @@ def reconcile_positions() -> None:
 
                 # --- LÓGICA DE PROTECCIÓN DE LA VERDAD ---
                 # Calculamos la edad del trade en segundos para protegerlo del lag inicial
-                created_ts = float(tr.get("created_ts") or 0)
-                age_seconds = time.time() - created_ts
-                is_young = age_seconds < 60  # Margen de seguridad de 1 minuto
+                created_raw = tr.get("created_ts")
+                try:
+                    created_ts = float(created_raw)
+                except (TypeError, ValueError):
+                    created_ts = None
+
+                age_seconds = time.time() - created_ts if created_ts is not None else None
+                is_young = age_seconds is None or age_seconds < 60  # Margen de seguridad de 1 minuto
 
                 # Reglas de supervivencia:
                 # 1. Si está 'new'/'partial'/'open', la orden sigue viva en el book -> NO CERRAR.
@@ -830,7 +841,20 @@ def reconcile_positions() -> None:
                     logger.info(
                         "Orden %s FILLED pero posición no visible (lag %ds). Protegiendo trade.",
                         order_id,
-                        int(age_seconds),
+                        int(age_seconds or 0),
+                    )
+                    should_close = False
+                elif not status:
+                    logger.warning(
+                        "Estado desconocido para orden %s; conservamos trade por seguridad.",
+                        order_id,
+                    )
+                    should_close = False
+                elif status not in {"filled", "closed", "cancelled"}:
+                    logger.info(
+                        "Estado inesperado '%s' para orden %s. Manteniendo trade abierto.",
+                        status,
+                        order_id,
                     )
                     should_close = False
             except Exception as e:  # pragma: no cover - defensive
