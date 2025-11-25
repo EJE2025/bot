@@ -452,16 +452,24 @@ if Flask:
     @app.route("/")
     @_maybe_login_required
     def index():
-        gateway_base = ""
-        socket_base = ""
+        gateway_base = getattr(config, "DASHBOARD_GATEWAY_BASE", "").strip().rstrip("/")
+        socket_base = getattr(config, "DASHBOARD_SOCKET_BASE", "").strip().rstrip("/")
         analytics_graphql = getattr(config, "ANALYTICS_GRAPHQL_URL", "").strip()
 
         ai_endpoint = getattr(config, "AI_ASSISTANT_URL", "").strip()
-        socket_path = getattr(config, "DASHBOARD_SOCKET_PATH", "")
+        socket_path = getattr(config, "DASHBOARD_SOCKET_PATH", "").strip()
+
+        if gateway_base:
+            api_base = gateway_base
+            if not socket_base:
+                socket_base = gateway_base
+        else:
+            api_base = request.host_url.rstrip("/")
+            socket_base = ""
         return render_template(
             "index.html",
             current_year=datetime.utcnow().year,
-            api_base=gateway_base,
+            api_base=api_base,
             analytics_graphql_url=analytics_graphql,
             ai_api_url=ai_endpoint,
             socket_base=socket_base,

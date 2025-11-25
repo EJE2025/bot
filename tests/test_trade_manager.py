@@ -1,12 +1,11 @@
-import os
-import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 import trading_bot.config as config
+import trading_bot.execution as execution
 import trading_bot.trade_manager as tm
 from trading_bot.state_machine import TradeState
 
@@ -138,4 +137,46 @@ def test_close_trade_populates_missing_times(monkeypatch):
     assert closed["open_time"] == expected_open
     assert closed["close_time"]
     assert closed["close_time"].endswith("Z")
+
+
+def test_reconcile_skips_unknown_status(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "DRY_RUN", False)
+
+    trade = tm.add_trade({"symbol": "XRPUSDT", "order_id": "abc123"})
+    tm.update_trade(trade["trade_id"], status="active", created_ts=time.time())
+    tm.set_trade_state(trade["trade_id"], TradeState.OPEN)
+
+    monkeypatch.setattr(execution, "fetch_positions", lambda: [])
+    monkeypatch.setattr(execution, "fetch_open_orders", lambda: [])
+    seen = {}
+
+    def _fetch_order_status(order_id, symbol):
+        seen["called"] = (order_id, symbol)
+        return None
+
+    monkeypatch.setattr(execution, "fetch_order_status", _fetch_order_status)
+
+    tm.reconcile_positions()
+
+    assert tm.find_trade(trade_id=trade["trade_id"]) is not None
+    assert seen["called"][0] == "abc123"
+    assert seen["called"][1].lower() == "xrp_usdt"
+
+
+def test_reconcile_protects_missing_timestamp(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "DRY_RUN", False)
+
+    trade = tm.add_trade({"symbol": "BNBUSDT", "order_id": "order-42"})
+    tm.update_trade(trade["trade_id"], status="active", created_ts=None)
+    tm.set_trade_state(trade["trade_id"], TradeState.OPEN)
+
+    monkeypatch.setattr(execution, "fetch_positions", lambda: [])
+    monkeypatch.setattr(execution, "fetch_open_orders", lambda: [])
+    monkeypatch.setattr(execution, "fetch_order_status", lambda *_: "filled")
+
+    tm.reconcile_positions()
+
+    assert tm.find_trade(trade_id=trade["trade_id"]) is not None
 

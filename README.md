@@ -128,6 +128,35 @@ variables definidas en `trading_bot/config.py`:
 - `MAX_TRADES_PER_SYMBOL` límite de operaciones simultáneas por par (default `1`)
 - `COOLDOWN_MINUTES` minutos de espera tras cerrar una operación antes de volver a operar el mismo par (default `2`)
 
+### Agente de Reinforcement Learning (RL)
+
+El ajuste dinámico de `take profit` y `stop loss` se controla con las siguientes
+variables. El agente se mantiene inactivo salvo que `RL_AGENT_ENABLED=1`.
+
+```env
+RL_AGENT_ENABLED=1          # Activa el agente RL (0 para desactivarlo)
+RL_ALGO=ppo                 # Algoritmo: 'ppo' (por defecto) o 'dqn'
+RL_POLICY_PATH=models/rl_policy.zip
+RL_BUFFER_CAPACITY=400      # Muestras máximas en memoria
+RL_LEARN_INTERVAL=20        # Cada cuántas muestras entrenar
+RL_MIN_TRAINING_SAMPLES=25  # Muestras mínimas antes de aprender
+RL_LEARN_STEPS=500          # Pasos de entrenamiento por sesión
+RL_TP_MULT_MIN=0.8          # Límite inferior multiplicador TP
+RL_TP_MULT_MAX=2.5          # Límite superior multiplicador TP
+RL_SL_MULT_MIN=0.8          # Límite inferior multiplicador SL
+RL_SL_MULT_MAX=2.0          # Límite superior multiplicador SL
+RL_DISCRETE_TP_BINS=4       # Bins discretos de TP al usar DQN
+RL_DISCRETE_SL_BINS=3       # Bins discretos de SL al usar DQN
+RL_PERSIST_AFTER_TRADE=true # Guardar política tras cada trade
+RL_MAX_TP_PCT=0.5           # Máximo TP relativo al precio de entrada
+RL_MAX_STOP_LOSS_PCT=1.0    # Máximo SL relativo al precio de entrada
+```
+
+Cuando está habilitado, el módulo `trading_bot.rl_agent` calcula multiplicadores
+para TP/SL basados en las características de la señal y registra los resultados
+de cada trade para seguir entrenando la política. Si está desactivado, el bot
+usa únicamente las heurísticas tradicionales.
+
 Los modelos secuenciales deben entrenarse con tensores de entrada de forma
 `(batch, N, 4)` siguiendo el orden `[close, high, low, volume]`. Durante la
 inferencia se aplica normalización *z-score* por característica sobre la misma
