@@ -62,6 +62,7 @@ from . import (
     shutdown,
     mode as bot_mode,
     exporter,
+    agent_controller,
 )
 from .indicators import calculate_atr
 from . import webapp
@@ -99,6 +100,9 @@ logging.basicConfig(
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+AGENT = agent_controller.MasterAgent()
+_agent_trading_enabled = True
 
 if globals().get("_GEVENT_IMPORT_ERROR"):
     logger.warning(
@@ -1509,11 +1513,57 @@ def close_existing_trade(
     return None, exec_price, None
 
 
+def _apply_agent_decision(signal: dict) -> dict | None:
+    """Delega la decisión final de apertura al agente maestro."""
+
+    global _agent_trading_enabled
+
+    decision = AGENT.decide(signal.get("symbol", ""), candidate_signal=signal)
+
+    if decision.action == "HARD_STOP":
+        logger.error("AGENT solicitó HARD_STOP para %s: %s", signal.get("symbol"), decision.reason)
+        _agent_trading_enabled = False
+        config.AUTO_TRADE = False
+        return None
+
+    if decision.action in {"OPEN_LONG", "OPEN_SHORT"}:
+        side = "BUY" if decision.action == "OPEN_LONG" else "SELL"
+        updated = dict(signal)
+        updated["side"] = side
+        if decision.quantity is not None:
+            updated["quantity"] = decision.quantity
+        if decision.take_profit is not None:
+            updated["take_profit"] = decision.take_profit
+        if decision.stop_loss is not None:
+            updated["stop_loss"] = decision.stop_loss
+        logger.info(
+            "AGENT abre %s %s qty=%s TP=%s SL=%s (%s)",
+            decision.action,
+            updated.get("symbol"),
+            updated.get("quantity"),
+            updated.get("take_profit"),
+            updated.get("stop_loss"),
+            decision.reason,
+        )
+        return updated
+
+    logger.info(
+        "AGENT decide %s en %s (%s)",
+        decision.action,
+        signal.get("symbol"),
+        decision.reason,
+    )
+    return None
+
+
 def run_one_iteration_open(model=None):
     """Execute a single iteration of the opening logic."""
     if model is None:
         model = current_model()
     execution.cleanup_old_orders()
+    if not _agent_trading_enabled:
+        logger.debug("AGENT trading disabled; skipping openings")
+        return
     if count_open_trades() >= config.MAX_OPEN_TRADES:
         return
     symbols = data.get_common_top_symbols(execution.exchange, 15)
@@ -1552,13 +1602,18 @@ def run_one_iteration_open(model=None):
         if count_open_trades() >= config.MAX_OPEN_TRADES:
             break
         try:
-            open_new_trade(sig)
+            adjusted = _apply_agent_decision(sig) if config.AGENT_CONTROL_ENABLED else sig
+            if not adjusted:
+                continue
+            open_new_trade(adjusted)
         except Exception as exc:
             logger.error("Error processing %s: %s", sig.get("symbol"), exc)
 
 def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> None:
     global _last_excel_snapshot
+    global _agent_trading_enabled
     load_trades()  # Restaurar operaciones guardadas
+    _agent_trading_enabled = True
     permissions.audit_environment(execution.exchange)
 
     if (
@@ -1843,6 +1898,7 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
                 and not config.MAINTENANCE
                 and (config.ENABLE_TRADING or config.SHADOW_MODE)
                 and config.AUTO_TRADE
+                and _agent_trading_enabled
                 and not drift_blocked
                 and count_open_trades() < config.MAX_OPEN_TRADES
             )
@@ -1920,7 +1976,10 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
                         symbol = sig["symbol"]
                         raw = normalize_symbol(symbol).replace("_", "")
                         try:
-                            trade = open_new_trade(sig)
+                            adjusted = _apply_agent_decision(sig) if config.AGENT_CONTROL_ENABLED else sig
+                            if not adjusted:
+                                continue
+                            trade = open_new_trade(adjusted)
                             if not trade:
                                 continue
                             notify.send_telegram(

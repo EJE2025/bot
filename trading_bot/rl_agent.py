@@ -138,9 +138,96 @@ class RLTradingAgent:
                 low=np.array([self.tp_range[0], self.sl_range[0]], dtype=np.float32),
                 high=np.array([self.tp_range[1], self.sl_range[1]], dtype=np.float32),
                 dtype=np.float32,
-            )
+        )
 
         self._model = self._load_model()
+
+    # --- Nuevos métodos para el agente maestro ---
+
+    def encode_state(self, observation: dict | None) -> np.ndarray:
+        """Vectoriza una observación de alto nivel.
+
+        Incluye señales básicas de riesgo (trades abiertos, drawdown) y
+        características de mercado derivadas de ``observation``.
+        """
+
+        observation = observation or {}
+        market = observation.get("market") or {}
+        closes = market.get("close") or []
+        high = market.get("high") or []
+        low = market.get("low") or []
+        open_trades = observation.get("open_trades") or []
+        account = observation.get("account") or {}
+        signal = observation.get("candidate_signal") or {}
+
+        last_close = float(closes[-1]) if closes else 0.0
+        last_high = float(high[-1]) if high else last_close
+        last_low = float(low[-1]) if low else last_close
+        price_range = last_high - last_low
+        price_range = price_range / max(last_close, 1e-6)
+        open_count = float(len(open_trades))
+        daily_dd_pct = float(account.get("daily_drawdown_pct") or 0.0)
+        prob_success = float(signal.get("prob_success") or 0.5)
+
+        state_fields = [
+            last_close,
+            price_range,
+            open_count,
+            daily_dd_pct,
+            prob_success,
+        ]
+
+        # Asegurar tamaño fijo con padding si faltan datos técnicos
+        return np.asarray(state_fields, dtype=np.float32)
+
+    def decide_action(
+        self,
+        *,
+        state_vec: np.ndarray | None,
+        direction: str,
+        confidence: float,
+        has_open_trades: bool,
+    ) -> dict[str, float | str | None]:
+        """Elegir acción de alto nivel combinando política RL y señal base."""
+
+        if not self.enabled:
+            return {"action": "HOLD"}
+
+        action = "HOLD"
+        confidence = max(0.0, min(1.0, float(confidence)))
+        direction = direction.lower()
+
+        # Inferir tipo de acción
+        if direction == "long" and confidence >= 0.55:
+            action = "OPEN_LONG"
+        elif direction == "short" and confidence >= 0.55:
+            action = "OPEN_SHORT"
+        elif has_open_trades and confidence <= 0.35:
+            action = "CLOSE_TRADE"
+
+        # Obtener multiplicadores TP/SL desde la política entrenada
+        action_vector = None
+        action_idx = None
+        if state_vec is not None:
+            try:
+                action_vector, action_idx = self._predict_action(np.asarray(state_vec, dtype=np.float32))
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("RL predict failed, fallback multipliers: %s", exc)
+
+        size_mult = 1.0 + (confidence - 0.5) * 1.5
+        size_mult = float(np.clip(size_mult, 0.25, 2.0))
+        tp_mult, sl_mult = 1.0, 1.0
+        if action_vector is not None and action_vector.size >= 2:
+            tp_mult = float(action_vector[0])
+            sl_mult = float(action_vector[1])
+
+        return {
+            "action": action,
+            "size_mult": size_mult,
+            "tp_mult": tp_mult,
+            "sl_mult": sl_mult,
+            "action_index": action_idx,
+        }
 
     def _build_discrete_actions(self) -> List[tuple[float, float]]:
         tp_vals = np.linspace(self.tp_range[0], self.tp_range[1], self._discrete_tp_bins)

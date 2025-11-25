@@ -356,6 +356,17 @@ RL_PERSIST_AFTER_TRADE = _bool_env("RL_PERSIST_AFTER_TRADE", True)
 RL_MAX_TP_PCT = _float_env("RL_MAX_TP_PCT", 0.5, clamp=(0.0, 10.0))
 RL_MAX_STOP_LOSS_PCT = _float_env("RL_MAX_STOP_LOSS_PCT", 1.0, clamp=(0.0, 10.0))
 
+# Master agent control -------------------------------------------------------
+AGENT_CONTROL_ENABLED = _bool_env("AGENT_CONTROL_ENABLED", False)
+AGENT_MAX_TRADES_PER_SYMBOL = int(os.getenv("AGENT_MAX_TRADES_PER_SYMBOL", 3))
+AGENT_MAX_DAILY_LOSS_PCT = float(os.getenv("AGENT_MAX_DAILY_LOSS_PCT", 3.0))
+AGENT_DISABLE_ON_MAX_DD = _bool_env("AGENT_DISABLE_ON_MAX_DD", True)
+AGENT_DD_LOOKBACK_HOURS = int(os.getenv("AGENT_DD_LOOKBACK_HOURS", 24))
+
+AGENT_ALLOW_SCALE_IN = _bool_env("AGENT_ALLOW_SCALE_IN", True)
+AGENT_ALLOW_SCALE_OUT = _bool_env("AGENT_ALLOW_SCALE_OUT", True)
+AGENT_ALLOW_HARD_STOP = _bool_env("AGENT_ALLOW_HARD_STOP", True)
+
 # Noise filtering and volatility gating
 NOISE_FILTER_METHOD = _str_env("NOISE_FILTER_METHOD", "ema").strip().lower() or "ema"
 NOISE_FILTER_SPAN = _int_env("NOISE_FILTER_SPAN", 12, clamp=(1, 1000))
