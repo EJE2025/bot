@@ -1006,6 +1006,13 @@ def verify_trade_on_exchange(trade_id: str, expected_qty: float | None = None) -
     return _verify_live_position(trade, expected_qty)
 
 
+def _current_state(trade: dict) -> TradeState:
+    try:
+        return TradeState(trade.get("state"))
+    except ValueError:
+        return TradeState.PENDING
+
+
 def _update_from_ws(trade: dict, *, quantity: float | None, entry_price: float | None, state: TradeState) -> None:
     updates = {}
     if quantity is not None and quantity > 0:
@@ -1033,6 +1040,8 @@ def ws_order_filled(order):
         logger.debug("[WS] Ignoring filled order without trade for %s", symbol)
         return
 
+    state = _current_state(trade)
+
     try:
         qty = abs(float(order.get("size") or order.get("filledSize") or order.get("filledQty") or 0.0))
     except (TypeError, ValueError):
@@ -1041,6 +1050,16 @@ def ws_order_filled(order):
         price = float(order.get("price") or order.get("avgPrice") or order.get("fillPrice") or 0.0)
     except (TypeError, ValueError):
         price = None
+
+    if state == TradeState.OPEN:
+        try:
+            existing_qty = float(trade.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            existing_qty = 0.0
+
+        if qty is None or abs(existing_qty - qty) < 1e-8:
+            logger.debug("[WS] Duplicate fill for %s ignored", symbol)
+            return
 
     _update_from_ws(trade, quantity=qty, entry_price=price, state=TradeState.OPEN)
     logger.info("[WS] Trade OPEN via WS %s", symbol)
@@ -1055,10 +1074,20 @@ def ws_order_partial(order):
     if trade is None:
         logger.debug("[WS] Partial fill without existing trade for %s", symbol)
         return
+    state = _current_state(trade)
     try:
         qty = abs(float(order.get("filledSize") or order.get("filledQty") or order.get("size") or 0.0))
     except (TypeError, ValueError):
         qty = None
+    if state in {TradeState.PARTIALLY_FILLED, TradeState.OPEN}:
+        try:
+            existing_qty = float(trade.get("quantity") or 0.0)
+        except (TypeError, ValueError):
+            existing_qty = 0.0
+
+        if qty is None or qty <= existing_qty:
+            logger.debug("[WS] Duplicate partial fill for %s ignored", symbol)
+            return
     _update_from_ws(trade, quantity=qty, entry_price=None, state=TradeState.PARTIALLY_FILLED)
     logger.info("[WS] Trade partial fill %s", symbol)
 
@@ -1069,6 +1098,10 @@ def ws_order_cancelled(order):
         return
     trade = find_trade(symbol=symbol)
     if trade:
+        state = _current_state(trade)
+        if state in {TradeState.CANCELLED, TradeState.FAILED, TradeState.CLOSED}:
+            logger.debug("[WS] Duplicate cancel for %s ignored", symbol)
+            return
         cancel_pending_trade(trade.get("trade_id"), reason="cancelled_by_exchange")
         logger.warning("[WS] Trade CANCELLED %s", symbol)
 
@@ -1116,6 +1149,10 @@ def ws_position_closed(pos):
 
     trade = find_trade(symbol=symbol)
     if trade:
+        state = _current_state(trade)
+        if state in {TradeState.CLOSED, TradeState.CANCELLED, TradeState.FAILED}:
+            logger.debug("[WS] Duplicate position closed for %s ignored", symbol)
+            return
         reported_pnl = _extract_realized_pnl(pos)
         try:
             exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
