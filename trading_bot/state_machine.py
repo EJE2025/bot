@@ -15,14 +15,14 @@ class TradeState(str, Enum):
 
 
 # Transiciones permitidas:
-# PENDING → OPEN / FAILED
+# PENDING → OPEN / PARTIALLY_FILLED / FAILED
 # OPEN → PARTIALLY_FILLED / CLOSING / FAILED
 # PARTIALLY_FILLED → OPEN / CLOSING / FAILED
 # CLOSING → CLOSED / FAILED
 # CLOSED → (ninguna)
 # FAILED → (ninguna)
 ALLOWED_TRANSITIONS: Dict[TradeState, Set[TradeState]] = {
-    TradeState.PENDING: {TradeState.OPEN, TradeState.FAILED},
+    TradeState.PENDING: {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.FAILED},
     TradeState.OPEN: {
         TradeState.PARTIALLY_FILLED,
         TradeState.CLOSING,

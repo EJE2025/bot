@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Thread, Timer
 from typing import Any
 import webbrowser
 import redis
@@ -66,6 +66,7 @@ from . import (
 from .indicators import calculate_atr
 from . import webapp
 from .exchanges.bitget_ws import BitgetWebSocket
+from .reconcile import reconcile_pending_trades
 from .trade_manager import (
     add_trade,
     close_trade,
@@ -78,7 +79,6 @@ from .trade_manager import (
     count_trades_for_symbol,
     set_trade_state,
 )
-from .reconcile import reconcile_pending_trades
 from .state_machine import TradeState
 from .metrics import (
     start_metrics_server,
@@ -118,6 +118,43 @@ def _parse_snapshot_interval(raw: str | None) -> int:
 _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
     os.getenv("EXCEL_SNAPSHOT_INTERVAL")
 )
+
+_pending_timeouts: dict[str, Timer] = {}
+
+
+def _schedule_pending_timeout(trade_id: str, symbol: str) -> None:
+    if config.DRY_RUN:
+        return
+
+    def _expire_pending() -> None:
+        _pending_timeouts.pop(trade_id, None)
+        trade = find_trade(trade_id=trade_id)
+        if trade is None:
+            return
+
+        try:
+            state = TradeState(trade.get("state"))
+        except ValueError:
+            state = TradeState.PENDING
+
+        if state != TradeState.PENDING:
+            return
+
+        order_id = trade.get("order_id")
+        if order_id:
+            try:
+                execution.cancel_order(order_id, symbol)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.debug(
+                    "Cancel order %s failed on timeout for %s: %s", order_id, symbol, exc
+                )
+        trade_manager.cancel_pending_trade(trade_id, reason="pending_timeout")
+
+    timeout = max(1, config.PENDING_FILL_TIMEOUT_S)
+    timer = Timer(timeout, _expire_pending)
+    timer.daemon = True
+    timer.start()
+    _pending_timeouts[trade_id] = timer
 _last_excel_snapshot = 0.0
 _dashboard_launch_scheduled = False
 _dashboard_launch_lock = RLock()
@@ -1245,7 +1282,6 @@ def _handle_price_event(symbol: str, price: float, payload: dict[str, Any] | Non
     update_trade(trade.get("trade_id"), closing=True)
     closed, exec_price, realized = close_existing_trade(trade, reason)
     if not closed:
-        update_trade(trade.get("trade_id"), closing=False)
         return
 
     payload = {
@@ -1347,7 +1383,6 @@ def open_new_trade(signal: dict):
     """Open a position and track its state via ``trade_manager``."""
     symbol = signal["symbol"]
     raw = normalize_symbol(symbol).replace("_", "")
-    order_type = str(signal.get("order_type", "limit")).lower()
 
     if config.SHADOW_MODE:
         _register_shadow_trade(signal)
@@ -1369,7 +1404,7 @@ def open_new_trade(signal: dict):
             signal["side"],
             signal["quantity"],
             signal["entry_price"],
-            order_type=order_type,
+            order_type="market",
         )
         
         if not isinstance(order, dict):
@@ -1421,6 +1456,8 @@ def open_new_trade(signal: dict):
         # NO verificamos status aquí. Confiamos ciegamente en la API asíncrona.
         save_trades()
 
+        _schedule_pending_timeout(trade["trade_id"], symbol)
+
         # Iniciamos streams de precio preventivamente
         _ensure_market_stream_consumer()
         if not config.MARKET_STREAM:
@@ -1462,85 +1499,14 @@ def close_existing_trade(
         save_trades()
         return None, None, None
 
-
     order_id = order.get("id")
     exec_price = float(order.get("average") or order.get("price") or trade.get("entry_price", 0.0))
-
-    if order_id:
-        attempts = max(1, config.API_RETRY_ATTEMPTS)
-        for attempt in range(attempts):
-            status = execution.fetch_order_status(order_id, symbol)
-            if status == "filled":
-                break
-            if status == "partial":
-                details = execution.get_order_fill_details(order_id, symbol)
-                remaining_qty = 0.0
-                if details:
-                    remaining_qty = max(details.get("remaining", 0.0) or 0.0, 0.0)
-                    if details.get("average"):
-                        exec_price = float(details["average"])
-                if remaining_qty <= config.CLOSE_REMAINING_TOLERANCE:
-                    break
-                logger.warning(
-                    "Partial close for %s (remaining %.6f); reattempting", symbol, remaining_qty
-                )
-                try:
-                    order = execution.close_position(
-                        symbol, close_side, remaining_qty, order_type="market"
-                    )
-                    order_id = order.get("id", order_id)
-                    if order.get("average"):
-                        exec_price = float(order.get("average"))
-                except execution.OrderSubmitError:
-                    logger.error("Failed to close remaining %.6f for %s", remaining_qty, symbol)
-                    break
-            else:
-                break
-            time.sleep(0.5 * (attempt + 1))
-
-    remaining = execution.fetch_position_size(symbol)
-    if remaining > config.CLOSE_REMAINING_TOLERANCE:
-        logger.warning(
-            "Remanente %.6f detectado tras cierre de %s; trade marcado como parcial",
-            remaining,
-            symbol,
-        )
-        update_trade(trade_id, quantity=remaining)
-        set_trade_state(trade_id, TradeState.PARTIALLY_FILLED)
-        save_trades()
-        return None, exec_price, None
-
-    entry_price = float(trade.get("entry_price", exec_price))
-    if trade.get("side") == "BUY":
-        realized = (exec_price - entry_price) * qty
-    else:
-        realized = (entry_price - exec_price) * qty
-
-    closed = close_trade(
-        trade_id=trade_id,
-        reason=reason,
-        exit_price=exec_price,
-        profit=realized,
-    )
-    MODEL_MONITOR.record_trade(closed)
-    if closed:
-        try:
-            trade_copy = dict(closed)
-            if exec_price is not None and trade_copy.get("exit_price") is None:
-                trade_copy["exit_price"] = exec_price
-            if realized is not None:
-                trade_copy.setdefault("pnl", realized)
-                trade_copy.setdefault("profit", realized)
-            path = exporter.append_trade_closed(trade_copy)
-            logger.info("Trade exportado a Excel: %s", path)
-        except Exception as exc:  # pragma: no cover - defensive export
-            logger.warning("No se pudo exportar trade a Excel: %s", exc)
-    auto_trainer.record_completed_trade(closed)
-    if realized is not None:
-        add_daily_profit(realized)
-    update_trade(trade_id, closing=False)
+    update_trade(trade_id, closing=True, close_order_id=order_id)
     save_trades()
-    return closed, exec_price, realized
+    logger.info(
+        "Close order sent for %s (ID: %s). Awaiting WS position confirmation...", symbol, order_id
+    )
+    return None, exec_price, None
 
 
 def run_one_iteration_open(model=None):
@@ -1693,11 +1659,9 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     # Persist state after initial synchronization
     save_trades()
 
-    # Keep positions reconciled with the exchange every few seconds
-    trade_manager.start_periodic_position_reconciliation()
+    # Keep critical monitors running (balance only; positions via WS)
     trade_manager.start_balance_monitoring()
     _start_price_streams_for_open_trades()
-    _start_pending_timeout_monitor()
 
     # Launch the dashboard using trade_manager as the single source of trades
     # (no operations list is passed).

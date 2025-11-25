@@ -1010,7 +1010,10 @@ def _update_from_ws(trade: dict, *, quantity: float | None, entry_price: float |
     updates = {}
     if quantity is not None and quantity > 0:
         updates["quantity"] = quantity
-        updates["quantity_remaining"] = quantity
+        requested = _original_quantity(trade)
+        remaining = max(requested - quantity, 0.0) if requested > 0 else quantity
+        updates["quantity_remaining"] = remaining
+        updates["status"] = "active"
     if entry_price is not None and entry_price > 0:
         updates["entry_price"] = entry_price
     if updates:
@@ -1040,7 +1043,6 @@ def ws_order_filled(order):
         price = None
 
     _update_from_ws(trade, quantity=qty, entry_price=price, state=TradeState.OPEN)
-    _verify_live_position(trade, qty)
     logger.info("[WS] Trade OPEN via WS %s", symbol)
 
 
@@ -1067,8 +1069,7 @@ def ws_order_cancelled(order):
         return
     trade = find_trade(symbol=symbol)
     if trade:
-        update_trade(trade.get("trade_id"), status="cancelled")
-        set_trade_state(trade.get("trade_id"), TradeState.FAILED)
+        cancel_pending_trade(trade.get("trade_id"), reason="cancelled_by_exchange")
         logger.warning("[WS] Trade CANCELLED %s", symbol)
 
 
@@ -1091,6 +1092,7 @@ def ws_position_update(pos):
     updates = {
         "quantity": size,
         "quantity_remaining": size,
+        "status": "active",
     }
     try:
         entry_price = float(pos.get("entryPrice") or 0.0)

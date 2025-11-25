@@ -33,21 +33,16 @@ def test_partial_fill_is_registered(monkeypatch):
         "open_position",
         lambda *a, **k: {"id": "1", "average": signal["entry_price"]},
     )
-    monkeypatch.setattr(execution, "fetch_order_status", lambda oid, sym: "partial")
-    monkeypatch.setattr(
-        execution,
-        "get_order_fill_details",
-        lambda oid, sym: {"filled": 4.0, "remaining": 6.0, "average": signal["entry_price"]},
-    )
     monkeypatch.setattr(bot, "save_trades", lambda: None)
 
     initial_qty = signal["quantity"]
     trade = bot.open_new_trade(signal)
     assert trade is not None
+    trade_manager.ws_order_partial({"symbol": "AAAUSDT", "filledSize": 4.0, "avgPrice": 1.0})
     stored = trade_manager.find_trade(symbol="AAA_USDT")
     assert stored["state"] == TradeState.PARTIALLY_FILLED.value
     assert stored["quantity"] == 4.0
-    assert stored.get("remaining_quantity") == 6.0
+    assert stored.get("quantity_remaining") == pytest.approx(6.0)
     assert stored.get("requested_quantity") == initial_qty
     assert trade_manager.count_open_trades() == 1
 
@@ -77,30 +72,16 @@ def test_partial_close_retries_remaining(monkeypatch):
 
     def _close_position(symbol, side, amount, order_type="market"):
         close_calls.append(amount)
-        order_id = str(len(close_calls))
-        return {"id": order_id, "average": 100.0}
-
-    status_map = {"1": ["partial", "filled"], "2": ["filled"]}
-
-    def _fetch_order_status(order_id, symbol):
-        seq = status_map.get(order_id, ["filled"])
-        if seq:
-            return seq.pop(0)
-        return "filled"
-
-    def _fill_details(order_id, symbol):
-        if order_id == "1":
-            return {"filled": 0.5, "remaining": 0.5, "average": 100.0}
-        return {"filled": 1.0, "remaining": 0.0, "average": 100.0}
+        return {"id": "1", "average": 100.0}
 
     monkeypatch.setattr(execution, "close_position", _close_position)
-    monkeypatch.setattr(execution, "fetch_order_status", _fetch_order_status)
-    monkeypatch.setattr(execution, "get_order_fill_details", _fill_details)
-    monkeypatch.setattr(execution, "fetch_position_size", lambda symbol: 0.0)
+    monkeypatch.setattr(trade_manager.data, "get_current_price_ticker", lambda symbol: 100.0)
 
     closed, exec_price, realized = bot.close_existing_trade(trade, reason="SL")
-    assert closed is not None
+    assert closed is None
     assert exec_price == pytest.approx(100.0)
-    assert realized == pytest.approx(0.0)
+    assert realized is None
     assert close_calls and close_calls[0] == pytest.approx(1.0)
-    assert len(close_calls) >= 2
+
+    trade_manager.ws_position_closed({"symbol": "BBBUSDT", "holdVolume": 0, "avgPrice": 100.0})
+    assert trade_manager.all_closed_trades()
