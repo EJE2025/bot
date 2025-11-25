@@ -3,6 +3,7 @@ import time
 import hmac
 import base64
 import asyncio
+import json
 import websockets
 
 
@@ -66,6 +67,11 @@ class BitgetWebSocket:
     async def _handle_order(self, order):
         symbol = order["symbol"]
         status = order["status"]
+        side = str(order.get("side", "")).lower()
+
+        if "close" in side and status in {"filled", "partial"}:
+            self.logger.debug("WS: close order event ignored for %s (awaiting position feed)", symbol)
+            return
 
         if status == "filled":
             self.trade_manager.ws_order_filled(order)

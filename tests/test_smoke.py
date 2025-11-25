@@ -19,29 +19,20 @@ def test_open_close_trade_smoke(monkeypatch):
     }
     monkeypatch.setattr(bot, "save_trades", lambda: None)
     monkeypatch.setattr(execution, "open_position", lambda *a, **k: {"id": "1", "average": 100.0})
-    monkeypatch.setattr(execution, "fetch_order_status", lambda oid, sym: "filled")
-    monkeypatch.setattr(
-        execution,
-        "get_order_fill_details",
-        lambda oid, sym: {"filled": 1.0, "remaining": 0.0, "average": 100.0},
-    )
+    monkeypatch.setattr(tm.data, "get_current_price_ticker", lambda symbol: 105.0)
+
     trade = bot.open_new_trade(signal)
     assert trade is not None
+    tm.ws_order_filled({"symbol": "BTCUSDT", "filledSize": 1.0, "avgPrice": 100.0})
     assert tm.count_open_trades() == 1
 
     monkeypatch.setattr(execution, "close_position", lambda *a, **k: {"id": "2", "average": 105.0})
-    monkeypatch.setattr(execution, "fetch_order_status", lambda oid, sym: "filled")
-    monkeypatch.setattr(
-        execution,
-        "get_order_fill_details",
-        lambda oid, sym: {"filled": 1.0, "remaining": 0.0, "average": 105.0},
-    )
-    monkeypatch.setattr(execution, "fetch_position_size", lambda sym: 0.0)
 
     closed, exec_price, realized = bot.close_existing_trade(trade, reason="TP")
-    assert closed is not None
+    assert closed is None
     assert exec_price is not None
-    assert realized is not None
+    assert realized is None
+    tm.ws_position_closed({"symbol": "BTCUSDT", "holdVolume": 0})
     assert tm.count_open_trades() == 0
     assert len(tm.all_closed_trades()) == 1
 
