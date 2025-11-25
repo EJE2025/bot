@@ -190,9 +190,6 @@ class RLTradingAgent:
     ) -> dict[str, float | str | None]:
         """Elegir acción de alto nivel combinando política RL y señal base."""
 
-        if not self.enabled:
-            return {"action": "HOLD"}
-
         action = "HOLD"
         confidence = max(0.0, min(1.0, float(confidence)))
         direction = direction.lower()
@@ -204,6 +201,15 @@ class RLTradingAgent:
             action = "OPEN_SHORT"
         elif has_open_trades and confidence <= 0.35:
             action = "CLOSE_TRADE"
+
+        if not self.enabled:
+            return {
+                "action": action,
+                "size_mult": 1.0,
+                "tp_mult": 1.0,
+                "sl_mult": 1.0,
+                "action_index": None,
+            }
 
         # Obtener multiplicadores TP/SL desde la política entrenada
         action_vector = None
