@@ -677,24 +677,33 @@ def decidir_entrada(
     )
     signal["prob_success"] = blended_prob
     final_prob = signal["prob_success"]
-    threshold = probability_threshold(
-        risk_reward,
-        volatility=volatility_ratio,
-        cost_fraction=cost_fraction,
-        entry_price=entry_price,
-        bids_top=bids_top,
-        asks_top=asks_top,
-    )
+    try:
+        threshold = probability_threshold(
+            risk_reward,
+            volatility=volatility_ratio,
+            cost_fraction=cost_fraction,
+            entry_price=entry_price,
+            bids_top=bids_top,
+            asks_top=asks_top,
+        )
+    except TypeError:
+        threshold = probability_threshold(risk_reward, volatility=volatility_ratio)
     signal["prob_threshold"] = threshold
-    if not passes_probability_threshold(
-        final_prob,
-        risk_reward,
-        volatility_ratio,
-        cost_fraction=cost_fraction,
-        entry_price=entry_price,
-        bids_top=bids_top,
-        asks_top=asks_top,
-    ):
+    try:
+        passes_threshold = passes_probability_threshold(
+            final_prob,
+            risk_reward,
+            volatility_ratio,
+            cost_fraction=cost_fraction,
+            entry_price=entry_price,
+            bids_top=bids_top,
+            asks_top=asks_top,
+        )
+    except TypeError:
+        passes_threshold = passes_probability_threshold(
+            final_prob, risk_reward, volatility_ratio
+        )
+    if not passes_threshold:
         logger.debug(
             "[%s] señal descartada por probabilidad %.2f < %.2f",
             symbol,

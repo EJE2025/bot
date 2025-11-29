@@ -127,13 +127,27 @@ def add_trade(trade, *, allow_duplicates: bool = False):
     """
 
     with LOCK:
-        trade["symbol"] = normalize_symbol(trade.get("symbol", ""))
-        if not allow_duplicates:
-            for existing in open_trades:
-                if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
-                    raise ValueError(
-                        f"Ya existe una operación abierta para {trade['symbol']}"
-                    )
+        raw_symbol = trade.get("symbol", "")
+        trade["symbol"] = normalize_symbol(raw_symbol)
+        trade.setdefault("raw_symbol", raw_symbol)
+        duplicate = False
+        raw_conflict = False
+        for existing in open_trades:
+            if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
+                duplicate = True
+                existing_raw = (existing.get("raw_symbol") or existing.get("symbol", "")).lower()
+                if existing_raw != raw_symbol.lower():
+                    raw_conflict = True
+                break
+        if duplicate and not allow_duplicates:
+            if raw_conflict:
+                raise ValueError(
+                    f"Ya existe una operación abierta para {trade['symbol']}"
+                )
+            logger.warning(
+                "Registrando operación duplicada para %s; se generará un nuevo ID",
+                trade["symbol"],
+            )
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
@@ -1150,7 +1164,7 @@ def ws_position_closed(pos):
     trade = find_trade(symbol=symbol)
     if trade:
         state = _current_state(trade)
-        if state in {TradeState.CLOSED, TradeState.CANCELLED, TradeState.FAILED}:
+        if state in {TradeState.CLOSED, TradeState.FAILED}:
             logger.debug("[WS] Duplicate position closed for %s ignored", symbol)
             return
         reported_pnl = _extract_realized_pnl(pos)
