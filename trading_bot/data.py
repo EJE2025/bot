@@ -67,6 +67,22 @@ def _to_bitget_granularity(interval: str) -> int:
     return mapping.get(interval, 900)
 
 
+def _bitget_history_window(granularity: int, limit: int) -> tuple[int, int]:
+    """Return a safe (start_ms, end_ms) window for Bitget history candles.
+
+    The end time is clamped to ``time.time()`` to avoid requesting data from the
+    future. The start time is simply ``limit`` candles back from ``end`` using
+    the requested ``granularity``.
+    """
+
+    end_ms = int(time.time() * 1000)
+    window_ms = granularity * limit * 1000
+    start_ms = max(0, end_ms - window_ms)
+    if start_ms >= end_ms:
+        start_ms = max(0, end_ms - granularity * 1000)
+    return start_ms, end_ms
+
+
 @circuit_breaker(fallback=None, max_failures=3, reset_timeout=30)
 def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> Dict | None:
     """Return OHLCV data from the configured futures exchange.
@@ -107,14 +123,20 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     if data_source == "bitget" or not config.ENABLE_BINANCE:
         endpoint = "/api/mix/v1/market/history-candles"
         granularity = _to_bitget_granularity(interval)
-        now_ms = int(time.time() * 1000)
-        window_ms = granularity * limit * 1000
-        start_ms = max(0, now_ms - window_ms)
+        start_ms, end_ms = _bitget_history_window(granularity, limit)
+        logger.info(
+            "Bitget history window %s: %s -> %s UTC (granularity=%ss, limit=%d)",
+            symbol,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_ms / 1000)),
+            time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(end_ms / 1000)),
+            granularity,
+            limit,
+        )
         params = {
             "symbol": _bitget_symbol(symbol),
             "granularity": granularity,
             "startTime": start_ms,
-            "endTime": now_ms,
+            "endTime": end_ms,
         }
         cache_file = _generic_cache_path("bitget_ohlcv", symbol_raw, interval, str(limit))
         for attempt in range(MAX_ATTEMPTS):
@@ -122,7 +144,16 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
                 resp = requests.get(
                     config.BASE_URL_BITGET + endpoint, params=params, timeout=30
                 )
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except requests.HTTPError as http_err:  # pragma: no cover - network
+                    logger.error(
+                        "Bitget history HTTP %s for %s: %s",
+                        resp.status_code,
+                        symbol,
+                        resp.text,
+                    )
+                    raise http_err
                 payload = resp.json()
                 if isinstance(payload, dict):
                     candles = payload.get("data") or []
@@ -386,7 +417,16 @@ def get_order_book(symbol: str, limit: int = 50) -> Dict | None:
         for attempt in range(MAX_ATTEMPTS):
             try:
                 resp = requests.get(url, params=params, timeout=10)
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except requests.HTTPError as http_err:  # pragma: no cover - network
+                    logger.error(
+                        "Bitget order book HTTP %s for %s: %s",
+                        resp.status_code,
+                        symbol,
+                        resp.text,
+                    )
+                    raise http_err
                 payload = resp.json()
                 if payload.get("code") != "00000":
                     raise RuntimeError(payload.get("msg") or "API error")
