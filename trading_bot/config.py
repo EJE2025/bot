@@ -166,6 +166,9 @@ BACKTEST_DATA_PATH = os.getenv("BACKTEST_DATA_PATH")
 
 # ===== Order lifecycle & timeouts =====
 PENDING_FILL_TIMEOUT_S = _int_env("PENDING_FILL_TIMEOUT_S", 60, clamp=(30, 3600))
+PENDING_TIMEOUT_ENABLED = _bool_env("PENDING_TIMEOUT_ENABLED", True)
+PENDING_TIMEOUT_FOR_MARKET = _bool_env("PENDING_TIMEOUT_FOR_MARKET", False)
+PENDING_TIMEOUT_MIN_S = max(PENDING_FILL_TIMEOUT_S, 120)
 RECONCILE_INTERVAL_S = _int_env("RECONCILE_INTERVAL_S", 3, clamp=(1, 300))
 # Intervalo principal del loop de trading en segundos.
 LOOP_INTERVAL = _int_env("LOOP_INTERVAL", 60, clamp=(1, 3600))

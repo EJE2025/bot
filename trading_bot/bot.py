@@ -127,7 +127,21 @@ _EXCEL_SNAPSHOT_INTERVAL = _parse_snapshot_interval(
 _pending_timeouts: dict[str, Timer] = {}
 
 
-def _schedule_pending_timeout(trade_id: str, symbol: str) -> None:
+def _pending_timeout_seconds(order_type: str | None) -> int | None:
+    if config.DRY_RUN or not config.PENDING_TIMEOUT_ENABLED:
+        return None
+
+    normalized_type = (order_type or "").strip().lower()
+    if normalized_type == "market" and not config.PENDING_TIMEOUT_FOR_MARKET:
+        return None
+
+    timeout = max(config.PENDING_FILL_TIMEOUT_S, config.PENDING_TIMEOUT_MIN_S)
+    return max(timeout, 1)
+
+
+def _schedule_pending_timeout(trade_id: str, symbol: str, timeout: int | float) -> None:
+    if timeout is None or timeout <= 0:
+        return
     if config.DRY_RUN:
         return
 
@@ -146,16 +160,60 @@ def _schedule_pending_timeout(trade_id: str, symbol: str) -> None:
             return
 
         order_id = trade.get("order_id")
-        if order_id:
+        if not order_id or execution.exchange is None:
+            logger.info(
+                "Omitiendo cancelación de %s: falta order_id o exchange no inicializado.",
+                trade_id,
+            )
+            return
+
+        sym_pair = symbol.replace("_", "/") + ":USDT"
+        try:
+            current_status = str(
+                execution.exchange.fetch_order(order_id, sym_pair).get("status", "")
+            ).lower()
+        except Exception as exc:  # pragma: no cover - best effort confirmation
+            logger.info(
+                "Estado no confirmado para %s (%s): %s", order_id, symbol, exc
+            )
+            return
+
+        if current_status in {"closed", "filled"}:
+            return
+
+        cancel_confirmed = current_status in {"canceled", "cancelled"}
+
+        if current_status == "open" and not cancel_confirmed:
             try:
                 execution.cancel_order(order_id, symbol)
+                refreshed = str(
+                    execution.exchange.fetch_order(order_id, sym_pair).get(
+                        "status", ""
+                    )
+                ).lower()
+                cancel_confirmed = refreshed in {"canceled", "cancelled"}
+                if refreshed in {"closed", "filled"}:
+                    return
+                current_status = refreshed or current_status
             except Exception as exc:  # pragma: no cover - defensive logging
-                logger.debug(
-                    "Cancel order %s failed on timeout for %s: %s", order_id, symbol, exc
+                logger.info(
+                    "Cancelación no confirmada para %s (%s): %s",
+                    order_id,
+                    symbol,
+                    exc,
                 )
+                return
+
+        if not cancel_confirmed:
+            logger.info(
+                "Omitiendo cancel_pending_trade %s: exchange reporta estado '%s'.",
+                trade_id,
+                current_status or "desconocido",
+            )
+            return
+
         trade_manager.cancel_pending_trade(trade_id, reason="pending_timeout")
 
-    timeout = max(1, config.PENDING_FILL_TIMEOUT_S)
     timer = Timer(timeout, _expire_pending)
     timer.daemon = True
     timer.start()
@@ -1404,12 +1462,13 @@ def open_new_trade(signal: dict):
             execution.setup_leverage(execution.exchange, raw, signal["leverage"])
         else:
             logger.info("Skip leverage setup for %s (dry-run)", symbol)
+        order_type = "market"
         order = execution.open_position(
             symbol,
             signal["side"],
             signal["quantity"],
             signal["entry_price"],
-            order_type="market",
+            order_type=order_type,
         )
         
         if not isinstance(order, dict):
@@ -1461,7 +1520,9 @@ def open_new_trade(signal: dict):
         # NO verificamos status aquí. Confiamos ciegamente en la API asíncrona.
         save_trades()
 
-        _schedule_pending_timeout(trade["trade_id"], symbol)
+        timeout = _pending_timeout_seconds(order_type)
+        if timeout:
+            _schedule_pending_timeout(trade["trade_id"], symbol, timeout)
 
         # Iniciamos streams de precio preventivamente
         _ensure_market_stream_consumer()
