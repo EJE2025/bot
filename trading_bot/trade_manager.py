@@ -744,11 +744,8 @@ def reconcile_positions() -> None:
             continue
         positions_by_symbol[symbol] = pos
 
-    open_order_ids: set[str] = set()
     for order in open_orders:
         order_id = str(order.get("id") or order.get("orderId") or "")
-        if order_id:
-            open_order_ids.add(order_id)
         symbol = normalize_symbol(order.get("symbol", ""))
         if symbol and find_trade(symbol=symbol) is None:
             logger.warning(
@@ -813,106 +810,73 @@ def reconcile_positions() -> None:
         if symbol in active_symbols:
             continue
 
-        # --- INICIO DEL CAMBIO: Verificación de seguridad antes de cerrar ---
-
         order_id = str(tr.get("order_id") or "")
-        should_close = False
-        close_reason = ""
-
         created_ts = float(tr.get("created_ts") or 0)
         age_seconds = time.time() - created_ts
         grace_seconds = max(0, int(getattr(config, "ORDER_MAX_AGE", 0)))
-        within_grace = grace_seconds == 0 or age_seconds < grace_seconds
 
-        # Si tenemos un ID de orden, preguntamos a la API específicamente por esa orden
-        # antes de asumir que la posición ha desaparecido.
+        try:
+            state = TradeState(tr.get("state"))
+        except ValueError:
+            state = TradeState.PENDING
+
+        missing_checks = int(tr.get("missing_position_checks") or 0) + 1
+        update_trade(tr.get("trade_id"), missing_position_checks=missing_checks)
+
+        status = ""
+        confirmed_cancel = False
         if order_id and not config.DRY_RUN:
             try:
                 from . import execution  # Import local para evitar ciclos
 
-                status = execution.fetch_order_status(order_id, symbol)
-
-                # Reglas de supervivencia:
-                # 1. Si está 'new'/'partial'/'open', la orden sigue viva en el book -> NO CERRAR.
-                # 2. Si está 'filled' Y es joven (<ORDER_MAX_AGE s), es casi seguro lag de la API de posiciones -> NO CERRAR.
-                # 3. Si está 'filled' Y es vieja (>=ORDER_MAX_AGE s), y no hay posición -> Asumimos cierre externo -> CERRAR.
-                # 4. Estados cancelados/expirados indican cierre inequívoco -> CERRAR.
-
-                if status in ("new", "partial", "open"):
-                    logger.info("Orden %s activa (%s). Esperando ejecución...", order_id, status)
-                elif status == "filled" and within_grace:
-                    logger.info(
-                        "Orden %s FILLED pero posición no visible (lag %ds < umbral %ds). Protegiendo trade.",
-                        order_id,
-                        int(age_seconds),
-                        grace_seconds,
-                    )
-                elif status == "filled":
-                    should_close = True
-                    close_reason = "filled_and_absent"
-                elif status in ("canceled", "rejected", "expired"):
-                    should_close = True
-                    close_reason = status
+                order_status = execution.fetch_order_status(order_id, symbol)
+                status = str(order_status.get("status") or order_status.get("state") or "").lower()
+                confirmed_cancel = status in {"canceled", "cancelled", "rejected", "expired"}
+                if confirmed_cancel:
                     logger.warning(
-                        "Orden %s reportada como %s. Marcando trade para cierre seguro.",
+                        "Orden %s reportada como %s sin posición activa; esperando confirmación adicional.",
                         order_id,
                         status,
                     )
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning(
-                    "Error verificando orden %s: %s. Mantenemos trade por seguridad.",
+                    "Error verificando orden %s: %s. Conservamos trade y marcamos para revisión.",
                     order_id,
                     e,
                 )
-        elif not within_grace:
-            # Sin ID de orden no podemos confirmar el estado; solo cerramos tras el periodo de gracia.
-            should_close = True
-            close_reason = "missing_order_after_grace"
-            logger.warning(
-                "Trade %s sin orden asociada tras %ds. Marcando cierre preventivo.",
-                symbol,
-                grace_seconds,
-            )
-        else:
-            logger.info(
-                "Trade %s sin orden asociada pero dentro de la ventana de gracia (%ds). Conservando estado.",
-                symbol,
-                grace_seconds,
-            )
 
-        if should_close:
-            try:
-                state = TradeState(tr.get("state"))
-            except ValueError:
-                state = TradeState.PENDING
-
+        review_reason = None
+        if confirmed_cancel and missing_checks >= 2:
+            if state == TradeState.PENDING:
+                cancel_pending_trade(
+                    tr.get("trade_id"),
+                    reason=f"{status or 'cancelled'}_confirmed_no_position",
+                )
+                continue
             if state in {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.CLOSING}:
-                try:
-                    exit_price = float(data.get_current_price_ticker(symbol) or 0.0)
-                except (TypeError, ValueError):
-                    exit_price = None
-                close_trade(
-                    trade_id=tr.get("trade_id"),
-                    reason=close_reason or "reconcile_missing",
-                    exit_price=exit_price,
+                review_reason = (
+                    f"order_{status}_without_position" if status else "order_cancelled_without_position"
                 )
-                logger.info(
-                    "[RECONCILE] Cerrado trade huérfano %s (no está en cartera ni tiene orden activa)",
-                    symbol,
-                )
-            elif (
-                order_id
-                and order_id not in open_order_ids
-                and state in {TradeState.PENDING, TradeState.FAILED}
-            ):
-                update_trade(tr.get("trade_id"), status="cancelled")
-                set_trade_state(tr.get("trade_id"), TradeState.FAILED)
-                logger.warning(
-                    "[RECONCILE] Pending trade lost on exchange; marking cancelled: %s",
-                    symbol,
-                )
+        else:
+            review_reason = "missing_position_unconfirmed"
 
-        # --- FIN DEL CAMBIO ---
+        if not order_id and age_seconds >= grace_seconds:
+            review_reason = "missing_order_reference_after_grace"
+
+        if review_reason:
+            already_flagged = bool(tr.get("manual_review"))
+            update_trade(
+                tr.get("trade_id"),
+                manual_review=True,
+                manual_review_reason=review_reason,
+            )
+            if not already_flagged:
+                logger.error(
+                    "[RECONCILE] Trade %s sin posición confirmada (estado=%s, orden=%s). Requiere revisión manual.",
+                    symbol,
+                    state.value,
+                    status or "desconocido",
+                )
 
 
 def start_periodic_position_reconciliation(
