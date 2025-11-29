@@ -101,12 +101,15 @@ def reconcile_pending_trades(trades: Iterable[dict] | None = None) -> None:
 
         status = execution.fetch_order_status(order_id, symbol)
         status = (status or "").lower()
-        if status in {"filled", "partial"}:
-            logger.info(
-                "Trade %s shows %s via REST; awaiting position confirmation before state change",
-                trade_id,
-                status,
-            )
+        if status == "filled":
+            logger.info("Trade %s filled via REST fallback", trade_id)
+            opened_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            trade_manager.update_trade(trade_id, open_time=opened_at)
+            trade_manager.set_trade_state(trade_id, TradeState.OPEN)
+        elif status == "partial":
+            logger.info("Trade %s partially filled via REST fallback", trade_id)
+            trade_manager.set_trade_state(trade_id, TradeState.OPEN)
+            trade_manager.set_trade_state(trade_id, TradeState.PARTIALLY_FILLED)
         elif status in {"canceled", "rejected", "expired"}:
             logger.info(
                 "Trade %s reported %s via REST; keeping pending until corroborated",
