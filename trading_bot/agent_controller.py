@@ -54,6 +54,20 @@ class MasterAgent:
             t for t in trade_manager.all_open_trades() if trade_manager.normalize_symbol(t.get("symbol", ""))
             == trade_manager.normalize_symbol(symbol)
         ]
+        live_position = trade_manager.get_live_position(symbol)
+        position_info = None
+        if live_position:
+            try:
+                size = abs(float(live_position.get("contracts") or live_position.get("holdVolume") or 0.0))
+            except (TypeError, ValueError):
+                size = 0.0
+            side_norm = self._normalize_side(live_position.get("side"))
+            if size > 0 and side_norm:
+                position_info = {
+                    "size": size,
+                    "side": side_norm,
+                    "raw": live_position,
+                }
         balance_snapshot = trade_manager.last_recorded_balance()
         account = {
             "free_usdt": balance_snapshot.get("free_usdt", 0.0),
@@ -65,6 +79,7 @@ class MasterAgent:
             "symbol": symbol,
             "market": market,
             "open_trades": open_trades,
+            "live_position": position_info,
             "account": account,
             "candidate_signal": candidate_signal or {},
         }
@@ -84,6 +99,10 @@ class MasterAgent:
             return AgentDecision(action="HOLD", symbol=symbol, reason="agent_disabled")
 
         obs = self.build_observation(symbol, candidate_signal=candidate_signal)
+        consistency_flag = self._check_consistency(obs)
+        if consistency_flag:
+            logger.warning("AGENT consistency issue for %s: %s", symbol, consistency_flag)
+            return AgentDecision(action="HOLD", symbol=symbol, reason=consistency_flag)
         state_vec = self._vectorize_observation(obs)
 
         dir_info = self._direction_from_model(symbol, obs, candidate_signal)
@@ -117,9 +136,29 @@ class MasterAgent:
         direction = base_dir if confidence >= 0.5 else "flat"
         return {"direction": direction, "confidence": max(0.0, min(1.0, confidence))}
 
+    def _check_consistency(self, obs: Dict[str, Any]) -> str | None:
+        """Detect mismatches between local trades and live positions."""
+
+        open_trades = obs.get("open_trades") or []
+        live_position = obs.get("live_position")
+
+        if live_position and not open_trades:
+            return "position_without_trade"
+        if open_trades and not live_position:
+            return "trade_without_position"
+
+        if open_trades and live_position:
+            trade_side = self._normalize_side(open_trades[0].get("side"))
+            pos_side = self._normalize_side(live_position.get("side"))
+            if trade_side and pos_side and trade_side != pos_side:
+                return "position_trade_side_mismatch"
+        return None
+
     def _violates_guardrails(self, symbol: str, obs: Dict[str, Any]) -> bool:
         open_trades = obs.get("open_trades") or []
-        if len(open_trades) >= config.AGENT_MAX_TRADES_PER_SYMBOL:
+        live_position = obs.get("live_position")
+        active_slots = max(len(open_trades), 1 if live_position else 0)
+        if active_slots >= config.AGENT_MAX_TRADES_PER_SYMBOL:
             return True
         account = obs.get("account") or {}
         daily_dd_pct = float(account.get("daily_drawdown_pct") or 0.0)
@@ -144,8 +183,16 @@ class MasterAgent:
             return AgentDecision(action="HOLD", symbol=symbol, reason="rl_hold", metadata=metadata)
 
         open_trades = obs.get("open_trades") or []
+        live_position = obs.get("live_position")
+        current_side = self._normalize_side(live_position.get("side")) if live_position else self._normalize_side(
+            open_trades[0].get("side") if open_trades else ""
+        )
 
         if action_type in ("OPEN_LONG", "OPEN_SHORT"):
+            desired_side = "long" if action_type == "OPEN_LONG" else "short"
+            if current_side:
+                reason = "position_exists" if current_side == desired_side else "position_conflict"
+                return AgentDecision(action="HOLD", symbol=symbol, reason=reason, metadata=metadata)
             base_qty = (candidate_signal or {}).get("quantity") or 0.0
             qty = max(base_qty * size_mult, 0.0)
             if qty <= 0:
@@ -166,42 +213,59 @@ class MasterAgent:
                 metadata=metadata,
             )
 
-        if action_type == "CLOSE_TRADE" and open_trades:
-            trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0]
-            return AgentDecision(
-                action="CLOSE_TRADE",
-                symbol=symbol,
-                trade_id=trade.get("trade_id"),
-                reason="rl_close",
-                metadata=metadata,
-            )
+        if action_type == "CLOSE_TRADE":
+            if current_side:
+                trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0] if open_trades else None
+                return AgentDecision(
+                    action="CLOSE_TRADE",
+                    symbol=symbol,
+                    trade_id=trade.get("trade_id") if trade else None,
+                    reason="rl_close",
+                    metadata=metadata,
+                )
+            return AgentDecision(action="HOLD", symbol=symbol, reason="no_live_position", metadata=metadata)
 
-        if action_type == "SCALE_IN" and config.AGENT_ALLOW_SCALE_IN and open_trades:
-            trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0]
-            qty = float(trade.get("quantity") or 0.0) * max(size_mult, 0.1)
+        if action_type == "SCALE_IN" and config.AGENT_ALLOW_SCALE_IN and current_side:
+            trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0] if open_trades else None
+            qty_source = trade if trade else live_position
+            qty_base = float(qty_source.get("quantity") or qty_source.get("size") or 0.0) if qty_source else 0.0
+            qty = qty_base * max(size_mult, 0.1)
+            if qty <= 0:
+                return AgentDecision(action="HOLD", symbol=symbol, reason="zero_qty_position", metadata=metadata)
             return AgentDecision(
                 action="SCALE_IN",
                 symbol=symbol,
                 quantity=qty,
-                trade_id=trade.get("trade_id"),
+                trade_id=trade.get("trade_id") if trade else None,
                 reason="rl_scale_in",
                 metadata=metadata,
             )
 
-        if action_type == "SCALE_OUT" and config.AGENT_ALLOW_SCALE_OUT and open_trades:
-            trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0]
-            base_qty = float(trade.get("quantity") or 0.0)
+        if action_type == "SCALE_OUT" and config.AGENT_ALLOW_SCALE_OUT and current_side:
+            trade = sorted(open_trades, key=lambda t: t.get("created_ts", time.time()))[0] if open_trades else None
+            qty_source = trade if trade else live_position
+            base_qty = float(qty_source.get("quantity") or qty_source.get("size") or 0.0) if qty_source else 0.0
             qty = base_qty * max(min(size_mult, 0.9), 0.1)
+            if qty <= 0:
+                return AgentDecision(action="HOLD", symbol=symbol, reason="zero_qty_position", metadata=metadata)
             return AgentDecision(
                 action="SCALE_OUT",
                 symbol=symbol,
                 quantity=qty,
-                trade_id=trade.get("trade_id"),
+                trade_id=trade.get("trade_id") if trade else None,
                 reason="rl_scale_out",
                 metadata=metadata,
             )
 
         return AgentDecision(action="HOLD", symbol=symbol, reason="fallback", metadata=metadata)
+
+    def _normalize_side(self, side_value: Any) -> str:
+        side = str(side_value or "").lower()
+        if side.startswith("buy") or side == "long":
+            return "long"
+        if side.startswith("sell") or side == "short":
+            return "short"
+        return ""
 
     # ---------- Feedback tras cierre de trade ----------
 
