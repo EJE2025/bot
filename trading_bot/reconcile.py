@@ -82,13 +82,57 @@ def reconcile_pending_trades(trades: Iterable[dict] | None = None) -> None:
                 age,
             )
             order_id = trade.get("order_id")
+            cancel_confirmed = False
+            status_reported = ""
             if order_id and not config.DRY_RUN:
                 try:
-                    execution.cancel_order(order_id, symbol)
-                except Exception as exc:  # pragma: no cover - network errors
+                    status_reported = (execution.fetch_order_status(order_id, symbol) or "").lower()
+                except Exception as exc:  # pragma: no cover - defensive logging
                     logger.debug(
-                        "Cancel order %s failed during reconcile: %s", order_id, exc
+                        "Fetch status for %s failed during reconcile: %s", order_id, exc
                     )
+
+                if status_reported in {"closed", "filled", "partial"}:
+                    logger.info(
+                        "Trade %s shows %s via REST; awaiting portfolio confirmation.",
+                        trade_id,
+                        status_reported,
+                    )
+                    continue
+
+                cancel_confirmed = status_reported in {"canceled", "cancelled"}
+
+                if status_reported == "open" and not cancel_confirmed:
+                    try:
+                        execution.cancel_order(order_id, symbol)
+                        refreshed = (
+                            execution.fetch_order_status(order_id, symbol) or ""
+                        ).lower()
+                        cancel_confirmed = refreshed in {"canceled", "cancelled"}
+                        status_reported = refreshed or status_reported
+                    except Exception as exc:  # pragma: no cover - network errors
+                        logger.debug(
+                            "Cancel order %s failed during reconcile: %s",
+                            order_id,
+                            exc,
+                        )
+
+            if config.STRICT_MIRROR_MODE and not cancel_confirmed:
+                logger.info(
+                    "Strict mirror mode activo: pendiente %s permanece sin cancelar (estado %s).",
+                    trade_id,
+                    status_reported or "desconocido",
+                )
+                continue
+
+            if not cancel_confirmed:
+                logger.info(
+                    "Cancelación no confirmada para %s; esperando corroboración de cartera (estado %s).",
+                    trade_id,
+                    status_reported or "desconocido",
+                )
+                continue
+
             trade_manager.cancel_pending_trade(trade_id, reason="pending_timeout")
             continue
 

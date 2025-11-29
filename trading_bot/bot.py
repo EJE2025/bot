@@ -139,11 +139,20 @@ def _pending_timeout_seconds(order_type: str | None) -> int | None:
     return max(timeout, 1)
 
 
-def _schedule_pending_timeout(trade_id: str, symbol: str, timeout: int | float) -> None:
+def _schedule_pending_timeout(
+    trade_id: str,
+    symbol: str,
+    timeout: int | float,
+    *,
+    order_type: str | None = None,
+) -> None:
     if timeout is None or timeout <= 0:
         return
     if config.DRY_RUN:
         return
+
+    normalized_order_type = (order_type or "").strip().lower()
+    strict_mirror = config.STRICT_MIRROR_MODE and normalized_order_type == "market"
 
     def _expire_pending() -> None:
         _pending_timeouts.pop(trade_id, None)
@@ -207,6 +216,14 @@ def _schedule_pending_timeout(trade_id: str, symbol: str, timeout: int | float) 
         if not cancel_confirmed:
             logger.info(
                 "Omitiendo cancel_pending_trade %s: exchange reporta estado '%s'.",
+                trade_id,
+                current_status or "desconocido",
+            )
+            return
+
+        if strict_mirror:
+            logger.info(
+                "Strict mirror mode activo: omitiendo cancel_pending_trade %s (estado %s).",
                 trade_id,
                 current_status or "desconocido",
             )
@@ -1523,7 +1540,9 @@ def open_new_trade(signal: dict):
 
         timeout = _pending_timeout_seconds(order_type)
         if timeout:
-            _schedule_pending_timeout(trade["trade_id"], symbol, timeout)
+            _schedule_pending_timeout(
+                trade["trade_id"], symbol, timeout, order_type=order_type
+            )
 
         # Iniciamos streams de precio preventivamente
         _ensure_market_stream_consumer()
