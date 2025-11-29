@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import random
 import threading
 from collections import deque
@@ -106,7 +107,12 @@ class _ReplayTradingEnv(gym.Env):
 
 class RLTradingAgent:
     def __init__(self) -> None:
-        self.enabled = getattr(config, "RL_AGENT_ENABLED", False)
+        agent_control_enabled = bool(getattr(config, "AGENT_CONTROL_ENABLED", False))
+        env_overrides_rl = "RL_AGENT_ENABLED" in os.environ
+        self.enabled = bool(getattr(config, "RL_AGENT_ENABLED", False))
+        if agent_control_enabled and not env_overrides_rl and not self.enabled:
+            logger.info("Enabling RL agent to mirror AGENT_CONTROL_ENABLED setting")
+            self.enabled = True
         tp_low, tp_high = getattr(config, "RL_TP_MULT_RANGE", (0.5, 3.0))
         sl_low, sl_high = getattr(config, "RL_SL_MULT_RANGE", (0.5, 2.5))
         self.tp_range = (float(tp_low), float(tp_high))
@@ -190,12 +196,10 @@ class RLTradingAgent:
     ) -> dict[str, float | str | None]:
         """Elegir acción de alto nivel combinando política RL y señal base."""
 
-        if not self.enabled:
-            return {"action": "HOLD"}
-
-        action = "HOLD"
         confidence = max(0.0, min(1.0, float(confidence)))
         direction = direction.lower()
+
+        action = "HOLD"
 
         # Inferir tipo de acción
         if direction == "long" and confidence >= 0.55:
@@ -208,7 +212,7 @@ class RLTradingAgent:
         # Obtener multiplicadores TP/SL desde la política entrenada
         action_vector = None
         action_idx = None
-        if state_vec is not None:
+        if self.enabled and state_vec is not None:
             try:
                 action_vector, action_idx = self._predict_action(np.asarray(state_vec, dtype=np.float32))
             except Exception as exc:  # pragma: no cover - defensive
@@ -221,13 +225,26 @@ class RLTradingAgent:
             tp_mult = float(action_vector[0])
             sl_mult = float(action_vector[1])
 
-        return {
+        decision = {
             "action": action,
             "size_mult": size_mult,
             "tp_mult": tp_mult,
             "sl_mult": sl_mult,
             "action_index": action_idx,
         }
+
+        logger.info(
+            "RL agent decision",
+            extra={
+                "rl_enabled": self.enabled,
+                "direction": direction,
+                "confidence": confidence,
+                "has_open_trades": has_open_trades,
+                "decision": decision,
+            },
+        )
+
+        return decision
 
     def _build_discrete_actions(self) -> List[tuple[float, float]]:
         tp_vals = np.linspace(self.tp_range[0], self.tp_range[1], self._discrete_tp_bins)
