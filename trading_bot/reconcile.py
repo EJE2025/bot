@@ -21,6 +21,20 @@ def _state_from_trade(trade: dict) -> TradeState:
         return TradeState.PENDING
 
 
+def _pending_timeout_seconds(trade: dict) -> int | None:
+    """Return the timeout for a pending trade respecting config flags."""
+
+    if config.DRY_RUN or not config.PENDING_TIMEOUT_ENABLED:
+        return None
+
+    order_type = (trade.get("order_type") or trade.get("type") or "").strip().lower()
+    if order_type == "market" and not config.PENDING_TIMEOUT_FOR_MARKET:
+        return None
+
+    timeout = max(config.PENDING_FILL_TIMEOUT_S, config.PENDING_TIMEOUT_MIN_S)
+    return max(timeout, 1)
+
+
 def reconcile_pending_trades(trades: Iterable[dict] | None = None) -> None:
     """Poll REST endpoints to promote or cancel stale pending trades."""
 
@@ -35,7 +49,8 @@ def reconcile_pending_trades(trades: Iterable[dict] | None = None) -> None:
         symbol = trade.get("symbol", "")
         created = float(trade.get("created_ts") or trade.get("created_at") or now)
         age = now - created
-        if age >= config.PENDING_FILL_TIMEOUT_S:
+        timeout = _pending_timeout_seconds(trade)
+        if timeout is not None and age >= timeout:
             recovered = False
             if not config.DRY_RUN:
                 norm_symbol = normalize_symbol(symbol)

@@ -1483,6 +1483,7 @@ def open_new_trade(signal: dict):
         update_trade(
             trade["trade_id"],
             order_id=order_id,
+            order_type=order_type,
             entry_price=float(order.get("average") or signal["entry_price"]),
             status="pending",
             created_ts=time.time(),
