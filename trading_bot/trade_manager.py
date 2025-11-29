@@ -816,7 +816,13 @@ def reconcile_positions() -> None:
         # --- INICIO DEL CAMBIO: Verificación de seguridad antes de cerrar ---
 
         order_id = str(tr.get("order_id") or "")
-        should_close = True
+        should_close = False
+        close_reason = ""
+
+        created_ts = float(tr.get("created_ts") or 0)
+        age_seconds = time.time() - created_ts
+        grace_seconds = max(0, int(getattr(config, "ORDER_MAX_AGE", 0)))
+        within_grace = grace_seconds == 0 or age_seconds < grace_seconds
 
         # Si tenemos un ID de orden, preguntamos a la API específicamente por esa orden
         # antes de asumir que la posición ha desaparecido.
@@ -826,34 +832,53 @@ def reconcile_positions() -> None:
 
                 status = execution.fetch_order_status(order_id, symbol)
 
-                # --- LÓGICA DE PROTECCIÓN DE LA VERDAD ---
-                # Calculamos la edad del trade en segundos para protegerlo del lag inicial
-                created_ts = float(tr.get("created_ts") or 0)
-                age_seconds = time.time() - created_ts
-                is_young = age_seconds < 60  # Margen de seguridad de 1 minuto
-
                 # Reglas de supervivencia:
                 # 1. Si está 'new'/'partial'/'open', la orden sigue viva en el book -> NO CERRAR.
-                # 2. Si está 'filled' Y es joven (<60s), es casi seguro lag de la API de posiciones -> NO CERRAR.
-                # 3. Si está 'filled' Y es vieja (>60s), y no hay posición -> Asumimos cierre externo -> CERRAR.
+                # 2. Si está 'filled' Y es joven (<ORDER_MAX_AGE s), es casi seguro lag de la API de posiciones -> NO CERRAR.
+                # 3. Si está 'filled' Y es vieja (>=ORDER_MAX_AGE s), y no hay posición -> Asumimos cierre externo -> CERRAR.
+                # 4. Estados cancelados/expirados indican cierre inequívoco -> CERRAR.
 
                 if status in ("new", "partial", "open"):
                     logger.info("Orden %s activa (%s). Esperando ejecución...", order_id, status)
-                    should_close = False
-                elif status == "filled" and is_young:
+                elif status == "filled" and within_grace:
                     logger.info(
-                        "Orden %s FILLED pero posición no visible (lag %ds). Protegiendo trade.",
+                        "Orden %s FILLED pero posición no visible (lag %ds < umbral %ds). Protegiendo trade.",
                         order_id,
                         int(age_seconds),
+                        grace_seconds,
                     )
-                    should_close = False
+                elif status == "filled":
+                    should_close = True
+                    close_reason = "filled_and_absent"
+                elif status in ("canceled", "rejected", "expired"):
+                    should_close = True
+                    close_reason = status
+                    logger.warning(
+                        "Orden %s reportada como %s. Marcando trade para cierre seguro.",
+                        order_id,
+                        status,
+                    )
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning(
                     "Error verificando orden %s: %s. Mantenemos trade por seguridad.",
                     order_id,
                     e,
                 )
-                should_close = False  # Ante la duda, no cerrar
+        elif not within_grace:
+            # Sin ID de orden no podemos confirmar el estado; solo cerramos tras el periodo de gracia.
+            should_close = True
+            close_reason = "missing_order_after_grace"
+            logger.warning(
+                "Trade %s sin orden asociada tras %ds. Marcando cierre preventivo.",
+                symbol,
+                grace_seconds,
+            )
+        else:
+            logger.info(
+                "Trade %s sin orden asociada pero dentro de la ventana de gracia (%ds). Conservando estado.",
+                symbol,
+                grace_seconds,
+            )
 
         if should_close:
             try:
@@ -868,7 +893,7 @@ def reconcile_positions() -> None:
                     exit_price = None
                 close_trade(
                     trade_id=tr.get("trade_id"),
-                    reason="reconcile_missing",
+                    reason=close_reason or "reconcile_missing",
                     exit_price=exit_price,
                 )
                 logger.info(
