@@ -830,7 +830,11 @@ def reconcile_positions() -> None:
                 from . import execution  # Import local para evitar ciclos
 
                 order_status = execution.fetch_order_status(order_id, symbol)
-                status = str(order_status.get("status") or order_status.get("state") or "").lower()
+                if isinstance(order_status, dict):
+                    raw_status = order_status.get("status") or order_status.get("state")
+                else:
+                    raw_status = order_status
+                status = str(raw_status or "").lower()
                 confirmed_cancel = status in {"canceled", "cancelled", "rejected", "expired"}
                 if confirmed_cancel:
                     logger.warning(
