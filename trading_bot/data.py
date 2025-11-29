@@ -33,10 +33,12 @@ def display_symbol(sym: str) -> str:
 
 
 def _bitget_symbol(sym: str) -> str:
+    """Return Bitget symbol without legacy suffixes (e.g. ``BTCUSDT``)."""
+
     cleaned = normalize_symbol(sym)
     if not cleaned.endswith("USDT"):
         cleaned = f"{cleaned}USDT"
-    return f"{cleaned}_UMCBL"
+    return cleaned
 
 
 def _generic_cache_path(prefix: str, *parts: str) -> str:
@@ -55,16 +57,19 @@ def _to_binance_interval(interval: str) -> str:
     return interval
 
 
-def _to_bitget_granularity(interval: str) -> int:
+def _to_bitget_granularity(interval: str) -> tuple[str, int]:
+    """Return Bitget v2 granularity label and its duration in seconds."""
+
     if interval.startswith("Min"):
-        mins = int(interval[3:])
-        return max(1, mins) * 60
-    mapping = {
-        "Hour1": 3600,
-        "Hour4": 14_400,
-        "Day1": 86_400,
+        mins = max(1, int(interval[3:]))
+        return f"{mins}m", mins * 60
+
+    mapping: dict[str, tuple[str, int]] = {
+        "Hour1": ("1h", 3600),
+        "Hour4": ("4h", 14_400),
+        "Day1": ("1d", 86_400),
     }
-    return mapping.get(interval, 900)
+    return mapping.get(interval, ("15m", 900))
 
 
 def _bitget_history_window(granularity: int, limit: int) -> tuple[int, int]:
@@ -121,20 +126,21 @@ def get_market_data(symbol: str, interval: str = "Min15", limit: int = 500) -> D
     data_source = (config.DATA_EXCHANGE or config.PRIMARY_EXCHANGE).lower()
 
     if data_source == "bitget" or not config.ENABLE_BINANCE:
-        endpoint = "/api/mix/v1/market/history-candles"
-        granularity = _to_bitget_granularity(interval)
-        start_ms, end_ms = _bitget_history_window(granularity, limit)
+        endpoint = "/api/v2/mix/market/history-candles"
+        granularity_label, granularity_s = _to_bitget_granularity(interval)
+        start_ms, end_ms = _bitget_history_window(granularity_s, limit)
         logger.info(
             "Bitget history window %s: %s -> %s UTC (granularity=%ss, limit=%d)",
             symbol,
             time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_ms / 1000)),
             time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(end_ms / 1000)),
-            granularity,
+            granularity_s,
             limit,
         )
         params = {
             "symbol": _bitget_symbol(symbol),
-            "granularity": granularity,
+            "productType": "USDT-FUTURES",
+            "granularity": granularity_label,
             "startTime": start_ms,
             "endTime": end_ms,
         }
@@ -249,7 +255,7 @@ def get_ticker(symbol: str) -> Dict | None:
 
     if source == "bitget" or not config.ENABLE_BINANCE:
         params = {"symbol": _bitget_symbol(symbol), "productType": "USDT-FUTURES"}
-        url = config.BASE_URL_BITGET + "/api/mix/v1/market/ticker"
+        url = config.BASE_URL_BITGET + "/api/v2/mix/market/ticker"
         for attempt in range(MAX_ATTEMPTS):
             try:
                 resp = requests.get(url, params=params, timeout=10)
@@ -369,8 +375,8 @@ def get_current_price_ticker(symbol: str) -> float | None:
             logger.error("Mock price retrieval failed for %s: %s", symbol, exc)
             return None
 
-    bitget_sym = symbol.replace("_", "") + "_UMCBL"
-    endpoint = "/api/mix/v1/market/ticker"
+    bitget_sym = _bitget_symbol(symbol)
+    endpoint = "/api/v2/mix/market/ticker"
     params = {"symbol": bitget_sym, "productType": "USDT-FUTURES"}
     url = config.BASE_URL_BITGET + endpoint
     cache_file = _generic_cache_path("price", symbol)
@@ -412,8 +418,12 @@ def get_order_book(symbol: str, limit: int = 50) -> Dict | None:
     cache_file = _generic_cache_path(f"{source}_book", f"{symbol}_{limit}")
 
     if source == "bitget" or not config.ENABLE_BINANCE:
-        url = config.BASE_URL_BITGET + "/api/mix/v1/market/depth"
-        params = {"symbol": _bitget_symbol(symbol), "limit": limit}
+        url = config.BASE_URL_BITGET + "/api/v2/mix/market/depth"
+        params = {
+            "symbol": _bitget_symbol(symbol),
+            "productType": "USDT-FUTURES",
+            "limit": limit,
+        }
         for attempt in range(MAX_ATTEMPTS):
             try:
                 resp = requests.get(url, params=params, timeout=10)
