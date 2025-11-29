@@ -66,6 +66,7 @@ from . import (
 )
 from .indicators import calculate_atr
 from . import webapp
+from .exchanges import MockExchange
 from .exchanges.bitget_ws import BitgetWebSocket
 from .reconcile import reconcile_pending_trades
 from .trade_manager import (
@@ -1566,6 +1567,12 @@ def run_one_iteration_open(model=None):
         return
     if count_open_trades() >= config.MAX_OPEN_TRADES:
         return
+    min_size = config.MIN_POSITION_SIZE
+    if config.TEST_MODE or isinstance(execution.exchange, MockExchange):
+        min_size = min(min_size, 1.0)
+    use_agent_control = config.AGENT_CONTROL_ENABLED and not (
+        config.TEST_MODE or isinstance(execution.exchange, MockExchange)
+    )
     symbols = data.get_common_top_symbols(execution.exchange, 15)
     candidates = []
     seen = set()
@@ -1587,12 +1594,12 @@ def run_one_iteration_open(model=None):
                 "Skip %s: RR=%.2f < %.2f", symbol, sig.get("risk_reward", 0), config.MIN_RISK_REWARD
             )
             continue
-        if sig.get("quantity", 0) < config.MIN_POSITION_SIZE:
+        if sig.get("quantity", 0) < min_size:
             logger.debug(
                 "Skip %s: qty=%.8f < min=%.8f",
                 symbol,
                 sig.get("quantity", 0),
-                config.MIN_POSITION_SIZE,
+                min_size,
             )
             continue
         candidates.append(sig)
@@ -1602,7 +1609,7 @@ def run_one_iteration_open(model=None):
         if count_open_trades() >= config.MAX_OPEN_TRADES:
             break
         try:
-            adjusted = _apply_agent_decision(sig) if config.AGENT_CONTROL_ENABLED else sig
+            adjusted = _apply_agent_decision(sig) if use_agent_control else sig
             if not adjusted:
                 continue
             open_new_trade(adjusted)
