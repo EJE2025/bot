@@ -250,8 +250,8 @@ def get_exchange(name: str):
 
     if not isinstance(ex, MockExchange) and name == "bitget":
         def fetch_markets():
-            url = "https://api.bitget.com/api/mix/v1/market/tickers"
-            params = {"productType": "umcbl"}
+            url = "https://api.bitget.com/api/v2/mix/market/tickers"
+            params = {"productType": "USDT-FUTURES"}
             try:
                 resp = requests.get(url, params=params, timeout=10)
                 resp.raise_for_status()
@@ -261,11 +261,10 @@ def get_exchange(name: str):
                 markets = {}
                 for item in data["data"]:
                     sym = item.get("symbol", "")
-                    if not sym.endswith("USDT_UMCBL"):
+                    if not sym.endswith("USDT") or len(sym) <= 4:
                         continue
-                    base_quote = sym.replace("_UMCBL", "")
-                    base = base_quote[:-4]
-                    quote = base_quote[-4:]
+                    base = sym[:-4]
+                    quote = sym[-4:]
                     unified = f"{base}/{quote}:USDT"
                     markets[unified] = {
                         "symbol": unified,
