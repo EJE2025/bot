@@ -326,13 +326,14 @@ def launch_aux_services(
         logger.info("Servicios auxiliares ya estaban activos; se reutilizarán")
         return
 
-    base_url = f"http://localhost:{gateway_port}"
+    dashboard_base = f"http://localhost:{config.WEBAPP_PORT}"
+    gateway_base = f"http://localhost:{gateway_port}"
     env_overrides = {
         # URL base del gateway (por donde se accederá al panel)
-        "DASHBOARD_GATEWAY_BASE": base_url,
-        "DASHBOARD_SOCKET_BASE": base_url,
+        "DASHBOARD_GATEWAY_BASE": dashboard_base,
+        "DASHBOARD_SOCKET_BASE": dashboard_base,
         "DASHBOARD_SOCKET_PATH": "/ws",
-        "GATEWAY_BASE_URL": base_url,
+        "GATEWAY_BASE_URL": gateway_base,
         # URL interna del motor de órdenes
         "TRADING_URL": f"http://127.0.0.1:{engine_port}",
         # URL interna del bot Flask; el gateway la usa para reenviar /api
@@ -343,8 +344,8 @@ def launch_aux_services(
     config.DASHBOARD_GATEWAY_BASE = env_overrides["DASHBOARD_GATEWAY_BASE"]
     config.DASHBOARD_SOCKET_BASE = env_overrides["DASHBOARD_SOCKET_BASE"]
     config.DASHBOARD_SOCKET_PATH = env_overrides["DASHBOARD_SOCKET_PATH"]
-    config.ANALYTICS_GRAPHQL_URL = f"{base_url}/graphql"
-    config.AI_ASSISTANT_URL = f"{base_url}/ai/chat"
+    config.ANALYTICS_GRAPHQL_URL = f"{gateway_base}/graphql"
+    config.AI_ASSISTANT_URL = f"{gateway_base}/ai/chat"
 
     env = os.environ.copy()
     workdir = Path(__file__).resolve().parent.parent

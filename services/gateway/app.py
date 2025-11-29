@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 import httpx
 from fastapi import FastAPI, Request, Response
@@ -9,15 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 BOT_SERVICE_URL = os.getenv("BOT_SERVICE_URL", "http://localhost:8000")
-_GATEWAY_BASE = os.getenv("GATEWAY_BASE_URL") or os.getenv(
-    "DASHBOARD_GATEWAY_BASE", "*"
+_RAW_ORIGINS = os.getenv("DASHBOARD_GATEWAY_BASE") or os.getenv(
+    "GATEWAY_BASE_URL", "*"
 )
+
+
+def _parse_origins(raw: str | None) -> List[str]:
+    if not raw:
+        return ["*"]
+    origins = [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
+    return origins or ["*"]
 
 app = FastAPI(title="Trading Bot Gateway")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_GATEWAY_BASE] if _GATEWAY_BASE else ["*"],
+    allow_origins=_parse_origins(_RAW_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,3 +114,13 @@ async def proxy_api(full_path: str, request: Request) -> Response:
 async def proxy_events(request: Request) -> Response:
     extra_headers = {"accept": "text/event-stream"}
     return await _forward_request(request, "/events", extra_headers=extra_headers)
+
+
+@app.api_route("/graphql", methods=["GET", "POST", "OPTIONS"])
+async def proxy_graphql(request: Request) -> Response:
+    return await _forward_request(request, "/graphql")
+
+
+@app.api_route("/ai/chat", methods=["GET", "POST", "OPTIONS"])
+async def proxy_ai_chat(request: Request) -> Response:
+    return await _forward_request(request, "/ai/chat")
