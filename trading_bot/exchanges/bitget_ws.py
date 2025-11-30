@@ -3,11 +3,13 @@ import time
 import hmac
 import base64
 import asyncio
-import json
 import websockets
 
 
-BITGET_WS_URL = "wss://ws.bitget.com/mix/v1/stream"
+BITGET_WS_PUBLIC_URL = "wss://ws.bitget.com/v2/ws/public"
+BITGET_WS_PRIVATE_URL = "wss://ws.bitget.com/v2/ws/private"
+# Backwards compatibility for callers expecting a single URL constant
+BITGET_WS_URL = BITGET_WS_PRIVATE_URL
 
 
 class BitgetWebSocket:
@@ -114,6 +116,9 @@ class BitgetWebSocket:
     async def run(self):
         while True:
             try:
+                self.logger.info(
+                    "Connecting Bitget WS (private) to %s", BITGET_WS_URL
+                )
                 async with websockets.connect(BITGET_WS_URL, ping_interval=20) as ws:
 
                     await self._auth(ws)
