@@ -250,25 +250,32 @@ def get_exchange(name: str):
 
     if not isinstance(ex, MockExchange) and name == "bitget":
         def fetch_markets():
-            url = "https://api.bitget.com/api/v2/mix/market/tickers"
+            url = f"{config.BASE_URL_BITGET}/api/v2/mix/market/contracts"
             params = {"productType": "USDT-FUTURES"}
             try:
                 resp = requests.get(url, params=params, timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("code") != "00000" or "data" not in data:
-                    raise RuntimeError("Bad response")
+                    msg = data.get("msg") or "Bad response"
+                    raise RuntimeError(msg)
+
                 markets = {}
                 for item in data["data"]:
-                    sym = item.get("symbol", "")
-                    if not sym.endswith("USDT") or len(sym) <= 4:
+                    symbol_raw = item.get("symbol", "")
+                    base = item.get("baseCoin") or symbol_raw[:-4]
+                    quote = item.get("quoteCoin") or symbol_raw[-4:]
+                    if not symbol_raw or not base or not quote:
                         continue
-                    base = sym[:-4]
-                    quote = sym[-4:]
+
                     unified = f"{base}/{quote}:USDT"
                     markets[unified] = {
                         "symbol": unified,
-                        "volume": float(item.get("usdtVolume") or item.get("quoteVolume", 0)),
+                        "id": item.get("symbolId") or symbol_raw,
+                        "base": base,
+                        "quote": quote,
+                        "contractSize": float(item.get("sizeMultiplier") or 1),
+                        "volume": float(item.get("usdtVolume24h", 0) or 0.0),
                     }
                 return markets
             except Exception as exc:
