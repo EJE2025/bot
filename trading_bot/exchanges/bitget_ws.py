@@ -17,6 +17,7 @@ class BitgetWebSocket:
         self.passphrase = passphrase
         self.trade_manager = trade_manager
         self.logger = logger
+        self._last_reconnect_sync: float = 0.0
 
     def _signature(self, timestamp):
         msg = f"{timestamp}GET/user/stream".encode()
@@ -50,6 +51,20 @@ class BitgetWebSocket:
             await ws.send(json.dumps({"op": "subscribe", "args": [c]}))
 
         self.logger.info("Bitget WS: Subscribed to orders + positions")
+
+    async def _resync_after_reconnect(self) -> None:
+        """Perform a REST snapshot after reconnecting to avoid drift."""
+
+        now = time.time()
+        if now - self._last_reconnect_sync < 5:
+            return
+
+        try:
+            await asyncio.to_thread(self.trade_manager.reconcile_positions)
+            self._last_reconnect_sync = now
+            self.logger.info("Bitget WS: State reconciled after reconnect")
+        except Exception as exc:
+            self.logger.error("Bitget WS: Failed to reconcile after reconnect: %s", exc)
 
     async def handler(self, data):
         if "data" not in data:
@@ -103,6 +118,7 @@ class BitgetWebSocket:
 
                     await self._auth(ws)
                     await self.subscribe(ws)
+                    await self._resync_after_reconnect()
 
                     while True:
                         raw = await ws.recv()
