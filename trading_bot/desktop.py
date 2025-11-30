@@ -13,7 +13,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
         "PyWebview es necesario para el modo de escritorio. Instala 'pywebview'."
     ) from exc
 
-from . import config, webapp
+from . import config, new_dashboard
 
 _WINDOW: webview.Window | None = None
 
@@ -21,7 +21,7 @@ _WINDOW: webview.Window | None = None
 def _start_dashboard() -> None:
     """Run the Flask dashboard inside the current thread."""
 
-    webapp.start_dashboard(config.WEBAPP_HOST, config.WEBAPP_PORT)
+    new_dashboard.start_dashboard(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
 
 def _wait_health(timeout: float = 30.0) -> bool:

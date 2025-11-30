@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MCP‑2099 Control Core</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #050510;
+      --accent: #00f0ff;
+      --accent-2: #ff00ea;
+      --text: #f8f9ff;
+      --muted: #8589a6;
+      --card-bg: rgba(10, 12, 30, 0.9);
+      --border-glow: 0 0 20px rgba(0, 240, 255, 0.35);
+      --radius-lg: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+        "Roboto", sans-serif;
+      background: radial-gradient(circle at top, #111633 0, #050510 50%, #020209 100%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 16px;
+    }
+
+    .shell {
+      width: 100%;
+      max-width: 1200px;
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1.6fr);
+      gap: 32px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 900px) {
+      .shell {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      box-shadow: var(--border-glow);
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: -120px;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(0, 240, 255, 0.25), transparent 55%),
+        radial-gradient(circle at 100% 100%, rgba(255, 0, 234, 0.1), transparent 55%);
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    .hero-title {
+      font-size: clamp(2.2rem, 3vw, 2.8rem);
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+
+    .hero-subtitle {
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.23em;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+
+    .hero-copy {
+      font-size: 0.98rem;
+      line-height: 1.6;
+      color: var(--text);
+      max-width: 460px;
+      margin-bottom: 24px;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .btn-primary,
+    .btn-ghost {
+      border-radius: 999px;
+      border: 1px solid rgba(0, 240, 255, 0.7);
+      padding: 10px 20px;
+      font-size: 0.9rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      background: transparent;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.18s ease-out;
+    }
+
+    .btn-primary {
+      background: linear-gradient(90deg, #00f0ff, #ff00ea);
+      border-color: transparent;
+      color: #050510;
+      box-shadow: 0 0 20px rgba(0, 240, 255, 0.6);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px) scale(1.01);
+      box-shadow: 0 0 26px rgba(0, 240, 255, 0.8);
+    }
+
+    .btn-ghost:hover {
+      background: rgba(0, 240, 255, 0.1);
+    }
+
+    .hero-meta {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+    }
+
+    .hero-meta span strong {
+      color: var(--accent);
+      margin-right: 6px;
+    }
+
+    /* 3D core placeholder */
+    .core-wrapper {
+      position: relative;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+    .core-orbit {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle, rgba(0, 240, 255, 0.25), transparent 55%),
+        conic-gradient(from 120deg, transparent 0deg 100deg, rgba(255, 255, 255, 0.2) 110deg 130deg, transparent 140deg 360deg);
+      filter: blur(14px);
+      opacity: 0.8;
+      animation: orbitGlow 8s linear infinite;
+      pointer-events: none;
+    }
+
+    .core-sphere {
+      position: relative;
+      width: 260px;
+      max-width: 100%;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 30% 20%, #ffffff, #00f0ff 40%, #050510 70%),
+        radial-gradient(circle at 80% 80%, rgba(255, 0, 234, 0.9), transparent 55%);
+      box-shadow:
+        0 0 40px rgba(0, 240, 255, 0.8),
+        0 0 70px rgba(255, 0, 234, 0.4);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: corePulse 9s ease-in-out infinite;
+    }
+
+    .core-sphere::after {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(0, 240, 255, 0.4), transparent 55%),
+        radial-gradient(circle at 100% 100%, rgba(255, 0, 234, 0.2), transparent 55%);
+      mix-blend-mode: screen;
+      animation: coreSwirl 18s linear infinite;
+    }
+
+    .core-label {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      font-size: 0.78rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #050510;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(248, 249, 255, 0.9);
+      box-shadow: 0 0 18px rgba(0, 0, 0, 0.45);
+    }
+
+    .metrics-grid {
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      position: relative;
+      z-index: 2;
+    }
+
+    @media (max-width: 500px) {
+      .metrics-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .metric-card {
+      background: rgba(3, 6, 22, 0.9);
+      border-radius: 14px;
+      border: 1px solid rgba(0, 240, 255, 0.35);
+      padding: 10px 12px;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .metric-card span {
+      color: var(--muted);
+    }
+
+    .metric-card strong {
+      font-size: 0.9rem;
+      color: var(--accent-2);
+    }
+
+    @keyframes corePulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+
+    @keyframes coreSwirl {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @keyframes orbitGlow {
+      0% { transform: rotate(0deg); opacity: 0.7; }
+      50% { opacity: 0.45; }
+      100% { transform: rotate(360deg); opacity: 0.7; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <!-- Izquierda: copy / CTA -->
+    <section class="card">
+      <div class="hero-title">MCP‑2099</div>
+      <div class="hero-subtitle">Hyper‑Futuristic Control Protocol</div>
+      <p class="hero-copy">
+        Bienvenido al <strong>Sentient 3D Core</strong>. Este panel sustituye al dashboard clásico y
+        expone el estado del bot como si fuera un núcleo vivo: métricas volumétricas, microlending y
+        un índice MCP‑2099 agregando la inteligencia del agente.
+      </p>
+
+      <div class="hero-actions">
+        <button class="btn-primary">
+          <span>Deploy AI Core</span> ⬤
+        </button>
+        <button class="btn-ghost">
+          <span>View Live Microlender Stream</span>
+        </button>
+      </div>
+
+      <div class="hero-meta">
+        <span><strong>3D Landing</strong> Hero Section</span>
+        <span><strong>Sentient</strong> 3D Core</span>
+        <span><strong>Shaders</strong> Cyberpunk Volumetric</span>
+        <span><strong>Protocol</strong> Microlender</span>
+      </div>
+    </section>
+
+    <!-- Derecha: “núcleo” 3D + métricas -->
+    <section class="card">
+      <div class="core-wrapper">
+        <div class="core-orbit"></div>
+        <div class="core-sphere">
+          <div class="core-label">Sentient 3D Core</div>
+        </div>
+      </div>
+
+      <div class="metrics-grid">
+        <div class="metric-card" id="metric-shaders">
+          <span>Cyberpunk Volumetric Shaders</span>
+          <strong>LOD 4 · 87% density</strong>
+        </div>
+        <div class="metric-card" id="metric-microlender">
+          <span>Microlender Protocol</span>
+          <strong>32 active micro‑channels</strong>
+        </div>
+        <div class="metric-card" id="metric-core">
+          <span>Sentient Core Uptime</span>
+          <strong>99.982% · 24h</strong>
+        </div>
+        <div class="metric-card" id="metric-mcp">
+          <span>Hyper‑Futuristic MCP‑2099 Index</span>
+          <strong>+12.4 σ above baseline</strong>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // Placeholder hook for live metrics.
+    fetch('/api/metrics')
+      .then(response => response.json())
+      .then(metrics => {
+        const core = document.querySelector('#metric-core strong');
+        const shaders = document.querySelector('#metric-shaders strong');
+        const microlender = document.querySelector('#metric-microlender strong');
+        const mcp = document.querySelector('#metric-mcp strong');
+
+        if (core && typeof metrics.sentient_core_uptime === 'number') {
+          core.textContent = `${(metrics.sentient_core_uptime * 100).toFixed(3)}% · 24h`;
+        }
+        if (shaders && typeof metrics.shader_density === 'number') {
+          shaders.textContent = `LOD 4 · ${(metrics.shader_density * 100).toFixed(0)}% density`;
+        }
+        if (microlender && typeof metrics.microlender_channels === 'number') {
+          microlender.textContent = `${metrics.microlender_channels} active micro‑channels`;
+        }
+        if (mcp && typeof metrics.mcp2099_index_sigma === 'number') {
+          mcp.textContent = `+${metrics.mcp2099_index_sigma.toFixed(1)} σ above baseline`;
+        }
+      })
+      .catch(() => {
+        // Keep defaults if metric loading fails.
+      });
+  </script>
+</body>
+</html>

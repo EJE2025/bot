@@ -38,7 +38,6 @@ from pathlib import Path
 from statistics import mean
 from threading import Event, RLock, Thread, Timer
 from typing import Any
-import webbrowser
 import redis
 from redis.exceptions import RedisError
 
@@ -63,9 +62,9 @@ from . import (
     mode as bot_mode,
     exporter,
     agent_controller,
+    new_dashboard,
 )
 from .indicators import calculate_atr
-from . import webapp
 from .exchanges import MockExchange
 from .exchanges.bitget_ws import BitgetWebSocket
 from .reconcile import reconcile_pending_trades
@@ -236,8 +235,6 @@ def _schedule_pending_timeout(
     timer.start()
     _pending_timeouts[trade_id] = timer
 _last_excel_snapshot = 0.0
-_dashboard_launch_scheduled = False
-_dashboard_launch_lock = RLock()
 _aux_service_processes: list[subprocess.Popen[Any]] = []
 _aux_cleanup_registered = False
 _redis_client: redis.Redis | None = None
@@ -249,79 +246,6 @@ _daily_profit_value = 0.0
 _atr_lock = RLock()
 _atr_buffers: dict[str, deque[tuple[float, float, float]]] = {}
 _atr_values: dict[str, float] = {}
-
-
-def _normalize_dashboard_host(host: str) -> str:
-    host = (host or "").strip()
-    if not host:
-        return "127.0.0.1"
-
-    normalized = host.lower()
-    if normalized in {"0.0.0.0", "::", "::1", "localhost"}:
-        return "127.0.0.1"
-
-    return host
-
-
-def _dashboard_url(host: str, port: int) -> str:
-    if host.startswith("http://") or host.startswith("https://"):
-        return host
-
-    safe_host = _normalize_dashboard_host(host)
-    if ":" in safe_host and not safe_host.startswith("["):
-        safe_host = f"[{safe_host}]"
-
-    return f"http://{safe_host}:{port}"
-
-
-def _should_auto_launch_dashboard() -> bool:
-    override = os.getenv("AUTO_OPEN_DASHBOARD")
-    if override is not None:
-        normalized = override.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        return False
-
-    stdin = sys.stdin
-    return bool(stdin and stdin.isatty())
-
-
-def _launch_dashboard_browser(host: str, port: int, *, attempts: int = 20, delay: float = 0.5) -> None:
-    url = _dashboard_url(host, port)
-    connect_host = _normalize_dashboard_host(host)
-
-    for _ in range(max(1, attempts)):
-        try:
-            with socket.create_connection((connect_host, port), timeout=2):
-                webbrowser.open(url, new=1, autoraise=True)
-                return
-        except OSError:
-            time.sleep(max(0.0, delay))
-
-    webbrowser.open(url, new=1, autoraise=True)
-
-
-def _schedule_dashboard_launch(host: str, port: int) -> None:
-    global _dashboard_launch_scheduled
-
-    if not _should_auto_launch_dashboard():
-        return
-
-    with _dashboard_launch_lock:
-        if _dashboard_launch_scheduled:
-            return
-        _dashboard_launch_scheduled = True
-
-    Thread(
-        target=_launch_dashboard_browser,
-        args=(host, port),
-        kwargs={"attempts": 30, "delay": 0.5},
-        daemon=True,
-    ).start()
 
 
 def _get_redis_client() -> redis.Redis | None:
@@ -390,9 +314,7 @@ def launch_aux_services(
 ) -> None:
     """Start the FastAPI gateway and trading engine locally.
 
-    This mirrors the docker-compose setup to make the dashboard fully
-    functional without containers. It also configures environment variables so
-    the Flask dashboard points to the spawned gateway.
+    This mirrors the docker-compose setup for container-free development.
     """
 
     global _aux_cleanup_registered
@@ -401,13 +323,8 @@ def launch_aux_services(
         logger.info("Servicios auxiliares ya estaban activos; se reutilizarán")
         return
 
-    dashboard_base = f"http://localhost:{config.WEBAPP_PORT}"
     gateway_base = f"http://localhost:{gateway_port}"
     env_overrides = {
-        # URL base del gateway (por donde se accederá al panel)
-        "DASHBOARD_GATEWAY_BASE": dashboard_base,
-        "DASHBOARD_SOCKET_BASE": dashboard_base,
-        "DASHBOARD_SOCKET_PATH": "/ws",
         "GATEWAY_BASE_URL": gateway_base,
         # URL interna del motor de órdenes
         "TRADING_URL": f"http://127.0.0.1:{engine_port}",
@@ -416,11 +333,6 @@ def launch_aux_services(
     }
 
     os.environ.update(env_overrides)
-    config.DASHBOARD_GATEWAY_BASE = env_overrides["DASHBOARD_GATEWAY_BASE"]
-    config.DASHBOARD_SOCKET_BASE = env_overrides["DASHBOARD_SOCKET_BASE"]
-    config.DASHBOARD_SOCKET_PATH = env_overrides["DASHBOARD_SOCKET_PATH"]
-    config.ANALYTICS_GRAPHQL_URL = f"{gateway_base}/graphql"
-    config.AI_ASSISTANT_URL = f"{gateway_base}/ai/chat"
 
     env = os.environ.copy()
     workdir = Path(__file__).resolve().parent.parent
@@ -466,46 +378,6 @@ def launch_aux_services(
     if _aux_service_processes and not _aux_cleanup_registered:
         atexit.register(_cleanup_aux_processes)
         _aux_cleanup_registered = True
-
-    _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
-
-
-# No caches globales del webapp; usamos import tardío en _notify_dashboard_trade_opened
-def _notify_dashboard_trade_opened(
-    trade_id: str,
-    *,
-    trade_details: dict | None = None,
-) -> dict | None:
-    """Emit dashboard events after a trade is opened."""
-
-    try:
-        # Import lazily to avoid capturing stale references during module import.
-        from . import webapp  # noqa: WPS433 - delayed import by design
-    except Exception as exc:  # pragma: no cover - defensive guard
-        logger.debug(
-            "No se pudo cargar el módulo webapp para notificar %s: %s",
-            trade_id,
-            exc,
-        )
-        return trade_details or find_trade(trade_id=trade_id)
-
-    details = trade_details or find_trade(trade_id=trade_id)
-
-    try:
-        broadcast = getattr(webapp, "broadcast_trades_refresh", None)
-        if callable(broadcast):
-            broadcast()
-        socketio_emit = getattr(webapp, "_emit", None)
-        if callable(socketio_emit) and details:
-            socketio_emit("trade_updated", {"trade": details})
-    except Exception as exc:  # pragma: no cover - notification best-effort
-        logger.debug(
-            "No se pudo notificar la apertura de %s al dashboard: %s",
-            trade_id,
-            exc,
-        )
-
-    return details
 
 
 class ModelPerformanceMonitor:
@@ -1526,8 +1398,7 @@ def open_new_trade(signal: dict):
                         "quantity": details.get("quantity"),
                     },
                 )
-            # Notificar SIEMPRE antes de salir (un solo return)
-            return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
+            return details
 
         logger.info(
             "Solicitud enviada para %s (ID: %s). Estado PENDING. Esperando confirmación de cartera...",
@@ -1550,9 +1421,8 @@ def open_new_trade(signal: dict):
             _ensure_price_consumer(symbol)
 
         # Retornamos el trade en estado PENDING.
-        # El dashboard verá "Pendiente" hasta que aparezca la posición real.
         details = find_trade(trade_id=trade["trade_id"])
-        return _notify_dashboard_trade_opened(trade["trade_id"], trade_details=details) or details
+        return details
 
     except permissions.PermissionError as exc:
         logger.error("Permission denied opening %s: %s", symbol, exc)
@@ -1810,11 +1680,10 @@ def run(*, use_desktop: bool = False, install_signal_handlers: bool = True) -> N
     # (no operations list is passed).
     if not use_desktop:
         Thread(
-            target=webapp.start_dashboard,
+            target=new_dashboard.start_dashboard,
             args=(config.WEBAPP_HOST, config.WEBAPP_PORT),
             daemon=True,
         ).start()
-        _schedule_dashboard_launch(config.WEBAPP_HOST, config.WEBAPP_PORT)
 
     # Expose Prometheus metrics and start system monitor
     Thread(target=start_metrics_server, args=(config.METRICS_PORT,), daemon=True).start()
