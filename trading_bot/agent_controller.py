@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
 from . import config, data, rl_agent, trade_manager
+from .utils import normalize_symbol
 
 AgentAction = Literal[
     "HOLD",
@@ -51,8 +52,9 @@ class MasterAgent:
     def build_observation(self, symbol: str, candidate_signal: dict | None = None) -> Dict[str, Any]:
         market = data.get_market_data(symbol, limit=50) or {}
         open_trades = [
-            t for t in trade_manager.all_open_trades() if trade_manager.normalize_symbol(t.get("symbol", ""))
-            == trade_manager.normalize_symbol(symbol)
+            t
+            for t in trade_manager.all_open_trades()
+            if normalize_symbol(t.get("symbol", "")) == normalize_symbol(symbol)
         ]
         live_position = trade_manager.get_live_position(symbol)
         position_info = None
