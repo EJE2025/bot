@@ -18,6 +18,8 @@ def _setup(monkeypatch):
     ex = MockExchange()
     monkeypatch.setattr(execution, "exchange", ex)
     trade_manager.reset_state()
+    monkeypatch.setattr(config, "MIN_POSITION_SIZE_USDT", 0.0)
+    monkeypatch.setattr(strategy.rl_agent, "adjust_targets", lambda *args, **kwargs: None)
     yield
     trade_manager.reset_state()
 
@@ -59,6 +61,29 @@ def test_trade_cooldown(monkeypatch):
 
     # before cooldown expires should not open again
     bot.run_one_iteration_open()
+    assert trade_manager.count_open_trades() == 0
+
+
+def test_run_one_iteration_respects_min_notional(monkeypatch):
+    monkeypatch.setattr(config, "MIN_POSITION_SIZE_USDT", 10.0)
+    monkeypatch.setattr(config, "MIN_RISK_REWARD", 0)
+    monkeypatch.setattr(bot.data, "get_common_top_symbols", lambda ex, n: ["AAA_USDT"])
+    monkeypatch.setattr(data, "get_common_top_symbols", lambda ex, n: ["AAA_USDT"])
+    signal = {
+        "symbol": "AAA_USDT",
+        "side": "BUY",
+        "quantity": 1,
+        "entry_price": 5,
+        "take_profit": 6,
+        "stop_loss": 4,
+        "prob_success": 0.8,
+        "risk_reward": 2,
+        "leverage": 1,
+    }
+    monkeypatch.setattr(bot.strategy, "decidir_entrada", lambda sym, modelo_historico=None: signal)
+
+    bot.run_one_iteration_open()
+
     assert trade_manager.count_open_trades() == 0
 
 
