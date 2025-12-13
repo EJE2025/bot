@@ -44,6 +44,13 @@ def test_add_trade_rejects_duplicates():
         tm.add_trade({"symbol": "eth_usdt"})
 
 
+def test_add_trade_rejects_identical_duplicates():
+    tm.reset_state()
+    tm.add_trade({"symbol": "ADAUSDT"})
+    with pytest.raises(ValueError):
+        tm.add_trade({"symbol": "ADAUSDT"})
+
+
 def test_closed_trades_are_pruned(monkeypatch):
     tm.reset_state()
     monkeypatch.setattr(config, "MAX_CLOSED_TRADES", 2)
@@ -104,6 +111,23 @@ def test_trade_age_minutes_roundtrip():
     assert pytest.approx(age, rel=1e-3) == 30
 
 
+def test_balance_snapshot_includes_daily_drawdown(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(tm.time, "time", lambda: 0.0)
+
+    tm._record_balance_snapshot(100.0)
+    snap = tm.last_recorded_balance()
+    assert snap["daily_drawdown_pct"] == 0.0
+
+    tm._record_balance_snapshot(80.0)
+    snap = tm.last_recorded_balance()
+    assert snap["daily_drawdown_pct"] == pytest.approx(-20.0)
+
+    tm._record_balance_snapshot(90.0)
+    snap = tm.last_recorded_balance()
+    assert snap["daily_drawdown_pct"] == pytest.approx(-20.0)
+
+
 def test_exceeded_max_duration_detection():
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     trade = {
@@ -138,4 +162,25 @@ def test_close_trade_populates_missing_times(monkeypatch):
     assert closed["open_time"] == expected_open
     assert closed["close_time"]
     assert closed["close_time"].endswith("Z")
+
+
+def test_profit_observer_receives_realized_profit(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "ENABLE_TRADE_HISTORY_LOG", False)
+
+    recorded: list[tuple[float, str]] = []
+
+    def observer(profit, trade):
+        recorded.append((profit, trade.get("symbol")))
+
+    tm.register_profit_observer(observer)
+
+    tm.add_trade({"symbol": "SOLUSDT"})
+    trade = tm.all_open_trades()[0]
+    tm.set_trade_state(trade["trade_id"], TradeState.OPEN)
+
+    tm.close_trade(trade_id=trade["trade_id"], profit=-7.5)
+
+    assert recorded[0][0] == -7.5
+    assert tm.normalize_symbol(recorded[0][1]) == "SOL_USDT"
 

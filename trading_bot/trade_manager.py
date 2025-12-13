@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import time
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from . import config, data, rl_agent
 from .utils import normalize_symbol
@@ -25,7 +25,14 @@ _balance_thread: threading.Thread | None = None
 open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
-_balance_snapshot: dict[str, float] = {"free_usdt": 0.0, "timestamp": 0.0}
+_balance_snapshot: dict[str, float] = {
+    "free_usdt": 0.0,
+    "timestamp": 0.0,
+    "daily_start_balance": 0.0,
+    "daily_min_balance": 0.0,
+    "daily_drawdown_pct": 0.0,
+    "date": "",
+}
 
 # ``add_trade`` y otros métodos llaman a ``log_history`` mientras mantienen el
 # cerrojo principal. Ese helper también necesita bloquear el estado global para
@@ -37,6 +44,7 @@ LOCK = threading.RLock()
 
 # Cool-down registry for recently closed symbols
 _last_closed: dict[str, float] = {}
+_profit_observers: list[Callable[[float, dict], None]] = []
 
 
 def reset_state() -> None:
@@ -46,8 +54,17 @@ def reset_state() -> None:
         closed_trades.clear()
         trade_history.clear()
         _last_closed.clear()
-        _balance_snapshot["free_usdt"] = 0.0
-        _balance_snapshot["timestamp"] = 0.0
+        _profit_observers.clear()
+        _balance_snapshot.update(
+            {
+                "free_usdt": 0.0,
+                "timestamp": 0.0,
+                "daily_start_balance": 0.0,
+                "daily_min_balance": 0.0,
+                "daily_drawdown_pct": 0.0,
+                "date": "",
+            }
+        )
 
 
 def _prune_closed_trades() -> None:
@@ -59,10 +76,53 @@ def _prune_closed_trades() -> None:
         del closed_trades[0:overflow]
 
 
-def _record_balance_snapshot(amount: float) -> None:
+def register_profit_observer(callback: Callable[[float, dict], None]) -> None:
+    """Register a callback invoked whenever a trade is closed.
+
+    The callback receives the realized profit (or loss) and a snapshot of the
+    closed trade.
+    """
+
     with LOCK:
+        if callback in _profit_observers:
+            return
+        _profit_observers.append(callback)
+
+
+def _notify_profit_observers(profit: float, trade: dict) -> None:
+    observers: list[Callable[[float, dict], None]]
+    with LOCK:
+        observers = list(_profit_observers)
+
+    for cb in observers:
+        try:
+            cb(profit, dict(trade))
+        except Exception:  # pragma: no cover - defensive observer execution
+            logger.debug("Profit observer failed", exc_info=True)
+
+
+def _record_balance_snapshot(amount: float) -> None:
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    with LOCK:
+        if _balance_snapshot.get("date") != today or _balance_snapshot.get("daily_start_balance", 0.0) <= 0:
+            _balance_snapshot["daily_start_balance"] = amount
+            _balance_snapshot["daily_min_balance"] = amount
+            _balance_snapshot["date"] = today
+        else:
+            _balance_snapshot["daily_min_balance"] = min(
+                float(_balance_snapshot.get("daily_min_balance") or 0.0), amount
+            )
+
+        start_balance = float(_balance_snapshot.get("daily_start_balance") or 0.0)
+        min_balance = float(_balance_snapshot.get("daily_min_balance") or 0.0)
+        drawdown_pct = 0.0
+        if start_balance > 0:
+            drawdown_pct = ((min_balance - start_balance) / start_balance) * 100
+
         _balance_snapshot["free_usdt"] = amount
         _balance_snapshot["timestamp"] = time.time()
+        _balance_snapshot["daily_drawdown_pct"] = drawdown_pct
 
 
 def last_recorded_balance() -> dict[str, float]:
@@ -131,23 +191,12 @@ def add_trade(trade, *, allow_duplicates: bool = False):
         trade["symbol"] = normalize_symbol(raw_symbol)
         trade.setdefault("raw_symbol", raw_symbol)
         duplicate = False
-        raw_conflict = False
         for existing in open_trades:
             if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
                 duplicate = True
-                existing_raw = (existing.get("raw_symbol") or existing.get("symbol", "")).lower()
-                if existing_raw != raw_symbol.lower():
-                    raw_conflict = True
                 break
         if duplicate and not allow_duplicates:
-            if raw_conflict:
-                raise ValueError(
-                    f"Ya existe una operación abierta para {trade['symbol']}"
-                )
-            logger.warning(
-                "Registrando operación duplicada para %s; se generará un nuevo ID",
-                trade["symbol"],
-            )
+            raise ValueError(f"Ya existe una operación abierta para {trade['symbol']}")
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
@@ -448,10 +497,12 @@ def close_trade(
             closed_trades[:] = [
                 t for t in closed_trades if t.get("trade_id") != trade.get("trade_id")
             ]
+        profit_value = _ensure_realized_pnl(trade)
         try:
             rl_agent.record_trade_outcome(trade)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("No se pudo registrar el trade para RL: %s", exc)
+        _notify_profit_observers(profit_value, trade)
         return trade
 
 

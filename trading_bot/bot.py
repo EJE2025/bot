@@ -10,6 +10,7 @@ import logging
 import os
 import socket
 import subprocess
+import webbrowser
 
 _raw_use_gevent = os.getenv("USE_GEVENT")
 if _raw_use_gevent is None:
@@ -63,6 +64,7 @@ from . import (
     exporter,
     agent_controller,
     new_dashboard,
+    webapp,
 )
 from .indicators import calculate_atr
 from .exchanges import MockExchange
@@ -304,6 +306,56 @@ def add_daily_profit(amount: float) -> None:
 def current_daily_profit() -> float:
     with _daily_profit_lock:
         return _daily_profit_value
+
+
+def _daily_profit_observer(profit: float, trade: dict) -> None:
+    add_daily_profit(profit)
+
+
+trade_manager.register_profit_observer(_daily_profit_observer)
+
+
+def _normalize_dashboard_host(host: str | None) -> str:
+    if not host or host in {"0.0.0.0", "::"}:
+        return "127.0.0.1"
+    return host
+
+
+def _dashboard_url(host: str, port: int) -> str:
+    if host.startswith("http://") or host.startswith("https://"):
+        return host
+
+    normalized = _normalize_dashboard_host(host)
+    if ":" in normalized and not normalized.startswith("["):
+        normalized = f"[{normalized}]"
+    return f"http://{normalized}:{port}"
+
+
+def _launch_dashboard_browser(host: str, port: int, *, attempts: int = 3, delay: float = 1.0) -> None:
+    url = _dashboard_url(host, port)
+    target_host = _normalize_dashboard_host(host)
+
+    for _ in range(attempts):
+        try:
+            with socket.create_connection((target_host, port), timeout=1):
+                webbrowser.open(url, new=1, autoraise=True)
+                return
+        except OSError:
+            time.sleep(delay)
+
+    webbrowser.open(url, new=1, autoraise=True)
+
+
+def _should_auto_launch_dashboard() -> bool:
+    override = os.getenv("AUTO_OPEN_DASHBOARD")
+    if override is not None:
+        return override.strip().lower() not in {"0", "false", "no", "off"}
+
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+
+    stdin = getattr(sys, "stdin", None)
+    return bool(getattr(stdin, "isatty", lambda: False)())
 
 
 def launch_aux_services(
@@ -1551,6 +1603,15 @@ def run_one_iteration_open(model=None):
                 symbol,
                 sig.get("quantity", 0),
                 min_size,
+            )
+            continue
+        notional = float(sig.get("quantity", 0.0)) * float(sig.get("entry_price", 0.0))
+        if notional < config.MIN_POSITION_SIZE_USDT:
+            logger.debug(
+                "Skip %s: notional %.2f < min_usdt=%.2f",
+                symbol,
+                notional,
+                config.MIN_POSITION_SIZE_USDT,
             )
             continue
         candidates.append(sig)
