@@ -44,6 +44,13 @@ def test_add_trade_rejects_duplicates():
         tm.add_trade({"symbol": "eth_usdt"})
 
 
+def test_add_trade_rejects_identical_duplicate():
+    tm.reset_state()
+    tm.add_trade({"symbol": "XRPUSDT"})
+    with pytest.raises(ValueError):
+        tm.add_trade({"symbol": "XRPUSDT"})
+
+
 def test_closed_trades_are_pruned(monkeypatch):
     tm.reset_state()
     monkeypatch.setattr(config, "MAX_CLOSED_TRADES", 2)
@@ -138,4 +145,26 @@ def test_close_trade_populates_missing_times(monkeypatch):
     assert closed["open_time"] == expected_open
     assert closed["close_time"]
     assert closed["close_time"].endswith("Z")
+
+
+def test_balance_drawdown_snapshot(monkeypatch):
+    tm.reset_state()
+    monkeypatch.setattr(config, "AGENT_DD_LOOKBACK_HOURS", 24)
+    tm._record_balance_snapshot(100.0)
+    tm._record_balance_snapshot(80.0)
+    snapshot = tm.last_recorded_balance()
+    assert snapshot["daily_drawdown_pct"] == pytest.approx(-20.0)
+
+
+def test_profit_listener_updates_on_close():
+    tm.reset_state()
+    captured: list[float] = []
+
+    tm.register_profit_listener(lambda amount: captured.append(amount))
+    tm.add_trade({"symbol": "LTCUSDT"})
+    tid = tm.all_open_trades()[0]["trade_id"]
+    tm.set_trade_state(tid, TradeState.OPEN)
+    tm.close_trade(trade_id=tid, profit=5.5)
+
+    assert captured == [5.5]
 

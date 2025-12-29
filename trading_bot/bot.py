@@ -306,6 +306,9 @@ def current_daily_profit() -> float:
         return _daily_profit_value
 
 
+trade_manager.register_profit_listener(add_daily_profit)
+
+
 def launch_aux_services(
     mode_key: str,
     *,
@@ -1551,6 +1554,15 @@ def run_one_iteration_open(model=None):
                 symbol,
                 sig.get("quantity", 0),
                 min_size,
+            )
+            continue
+        notional = float(sig.get("quantity", 0.0)) * float(sig.get("entry_price", 0.0))
+        if notional < config.MIN_POSITION_SIZE_USDT:
+            logger.debug(
+                "Skip %s: notional %.2f < min_usdt=%.2f",
+                symbol,
+                notional,
+                config.MIN_POSITION_SIZE_USDT,
             )
             continue
         candidates.append(sig)

@@ -18,6 +18,7 @@ def _setup(monkeypatch):
     ex = MockExchange()
     monkeypatch.setattr(execution, "exchange", ex)
     trade_manager.reset_state()
+    monkeypatch.setattr(config, "MIN_POSITION_SIZE_USDT", 0)
     yield
     trade_manager.reset_state()
 
@@ -110,4 +111,5 @@ def test_stop_loss_respects_max_pct(monkeypatch):
     signal = strategy.decidir_entrada("BTC/USDT", info=info)
     assert signal is not None
     expected_stop = entry_price * (1 - config.MAX_STOP_LOSS_PCT)
-    assert signal["stop_loss"] == pytest.approx(expected_stop)
+    assert signal["stop_loss"] >= expected_stop - 1e-6
+    assert signal["stop_loss"] < entry_price

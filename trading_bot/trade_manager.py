@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import time
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from . import config, data, rl_agent
 from .utils import normalize_symbol
@@ -25,7 +25,13 @@ _balance_thread: threading.Thread | None = None
 open_trades = []
 closed_trades = []
 trade_history = []  # Guarda todos los cambios si quieres auditar
-_balance_snapshot: dict[str, float] = {"free_usdt": 0.0, "timestamp": 0.0}
+_balance_snapshot: dict[str, float] = {
+    "free_usdt": 0.0,
+    "timestamp": 0.0,
+    "daily_drawdown_pct": 0.0,
+}
+_balance_history: list[tuple[float, float]] = []  # (timestamp, balance)
+_profit_listeners: list[Callable[[float], None]] = []
 
 # ``add_trade`` y otros métodos llaman a ``log_history`` mientras mantienen el
 # cerrojo principal. Ese helper también necesita bloquear el estado global para
@@ -48,6 +54,9 @@ def reset_state() -> None:
         _last_closed.clear()
         _balance_snapshot["free_usdt"] = 0.0
         _balance_snapshot["timestamp"] = 0.0
+        _balance_snapshot["daily_drawdown_pct"] = 0.0
+        _balance_history.clear()
+        _profit_listeners.clear()
 
 
 def _prune_closed_trades() -> None:
@@ -59,10 +68,42 @@ def _prune_closed_trades() -> None:
         del closed_trades[0:overflow]
 
 
+def register_profit_listener(callback: Callable[[float], None]) -> None:
+    """Register a callback invoked with realized PnL when a trade closes."""
+
+    with LOCK:
+        if callback not in _profit_listeners:
+            _profit_listeners.append(callback)
+
+
+def _emit_profit(profit: float) -> None:
+    listeners: list[Callable[[float], None]]
+    with LOCK:
+        listeners = list(_profit_listeners)
+    for listener in listeners:
+        try:
+            listener(profit)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Profit listener failed")
+
+
 def _record_balance_snapshot(amount: float) -> None:
+    now_ts = time.time()
+    lookback_seconds = max(1, int(config.AGENT_DD_LOOKBACK_HOURS) * 3600)
+
     with LOCK:
         _balance_snapshot["free_usdt"] = amount
-        _balance_snapshot["timestamp"] = time.time()
+        _balance_snapshot["timestamp"] = now_ts
+        _balance_history.append((now_ts, amount))
+        cutoff = now_ts - lookback_seconds
+        while _balance_history and _balance_history[0][0] < cutoff:
+            _balance_history.pop(0)
+
+        peak = max((bal for _, bal in _balance_history), default=0.0)
+        drawdown_pct = 0.0
+        if peak > 0:
+            drawdown_pct = ((amount - peak) / peak) * 100.0
+        _balance_snapshot["daily_drawdown_pct"] = drawdown_pct
 
 
 def last_recorded_balance() -> dict[str, float]:
@@ -131,23 +172,12 @@ def add_trade(trade, *, allow_duplicates: bool = False):
         trade["symbol"] = normalize_symbol(raw_symbol)
         trade.setdefault("raw_symbol", raw_symbol)
         duplicate = False
-        raw_conflict = False
         for existing in open_trades:
             if normalize_symbol(existing.get("symbol", "")) == trade["symbol"]:
                 duplicate = True
-                existing_raw = (existing.get("raw_symbol") or existing.get("symbol", "")).lower()
-                if existing_raw != raw_symbol.lower():
-                    raw_conflict = True
                 break
         if duplicate and not allow_duplicates:
-            if raw_conflict:
-                raise ValueError(
-                    f"Ya existe una operación abierta para {trade['symbol']}"
-                )
-            logger.warning(
-                "Registrando operación duplicada para %s; se generará un nuevo ID",
-                trade["symbol"],
-            )
+            raise ValueError(f"Ya existe una operación abierta para {trade['symbol']}")
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())
         trade.setdefault("requested_quantity", trade.get("quantity"))
@@ -452,7 +482,9 @@ def close_trade(
             rl_agent.record_trade_outcome(trade)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("No se pudo registrar el trade para RL: %s", exc)
-        return trade
+        realized_profit = float(trade.get("realized_pnl") or trade.get("profit") or 0.0)
+    _emit_profit(realized_profit)
+    return trade
 
 
 def cancel_pending_trade(trade_id: str, reason: str = "pending_timeout") -> dict | None:
