@@ -11,6 +11,7 @@ class TradeState(str, Enum):
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     CLOSING = "CLOSING"
     CLOSED = "CLOSED"
+    CANCELLED = "CANCELLED"
     FAILED = "FAILED"
 
 
@@ -18,23 +19,32 @@ class TradeState(str, Enum):
 # PENDING → OPEN / PARTIALLY_FILLED / FAILED
 # OPEN → PARTIALLY_FILLED / CLOSING / FAILED
 # PARTIALLY_FILLED → OPEN / CLOSING / FAILED
-# CLOSING → CLOSED / FAILED
+# CLOSING → CLOSED / CANCELLED / FAILED
 # CLOSED → (ninguna)
+# CANCELLED → (ninguna)
 # FAILED → (ninguna)
 ALLOWED_TRANSITIONS: Dict[TradeState, Set[TradeState]] = {
-    TradeState.PENDING: {TradeState.OPEN, TradeState.PARTIALLY_FILLED, TradeState.FAILED},
+    TradeState.PENDING: {
+        TradeState.OPEN,
+        TradeState.PARTIALLY_FILLED,
+        TradeState.CANCELLED,
+        TradeState.FAILED,
+    },
     TradeState.OPEN: {
         TradeState.PARTIALLY_FILLED,
         TradeState.CLOSING,
+        TradeState.CANCELLED,
         TradeState.FAILED,
     },
     TradeState.PARTIALLY_FILLED: {
         TradeState.OPEN,
         TradeState.CLOSING,
+        TradeState.CANCELLED,
         TradeState.FAILED,
     },
-    TradeState.CLOSING: {TradeState.CLOSED, TradeState.FAILED},
+    TradeState.CLOSING: {TradeState.CLOSED, TradeState.CANCELLED, TradeState.FAILED},
     TradeState.CLOSED: set(),
+    TradeState.CANCELLED: set(),
     TradeState.FAILED: set(),
 }
 
