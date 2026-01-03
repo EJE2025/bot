@@ -113,6 +113,11 @@ if globals().get("_GEVENT_IMPORT_ERROR"):
     )
 
 
+def _trace(message: str, *args: Any) -> None:
+    if config.DEBUG_TRACE:
+        logger.debug(message, *args)
+
+
 def _parse_snapshot_interval(raw: str | None) -> int:
     try:
         value = int(raw) if raw is not None else 60
@@ -130,13 +135,20 @@ _pending_timeouts: dict[str, Timer] = {}
 
 def _pending_timeout_seconds(order_type: str | None) -> int | None:
     if config.DRY_RUN or not config.PENDING_TIMEOUT_ENABLED:
+        _trace(
+            "pending_timeout disabled: dry_run=%s enabled=%s",
+            config.DRY_RUN,
+            config.PENDING_TIMEOUT_ENABLED,
+        )
         return None
 
     normalized_type = (order_type or "").strip().lower()
     if normalized_type == "market" and not config.PENDING_TIMEOUT_FOR_MARKET:
+        _trace("pending_timeout disabled for market orders")
         return None
 
     timeout = max(config.PENDING_FILL_TIMEOUT_S, config.PENDING_TIMEOUT_MIN_S)
+    _trace("pending_timeout seconds=%s order_type=%s", timeout, normalized_type)
     return max(timeout, 1)
 
 
@@ -148,12 +160,21 @@ def _schedule_pending_timeout(
     order_type: str | None = None,
 ) -> None:
     if timeout is None or timeout <= 0:
+        _trace("pending_timeout not scheduled: timeout=%s", timeout)
         return
     if config.DRY_RUN:
+        _trace("pending_timeout not scheduled: dry_run")
         return
 
     normalized_order_type = (order_type or "").strip().lower()
     strict_mirror = config.STRICT_MIRROR_MODE and normalized_order_type == "market"
+    _trace(
+        "pending_timeout scheduled: trade_id=%s symbol=%s timeout=%s order_type=%s",
+        trade_id,
+        symbol,
+        timeout,
+        normalized_order_type or "unknown",
+    )
 
     def _expire_pending() -> None:
         _pending_timeouts.pop(trade_id, None)

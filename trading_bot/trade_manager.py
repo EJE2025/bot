@@ -16,6 +16,11 @@ from .state_machine import TradeState, is_valid_transition
 
 logger = logging.getLogger(__name__)
 
+
+def _trace(message: str, *args: Any) -> None:
+    if config.DEBUG_TRACE:
+        logger.debug(message, *args)
+
 POSITION_RECONCILE_INTERVAL = 10
 BALANCE_MONITOR_INTERVAL = 60
 
@@ -65,6 +70,7 @@ def reset_state() -> None:
                 "date": "",
             }
         )
+    _trace("reset_state completed")
 
 
 def _prune_closed_trades() -> None:
@@ -138,8 +144,11 @@ def in_cooldown(symbol: str) -> bool:
     norm = normalize_symbol(symbol)
     ts = _last_closed.get(norm)
     if ts is None:
+        _trace("cooldown check: %s not found", norm)
         return False
-    return (time.time() - ts) < config.TRADE_COOLDOWN
+    in_window = (time.time() - ts) < config.TRADE_COOLDOWN
+    _trace("cooldown check: %s in_window=%s", norm, in_window)
+    return in_window
 
 
 def _timestamp_to_iso(value: Any) -> str | None:
@@ -196,6 +205,7 @@ def add_trade(trade, *, allow_duplicates: bool = False):
                 duplicate = True
                 break
         if duplicate and not allow_duplicates:
+            _trace("add_trade rejected duplicate symbol=%s", trade["symbol"])
             raise ValueError(f"Ya existe una operación abierta para {trade['symbol']}")
         if "trade_id" not in trade:
             trade["trade_id"] = str(uuid.uuid4())

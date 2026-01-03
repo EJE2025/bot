@@ -131,6 +131,7 @@ ENABLE_BINANCE = _bool_env("ENABLE_BINANCE", False)
 SYMBOLS = _parse_symbols(os.getenv("SYMBOLS", ""))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+DEBUG_TRACE = _bool_env("DEBUG_TRACE", False)
 
 # Dashboard & web UI ---------------------------------------------------------
 # Default to the same origin as the Flask app unless explicitly configured to
@@ -484,4 +485,3 @@ MODEL_MIN_WIN_RATE = _clamp(_float_env("MODEL_MIN_WIN_RATE", 0.52), 0.0, 1.0)
 MODEL_MAX_CALIBRATION_DRIFT = _clamp(_float_env("MODEL_MAX_CALIBRATION_DRIFT", 0.08), 0.0, 0.5)
 MODEL_WEIGHT_FLOOR = _clamp(_float_env("MODEL_WEIGHT_FLOOR", 0.1), 0.0, 1.0)
 MODEL_WEIGHT_DEGRADATION = _clamp(_float_env("MODEL_WEIGHT_DEGRADATION", 0.5), 0.0, 1.0)
-
