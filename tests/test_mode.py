@@ -10,8 +10,8 @@ from trading_bot import mode
 def test_resolve_mode_priority() -> None:
     assert mode.resolve_mode("shadow", "heuristic") == "shadow"
     assert mode.resolve_mode(None, "shadow") == "shadow"
-    # Unknown modes fallback to hybrid
-    assert mode.resolve_mode(None, "desconocido") == "hybrid"
+    # Unknown modes fallback to normal
+    assert mode.resolve_mode(None, "desconocido") == "normal"
 
 
 def test_apply_mode_profiles() -> None:
@@ -43,4 +43,4 @@ def test_apply_mode_profiles() -> None:
 def test_interactive_pick_without_tty(monkeypatch) -> None:
     dummy = types.SimpleNamespace(isatty=lambda: False)
     monkeypatch.setattr(mode, "sys", types.SimpleNamespace(stdin=dummy))
-    assert mode.interactive_pick() == "hybrid"
+    assert mode.interactive_pick() == "normal"

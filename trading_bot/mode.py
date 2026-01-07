@@ -33,13 +33,6 @@ MODES: Dict[str, ModeProfile] = {
         shadow_mode=False,
         enable_model=True,
     ),
-    "hybrid": ModeProfile(
-        name="hybrid",
-        description="Alias de normal (heurística + modelo)",
-        enable_trading=True,
-        shadow_mode=False,
-        enable_model=True,
-    ),
     "heuristic": ModeProfile(
         name="heuristic",
         description="Solo heurística sin modelo predictivo",
@@ -58,14 +51,6 @@ MODES: Dict[str, ModeProfile] = {
     "testnet": ModeProfile(
         name="testnet",
         description="Operativa en testnet/dry-run",
-        enable_trading=True,
-        shadow_mode=False,
-        enable_model=True,
-        dry_run_testnet=True,
-    ),
-    "rtestnet": ModeProfile(
-        name="rtestnet",
-        description="Alias de testnet (operativa en testnet/dry-run)",
         enable_trading=True,
         shadow_mode=False,
         enable_model=True,
@@ -93,22 +78,20 @@ NUMERIC_MENU = [
     ("1", "normal"),
     ("2", "shadow"),
     ("3", "heuristic"),
-    ("4", "hybrid"),
-    ("5", "testnet"),
-    ("6", "backtest"),
-    ("7", "maintenance"),
-    ("8", "rtestnet"),
+    ("4", "testnet"),
+    ("5", "backtest"),
+    ("6", "maintenance"),
 ]
 
 
 def resolve_mode(cli_mode: str | None, env_mode: str | None) -> str:
     """Resolve the runtime mode honouring CLI over environment defaults."""
 
-    mode = (cli_mode or env_mode or "hybrid").strip().lower()
+    mode = (cli_mode or env_mode or "normal").strip().lower()
     if mode in MODES:
         return mode
-    logger.warning("BOT_MODE desconocido '%s'. Usando 'hybrid' por defecto.", mode)
-    return "hybrid"
+    logger.warning("BOT_MODE desconocido '%s'. Usando 'normal' por defecto.", mode)
+    return "normal"
 
 
 def interactive_pick() -> str:
@@ -116,7 +99,7 @@ def interactive_pick() -> str:
 
     stdin = sys.stdin
     if stdin is None or not stdin.isatty():
-        return "hybrid"
+        return "normal"
 
     print("\n=== Selecciona modo de ejecución ===")
     for num, key in NUMERIC_MENU:
@@ -126,8 +109,8 @@ def interactive_pick() -> str:
     for num, key in NUMERIC_MENU:
         if choice == num:
             return key
-    print("Selección no válida. Usando 'hybrid'.")
-    return "hybrid"
+    print("Selección no válida. Usando 'normal'.")
+    return "normal"
 
 
 def apply_mode_to_config(mode_key: str, config_module) -> None:
