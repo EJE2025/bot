@@ -15,20 +15,6 @@ def landing():
     return render_template("dashboard_hero.html")
 
 
-@dashboard_bp.route("/api/metrics")
-def dashboard_metrics():
-    """Return placeholder metrics for the futuristic dashboard."""
-
-    return jsonify(
-        {
-            "sentient_core_uptime": 0.99982,
-            "shader_density": 0.87,
-            "microlender_channels": 32,
-            "mcp2099_index_sigma": 12.4,
-        }
-    )
-
-
 def create_app() -> Flask:
     """Build a lightweight Flask app that only serves the new dashboard."""
 

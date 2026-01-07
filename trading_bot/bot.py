@@ -55,7 +55,6 @@ from . import (
     strategy,
     predictive_model,
     notify,
-    optimizer,
     permissions,
     trade_manager,
     shadow,
@@ -64,7 +63,6 @@ from . import (
     exporter,
     agent_controller,
     new_dashboard,
-    webapp,
 )
 from .indicators import calculate_atr
 from .exchanges import MockExchange
@@ -663,7 +661,7 @@ def maybe_reload_model(force: bool = False) -> None:
     if not force and _cached_model_mtime is not None and mtime <= _cached_model_mtime:
         return
 
-    model = optimizer.load_model(model_path)
+    model = predictive_model.load_model(model_path)
     if model is None:
         if not _model_missing_logged or force:
             logger.warning(

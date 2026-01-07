@@ -55,7 +55,7 @@ def test_sync_applies_side_specific_fallbacks(monkeypatch):
     monkeypatch.setattr(bot, "start_metrics_server", lambda *a, **k: None)
     monkeypatch.setattr(bot, "monitor_system", lambda *a, **k: None)
     monkeypatch.setattr(bot.strategy, "start_liquidity", lambda symbols=None: None)
-    monkeypatch.setattr(bot.webapp, "start_dashboard", lambda host, port: None)
+    monkeypatch.setattr(bot.new_dashboard, "start_dashboard", lambda host, port: None)
     monkeypatch.setattr(bot.auto_trainer, "start_auto_trainer", lambda stop_event: None)
     monkeypatch.setattr(bot.shutdown, "install_signal_handlers", lambda: None)
     monkeypatch.setattr(bot.shutdown, "register_callback", lambda cb: None)

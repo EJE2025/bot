@@ -6,10 +6,7 @@ import asyncio
 import websockets
 
 
-BITGET_WS_PUBLIC_URL = "wss://ws.bitget.com/v2/ws/public"
 BITGET_WS_PRIVATE_URL = "wss://ws.bitget.com/v2/ws/private"
-# Backwards compatibility for callers expecting a single URL constant
-BITGET_WS_URL = BITGET_WS_PRIVATE_URL
 
 
 class BitgetWebSocket:
@@ -117,9 +114,9 @@ class BitgetWebSocket:
         while True:
             try:
                 self.logger.info(
-                    "Connecting Bitget WS (private) to %s", BITGET_WS_URL
+                    "Connecting Bitget WS (private) to %s", BITGET_WS_PRIVATE_URL
                 )
-                async with websockets.connect(BITGET_WS_URL, ping_interval=20) as ws:
+                async with websockets.connect(BITGET_WS_PRIVATE_URL, ping_interval=20) as ws:
 
                     await self._auth(ws)
                     await self.subscribe(ws)

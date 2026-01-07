@@ -16,13 +16,9 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Tipos de orden avanzados (market, limit, stop)
 - Selección de trades priorizando la mayor probabilidad con ratio beneficio/riesgo >= 2:1
 - Panel web accesible directamente en `http://localhost:8000` para monitoreo en
-  tiempo real. Los datos de operaciones se consultan desde el endpoint
-  `/api/trades`
-- La plantilla HTML del dashboard se encuentra en `trading_bot/templates/index.html` para facilitar su personalizacion.
+  tiempo real.
+- La plantilla HTML del dashboard se encuentra en `trading_bot/templates/dashboard_hero.html` para facilitar su personalizacion.
 - Si Flask no está instalado, intentar iniciar el dashboard lanzará un `ImportError`.
-- Las operaciones abiertas se registran en `trade_manager` y el dashboard las
-  obtiene directamente desde ahí. Cada operación muestra en la tabla su PnL no
-  realizado calculado con el precio actual
 - Notificaciones por Telegram y Discord al abrir y cerrar operaciones
 - Arquitectura modular para facilitar mejoras
 - Métricas de Prometheus disponibles en `http://localhost:8001/metrics`
@@ -43,7 +39,7 @@ Además soporta la conexión con otros exchanges opcionalmente y dispone de un p
 - Endpoints públicos de Binance para ticker, libro de órdenes y velas
 - Flujo en tiempo real del order book por `wss://fstream.binance.com`
 - Los WebSocket se inician explícitamente con `strategy.start_liquidity()` para evitar conexiones al importar módulos. Sin pasar símbolos se conectará automáticamente a los 15 pares de mayor volumen
-- Modelos de machine learning optimizados con `trading_bot.optimizer`
+- Modelos de machine learning optimizados con `trading_bot.predictive_model`
 - Entrenamiento de modelos con `python -m trading_bot.train_model`
 - Exchange simulado para pruebas sin conexión a Bitget
 - Motor de backtesting con `python -m trading_bot.backtest`
@@ -232,8 +228,8 @@ graph TD
     data --> strategy
     strategy --> execution
     execution --> trade_manager
-    trade_manager --> webapp
-    webapp --> notify
+    trade_manager --> new_dashboard
+    new_dashboard --> notify
 ```
 
 ## Production hardening
@@ -243,13 +239,13 @@ El bot incluye utilidades pensadas para operar en producción con resiliencia:
 
 ### Selector de modo de arranque
 
-* Ejecuta `python -m trading_bot.bot --mode {normal,shadow,heuristic,hybrid,testnet,backtest,maintenance}` para seleccionar el comportamiento en CLI.
+* Ejecuta `python -m trading_bot.bot --mode {normal,shadow,heuristic,testnet,backtest,maintenance}` para seleccionar el comportamiento en CLI.
 * Alternativamente define `BOT_MODE` en el entorno; si no hay bandera ni variable y existe TTY, se mostrará un menú interactivo.
 * Las banderas aplican sobre los knobs existentes (`ENABLE_TRADING`, `SHADOW_MODE`, `ENABLE_MODEL`, etc.) sin romper la compatibilidad.
 
 | Modo | Descripción | Efectos principales |
 | --- | --- | --- |
-| `normal` / `hybrid` | Trading real combinando heurística + modelo | `ENABLE_TRADING=1`, `ENABLE_MODEL=1` |
+| `normal` | Trading real combinando heurística + modelo | `ENABLE_TRADING=1`, `ENABLE_MODEL=1` |
 | `heuristic` | Solo heurística (modelo deshabilitado) | `ENABLE_TRADING=1`, `ENABLE_MODEL=0`, `MODEL_WEIGHT=0.0` |
 | `shadow` | Shadow-mode A/B sin enviar órdenes reales | `ENABLE_TRADING=0`, `SHADOW_MODE=1` |
 | `testnet` | Dry-run o testnet con envío simulado | `ENABLE_TRADING=1`, `DRY_RUN=1` |
@@ -317,7 +313,7 @@ Este proyecto se distribuye bajo la licencia MIT. Consulta el archivo [LICENSE](
 ## Arquitectura simplificada
 
 El dashboard vuelve a ejecutarse de forma monolítica dentro del bot, sin
-microservicios ni orquestación con Docker Compose. Todos los endpoints de datos
-y el HTML del panel viven en `trading_bot/webapp.py`, por lo que basta con
-mantener las dependencias de `requirements.txt` instaladas para trabajar en
-local.
+microservicios ni orquestación con Docker Compose. El servidor del panel vive
+en `trading_bot/new_dashboard.py` y el HTML en
+`trading_bot/templates/dashboard_hero.html`, por lo que basta con mantener las
+dependencias de `requirements.txt` instaladas para trabajar en local.
