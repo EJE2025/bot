@@ -8,7 +8,7 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Flask, jsonify, render_template, request
+from flask import Blueprint, Flask, abort, jsonify, render_template, request
 
 from . import config, data, history, trade_manager
 
@@ -20,6 +20,15 @@ dashboard_bp = Blueprint("dashboard", __name__, template_folder="templates")
 def landing():
     """Serve the trading dashboard page."""
 
+    return render_template("dashboard_hero.html")
+
+
+@dashboard_bp.route("/<path:subpath>")
+def catch_all(subpath: str):
+    """Fallback to the dashboard for client-side routes."""
+
+    if subpath.startswith("api/"):
+        abort(404)
     return render_template("dashboard_hero.html")
 
 
