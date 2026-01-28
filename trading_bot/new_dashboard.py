@@ -95,6 +95,12 @@ def create_app() -> Flask:
     def api_health():
         return jsonify({"ok": True})
 
+    @app.errorhandler(404)
+    def not_found(error):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "not found"}), 404
+        return render_template("dashboard_hero.html"), 200
+
     @app.get("/api/status")
     def api_status():
         snapshot = trade_manager.last_recorded_balance()
