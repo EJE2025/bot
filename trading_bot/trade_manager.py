@@ -1222,7 +1222,10 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
     try:
         if ts.endswith("Z"):
             ts = ts[:-1] + "+00:00"
-        return datetime.fromisoformat(ts)
+        parsed = datetime.fromisoformat(ts)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
     except ValueError:
         logger.debug("Invalid timestamp %s", ts)
         return None
@@ -1235,6 +1238,8 @@ def trade_age_minutes(trade: dict, now: datetime | None = None) -> float | None:
         return None
     if now is None:
         now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     delta = now.astimezone(timezone.utc) - opened.astimezone(timezone.utc)
     return delta.total_seconds() / 60.0
 
