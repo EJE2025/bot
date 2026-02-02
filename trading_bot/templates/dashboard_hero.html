@@ -146,6 +146,63 @@
       border-radius: 10px;
     }
 
+    .analysis-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .analysis-actions input {
+      background: #0b1226;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 10px;
+      min-width: 160px;
+    }
+
+    .analysis-actions button {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(34, 211, 238, 0.35));
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .analysis-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .analysis-item {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      background: rgba(15, 23, 42, 0.65);
+    }
+
+    .analysis-item h3 {
+      font-size: 1rem;
+      margin-bottom: 8px;
+    }
+
+    .analysis-item img {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      margin: 12px 0;
+    }
+
+    .analysis-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -260,6 +317,20 @@
     </section>
 
     <section class="panel">
+      <div class="chart-header">
+        <div>
+          <h2>Análisis técnico</h2>
+          <p class="muted">Reportes técnicos con JSON determinista, gráfico y explicación opcional.</p>
+        </div>
+        <div class="analysis-actions">
+          <input id="analysis-symbol" placeholder="BTC/USDT" />
+          <button id="analysis-run">Analizar</button>
+        </div>
+      </div>
+      <div class="analysis-list" id="analysis-list">Cargando…</div>
+    </section>
+
+    <section class="panel">
       <h2>Posiciones activas</h2>
       <p class="muted">Detalle de posiciones abiertas con TP/SL actuales.</p>
       <div style="overflow-x: auto;">
@@ -322,6 +393,9 @@
     const historyTable = document.getElementById('history-table');
     const decisionsList = document.getElementById('decisions');
     const symbolSelect = document.getElementById('symbol-select');
+    const analysisList = document.getElementById('analysis-list');
+    const analysisSymbol = document.getElementById('analysis-symbol');
+    const analysisRun = document.getElementById('analysis-run');
 
     const pricePoints = [];
     const priceLabels = [];
@@ -508,6 +582,59 @@
       });
     }
 
+    function formatTimestamp(seconds) {
+      if (!seconds) return '—';
+      const date = new Date(seconds * 1000);
+      return date.toLocaleString();
+    }
+
+    function chartUrl(path) {
+      if (!path) return null;
+      const parts = path.split(/[/\\]/);
+      const filename = parts[parts.length - 1];
+      return `/charts/${filename}`;
+    }
+
+    function renderAnalysis(reports) {
+      analysisList.innerHTML = '';
+      if (!reports.length) {
+        analysisList.textContent = 'Sin reportes todavía.';
+        return;
+      }
+      reports.slice(0, 6).forEach((report) => {
+        const item = document.createElement('div');
+        item.className = 'analysis-item';
+        const analysis = report.analysis || {};
+        const llm = report.llm_output || {};
+        const trend = analysis.trend?.direction || '—';
+        const idea = analysis.trade_idea;
+        const chart = chartUrl(report.chart_path);
+        const supports = (analysis.support_zones || []).slice(0, 3)
+          .map((z) => `${formatNumber(z.from)} - ${formatNumber(z.to)}`);
+        const resists = (analysis.resistance_zones || []).slice(0, 3)
+          .map((z) => `${formatNumber(z.from)} - ${formatNumber(z.to)}`);
+        const bullets = (llm.puntos_clave || []).map((point) => `<li>${point}</li>`).join('');
+
+        item.innerHTML = `
+          <h3>${analysis.symbol || report.symbol} · ${analysis.interval || report.interval}</h3>
+          <div class="analysis-meta">
+            <span>Tendencia: ${trend}</span>
+            <span>Origen: ${report.reason || 'manual'}</span>
+            <span>${formatTimestamp(report.created_at)}</span>
+          </div>
+          ${chart ? `<img src="${chart}" alt="Gráfico técnico ${analysis.symbol || report.symbol}" />` : ''}
+          <p class="muted">${llm.resumen || 'Sin explicación LLM.'}</p>
+          ${bullets ? `<ul>${bullets}</ul>` : ''}
+          <div class="analysis-meta">
+            <span>Soportes: ${supports.join(' · ') || '—'}</span>
+            <span>Resistencias: ${resists.join(' · ') || '—'}</span>
+          </div>
+          ${idea ? `<p><strong>Idea:</strong> ${idea.direction} @ ${formatNumber(idea.entry_price)} · SL ${formatNumber(idea.stop_loss)} · TP ${formatNumber(idea.take_profit)}</p>` : ''}
+        `;
+        analysisList.appendChild(item);
+      });
+    }
+
     async function refreshStatus() {
       const response = await fetch('/api/status');
       const status = await response.json();
@@ -552,6 +679,12 @@
       }
     }
 
+    async function refreshAnalysis() {
+      const response = await fetch('/api/technical_analysis');
+      const reports = await response.json();
+      renderAnalysis(reports || []);
+    }
+
     symbolSelect.addEventListener('change', () => {
       pricePoints.length = 0;
       priceLabels.length = 0;
@@ -560,14 +693,31 @@
       refreshPositions();
     });
 
+    analysisRun.addEventListener('click', async () => {
+      const symbol = (analysisSymbol.value || symbolSelect.value || '').trim();
+      if (!symbol) return;
+      analysisRun.disabled = true;
+      await fetch(`/api/technical_analysis/${encodeURIComponent(symbol)}/run`, { method: 'POST' });
+      analysisRun.disabled = false;
+      analysisSymbol.value = '';
+      refreshAnalysis();
+    });
+
     async function boot() {
-      await Promise.all([refreshStatus(), refreshPositions(), refreshHistory(), refreshDecisions()]);
+      await Promise.all([
+        refreshStatus(),
+        refreshPositions(),
+        refreshHistory(),
+        refreshDecisions(),
+        refreshAnalysis(),
+      ]);
       await refreshPrice();
       setInterval(refreshStatus, 6000);
       setInterval(refreshPositions, 7000);
       setInterval(refreshHistory, 20000);
       setInterval(refreshDecisions, 12000);
       setInterval(refreshPrice, 5000);
+      setInterval(refreshAnalysis, 15000);
     }
 
     boot();
