@@ -8,9 +8,11 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Flask, abort, jsonify, render_template, request
+from flask import Blueprint, Flask, abort, jsonify, render_template, request, send_from_directory
 
 from . import config, data, history, trade_manager
+from .analysis_store import GLOBAL_ANALYSIS_STORE
+from .analysis_worker import ANALYSIS_WORKER
 
 
 dashboard_bp = Blueprint("dashboard", __name__, template_folder="templates")
@@ -162,6 +164,24 @@ def create_app() -> Flask:
     def api_decisions():
         events = trade_manager.get_history()
         return jsonify(events[-200:])
+
+    @app.get("/api/technical_analysis")
+    def api_technical_analysis():
+        return jsonify(GLOBAL_ANALYSIS_STORE.list(limit=50))
+
+    @app.get("/api/technical_analysis/<symbol>")
+    def api_technical_analysis_latest(symbol: str):
+        report = GLOBAL_ANALYSIS_STORE.latest_for(symbol)
+        return jsonify(report or {})
+
+    @app.post("/api/technical_analysis/<symbol>/run")
+    def api_technical_analysis_run(symbol: str):
+        ok = ANALYSIS_WORKER.enqueue(symbol, reason="manual")
+        return jsonify({"queued": ok})
+
+    @app.get("/charts/<path:filename>")
+    def charts(filename: str):
+        return send_from_directory("charts", filename)
 
     return app
 

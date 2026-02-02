@@ -63,6 +63,7 @@ from . import (
     exporter,
     agent_controller,
     new_dashboard,
+    analysis_worker,
 )
 from .indicators import calculate_atr
 from .exchanges import MockExchange

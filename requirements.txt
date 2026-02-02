@@ -8,8 +8,11 @@ gymnasium>=0.29
 hypothesis>=6.0
 httpx
 matplotlib
+mplfinance
 numpy
+openai
 pandas>=1.5
+pillow
 prometheus-client
 psutil
 pytest-asyncio

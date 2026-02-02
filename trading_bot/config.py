@@ -144,6 +144,17 @@ ANALYTICS_GRAPHQL_URL = _str_env("ANALYTICS_GRAPHQL_URL", _default_graphql).stri
 AI_ASSISTANT_URL = _str_env("AI_ASSISTANT_URL", _default_ai_endpoint).strip()
 EXTERNAL_SERVICE_LINKS = _str_env("EXTERNAL_SERVICE_LINKS", "")
 
+# Technical analysis reporting ------------------------------------------------
+TECH_ANALYSIS_ENABLED = _bool_env("TECH_ANALYSIS_ENABLED", False)
+TECH_ANALYSIS_INTERVAL = _str_env("TECH_ANALYSIS_INTERVAL", "Hour1")
+TECH_ANALYSIS_LIMIT = _int_env("TECH_ANALYSIS_LIMIT", 500, clamp=(50, 5000))
+TECH_ANALYSIS_ON_TRADE_EVENTS = _bool_env("TECH_ANALYSIS_ON_TRADE_EVENTS", True)
+TECH_ANALYSIS_MAX_REPORTS = _int_env("TECH_ANALYSIS_MAX_REPORTS", 200, clamp=(10, 1000))
+LLM_ENABLED = _bool_env("LLM_ENABLED", False)
+OPENAI_MODEL = _str_env("OPENAI_MODEL", "gpt-5.2")
+LLM_MAX_TOKENS = _int_env("LLM_MAX_TOKENS", 500, clamp=(50, 2000))
+LLM_TIMEOUT_SECONDS = _positive_float_env("LLM_TIMEOUT_SECONDS", 15.0, minimum=1.0)
+
 # Trading mode and permissions -------------------------------------------------
 # Trading mode (``shadow`` performs simulated execution without touching the exchange).
 BOT_MODE = os.getenv("BOT_MODE", "").strip().lower() or None

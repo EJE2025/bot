@@ -232,6 +232,13 @@ def add_trade(trade, *, allow_duplicates: bool = False):
         trade.setdefault("trough_price", entry_price if entry_price > 0 else 0.0)
         open_trades.append(trade)
         log_history("open", trade)
+        if config.TECH_ANALYSIS_ENABLED and config.TECH_ANALYSIS_ON_TRADE_EVENTS:
+            try:
+                from trading_bot.analysis_worker import ANALYSIS_WORKER
+
+                ANALYSIS_WORKER.enqueue(trade.get("symbol", ""), reason="trade_open")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("No se pudo encolar análisis técnico: %s", exc)
         return trade
 
 
@@ -513,6 +520,13 @@ def close_trade(
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("No se pudo registrar el trade para RL: %s", exc)
         _notify_profit_observers(profit_value, trade)
+        if config.TECH_ANALYSIS_ENABLED and config.TECH_ANALYSIS_ON_TRADE_EVENTS:
+            try:
+                from trading_bot.analysis_worker import ANALYSIS_WORKER
+
+                ANALYSIS_WORKER.enqueue(trade.get("symbol", ""), reason="trade_close")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("No se pudo encolar análisis técnico: %s", exc)
         return trade
 
 
